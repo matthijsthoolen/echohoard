@@ -30,6 +30,8 @@
     "test:viewer": "node scripts/viewer-acceptance.mjs",
     "test:container": "sh scripts/test-container.sh",
     "profile:viewer-memory": "node scripts/profile-viewer-memory.mjs",
+    "supply-chain:verify": "node scripts/verify-supply-chain.mjs",
+    "supply-chain:rollback": "node scripts/rollback-dry-run.mjs",
     "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
   "dependencies": {

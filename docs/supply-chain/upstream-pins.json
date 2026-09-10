@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "artifactRevision": "eh-10-04-v1",
+  "application": {
+    "name": "echohoard",
+    "version": "0.1.0",
+    "license": "NOASSERTION",
+    "licenseDecision": "OPEN_MAINTAINER_DECISION"
+  },
+  "node": {
+    "packageManager": "pnpm@9.15.5",
+    "runtime": "22.14.0",
+    "lockfile": "pnpm-lock.yaml",
+    "integritySource": "pnpm-lock.yaml"
+  },
+  "python": {
+    "runtime": "3.12.8",
+    "requirements": "container/worker-requirements.txt",
+    "hashMode": "pip --require-hashes"
+  },
+  "baseImages": [
+    {
+      "name": "node-build",
+      "reference": "node:22.14.0-bookworm-slim",
+      "digest": null,
+      "releaseNote": "Resolve with docker buildx imagetools inspect and record before publishing."
+    },
+    {
+      "name": "python-runtime",
+      "reference": "python:3.12.8-slim-bookworm",
+      "digest": null,
+      "releaseNote": "Resolve with docker buildx imagetools inspect and record before publishing."
+    }
+  ],
+  "waCryptTools": {
+    "name": "wa-crypt-tools",
+    "version": "0.1.0",
+    "source": "https://github.com/ElDavoo/wa-crypt-tools",
+    "license": "GPL-3.0-only",
+    "distributionReview": "REQUIRED_BEFORE_REDISTRIBUTION",
+    "artifactHashes": "container/worker-requirements.txt"
+  }
+}
