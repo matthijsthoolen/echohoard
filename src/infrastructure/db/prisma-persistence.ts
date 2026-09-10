@@ -23,6 +23,15 @@ import type {
   HealthReadPersistencePort,
   HealthSnapshotPersistenceRow,
 } from "../../application/health-reads.js";
+import { MAX_ACTIVITY_BUCKETS } from "../../application/statistics.js";
+import type {
+  StatisticsBucket,
+  StatisticsMediaAvailability,
+  StatisticsMediaType,
+  StatisticsPersistenceInput,
+  StatisticsPersistencePort,
+  StatisticsPersistenceResult,
+} from "../../application/statistics.js";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -471,6 +480,249 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
 /** Compatibility alias for compositions that name persistence by its
  * aggregate rather than its delivery concern. */
 export const PrismaArchiveHealthPersistence = PrismaHealthReadPersistence;
+
+/** PostgreSQL aggregate adapter for the archive statistics read model. Every
+ * query starts from the same finalized-message CTE, so partial or failed
+ * imports cannot become visible through a derived statistic. */
+export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async getStatistics(
+    input: StatisticsPersistenceInput,
+  ): Promise<StatisticsPersistenceResult> {
+    const [totals, media, direction, activity, conversations] = await Promise.all([
+      this.prisma.$queryRaw<
+        Array<{
+          messages: bigint | number;
+          conversations: bigint | number;
+          people: bigint | number;
+          media: bigint | number;
+        }>
+      >(
+        finalizedQuery(
+          input,
+          Prisma.sql`
+        SELECT
+          COUNT(DISTINCT fm.id)::bigint AS messages,
+          COUNT(DISTINCT fm.conversation_id)::bigint AS conversations,
+          COUNT(DISTINCT people.person_id)::bigint AS people,
+          COUNT(DISTINCT attachment.id)::bigint AS media
+        FROM finalized_messages fm
+        LEFT JOIN finalized_people people
+          ON people.archive_id = fm.archive_id
+        LEFT JOIN "MessageAttachment" link
+          ON link."archiveId" = fm.archive_id AND link."messageId" = fm.id
+        LEFT JOIN "Attachment" attachment
+          ON attachment."archiveId" = link."archiveId"
+          AND attachment.id = link."attachmentId"
+      `,
+        ),
+      ),
+      this.prisma.$queryRaw<
+        Array<{
+          type: string;
+          availability: string;
+          count: bigint | number;
+        }>
+      >(
+        finalizedQuery(
+          input,
+          Prisma.sql`
+        SELECT
+          CASE
+            WHEN attachment."mimeType" ILIKE 'image/%' THEN 'image'
+            WHEN attachment."mimeType" ILIKE 'video/%' THEN 'video'
+            WHEN attachment."mimeType" ILIKE 'audio/%' THEN 'audio'
+            WHEN attachment."mimeType" IS NULL THEN 'unknown'
+            ELSE 'document'
+          END AS type,
+          CASE attachment.availability
+            WHEN 'available' THEN 'available'
+            WHEN 'missing' THEN 'missing'
+            WHEN 'unsafe' THEN 'unsafe'
+            ELSE 'unresolved'
+          END AS availability,
+          COUNT(DISTINCT attachment.id)::bigint AS count
+        FROM finalized_messages fm
+        JOIN "MessageAttachment" link
+          ON link."archiveId" = fm.archive_id AND link."messageId" = fm.id
+        JOIN "Attachment" attachment
+          ON attachment."archiveId" = link."archiveId"
+          AND attachment.id = link."attachmentId"
+        GROUP BY type, availability
+        ORDER BY type ASC, availability ASC
+      `,
+        ),
+      ),
+      this.prisma.$queryRaw<Array<{ direction: string | null; count: bigint | number }>>(
+        finalizedQuery(
+          input,
+          Prisma.sql`
+        SELECT
+          CASE
+            WHEN fm.metadata->>'direction' IN ('sent', 'received')
+              THEN fm.metadata->>'direction'
+            ELSE 'unknown'
+          END AS direction,
+          COUNT(*)::bigint AS count
+        FROM finalized_messages fm
+        GROUP BY direction
+        ORDER BY direction ASC
+      `,
+        ),
+      ),
+      this.prisma.$queryRaw<Array<{ bucket_start: Date; count: bigint | number }>>(
+        finalizedQuery(input, activityQuery(input.bucket)),
+      ),
+      this.prisma.$queryRaw<
+        Array<{
+          conversation_id: string;
+          title: string | null;
+          message_count: bigint | number;
+          last_message_at: Date | null;
+        }>
+      >(
+        finalizedQuery(
+          input,
+          Prisma.sql`
+        SELECT
+          fm.conversation_id,
+          conversation.title,
+          COUNT(*)::bigint AS message_count,
+          MAX(fm.sent_at) AS last_message_at
+        FROM finalized_messages fm
+        JOIN "Conversation" conversation
+          ON conversation."archiveId" = fm.archive_id
+          AND conversation.id = fm.conversation_id
+        GROUP BY fm.conversation_id, conversation.title
+        ORDER BY message_count DESC, fm.conversation_id ASC
+        LIMIT ${input.limit}
+      `,
+        ),
+      ),
+    ]);
+
+    const total = totals[0];
+    const directionResult = { sent: 0, received: 0, unknown: 0 };
+    for (const row of direction) {
+      const value = countValue(row.count);
+      if (row.direction === "sent") directionResult.sent += value;
+      else if (row.direction === "received") directionResult.received += value;
+      else directionResult.unknown += value;
+    }
+    return {
+      totals: {
+        messages: countValue(total?.messages ?? 0),
+        conversations: countValue(total?.conversations ?? 0),
+        people: countValue(total?.people ?? 0),
+        media: countValue(total?.media ?? 0),
+      },
+      mediaByTypeAndState: media.map((row) => ({
+        type: statisticsMediaType(row.type),
+        availability: statisticsMediaAvailability(row.availability),
+        count: countValue(row.count),
+      })),
+      direction: directionResult,
+      activity: activity.map((row) => ({
+        bucketStart: row.bucket_start.toISOString(),
+        count: countValue(row.count),
+      })),
+      mostActiveConversations: conversations.map((row) => ({
+        conversationId: row.conversation_id,
+        ...(row.title === null ? {} : { title: row.title }),
+        messageCount: countValue(row.message_count),
+        ...(row.last_message_at ? { lastMessageAt: row.last_message_at.toISOString() } : {}),
+      })),
+    };
+  }
+}
+
+/** Compatibility alias for compositions that name persistence by its
+ * aggregate rather than its delivery concern. */
+export const PrismaArchiveStatisticsPersistence = PrismaStatisticsPersistence;
+
+function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+    WITH finalized_messages AS (
+      SELECT
+        message.id,
+        message."archiveId" AS archive_id,
+        message."conversationId" AS conversation_id,
+        message."senderId" AS sender_id,
+        message.metadata,
+        message."sentAt" AS sent_at
+      FROM "Message" message
+      WHERE message."archiveId" = ${input.archiveId}::uuid
+        AND EXISTS (
+          SELECT 1
+          FROM "Snapshot" snapshot
+          JOIN "ImportJob" job
+            ON job."archiveId" = snapshot."archiveId"
+            AND job."snapshotId" = snapshot.id
+          WHERE snapshot."archiveId" = message."archiveId"
+            AND snapshot.id::text = COALESCE(
+              message.metadata->>'lastSeenSnapshotId',
+              message.metadata->>'firstSeenSnapshotId'
+            )
+            AND snapshot.lifecycle = 'completed'
+            AND job.status = 'completed'
+        )
+        ${datePredicates(input)}
+    ),
+    finalized_people AS (
+      SELECT fm.archive_id, fm.sender_id AS person_id
+      FROM finalized_messages fm
+      WHERE fm.sender_id IS NOT NULL
+      UNION
+      SELECT fm.archive_id, participant."personId" AS person_id
+      FROM finalized_messages fm
+      JOIN "ConversationParticipant" participant
+        ON participant."archiveId" = fm.archive_id
+        AND participant."conversationId" = fm.conversation_id
+    )
+    ${select}
+  `;
+}
+
+function datePredicates(input: StatisticsPersistenceInput): Prisma.Sql {
+  const predicates: Prisma.Sql[] = [];
+  if (input.from)
+    predicates.push(Prisma.sql`AND message."sentAt" >= CAST(${input.from} AS timestamptz)`);
+  if (input.to)
+    predicates.push(Prisma.sql`AND message."sentAt" < CAST(${input.to} AS timestamptz)`);
+  return predicates.length ? Prisma.join(predicates, " ") : Prisma.empty;
+}
+
+function activityQuery(bucket: StatisticsBucket): Prisma.Sql {
+  const unit =
+    bucket === "week"
+      ? Prisma.sql`'week'`
+      : bucket === "month"
+        ? Prisma.sql`'month'`
+        : Prisma.sql`'day'`;
+  return Prisma.sql`
+    SELECT
+      date_trunc(${unit}, fm.sent_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start,
+      COUNT(*)::bigint AS count
+    FROM finalized_messages fm
+    WHERE fm.sent_at IS NOT NULL
+    GROUP BY bucket_start
+    ORDER BY bucket_start ASC
+    LIMIT ${MAX_ACTIVITY_BUCKETS}
+  `;
+}
+
+function statisticsMediaType(value: string): StatisticsMediaType {
+  if (["image", "video", "audio", "document", "other", "unknown"].includes(value))
+    return value as StatisticsMediaType;
+  return "other";
+}
+
+function statisticsMediaAvailability(value: string): StatisticsMediaAvailability {
+  if (["available", "missing", "unsafe", "unresolved"].includes(value))
+    return value as StatisticsMediaAvailability;
+  return "unresolved";
+}
 
 function asHealthSnapshots(value: unknown): HealthSnapshotPersistenceRow[] {
   if (!Array.isArray(value)) return [];
