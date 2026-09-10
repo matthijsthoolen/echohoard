@@ -12,4 +12,4 @@ trap cleanup EXIT
 "${compose[@]}" up --detach --wait postgres
 DATABASE_URL="$database_url" pnpm exec prisma migrate deploy
 DATABASE_URL="$database_url" pnpm exec prisma generate
-DATABASE_URL="$database_url" pnpm exec vitest run tests/functional/postgres-smoke.test.ts
+DATABASE_URL="$database_url" pnpm exec vitest run tests/functional
