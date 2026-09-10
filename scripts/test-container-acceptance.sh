@@ -51,6 +51,10 @@ run_iteration() {
   local iteration="$1"
   echo "Acceptance iteration ${iteration}/2: clean PostgreSQL state"
   "${compose[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+  # Web/worker roles are launched outside Compose. Remove the prior iteration
+  # before reusing their deterministic names, ports, and disposable volumes.
+  docker rm --force "$web_container" "$worker_container" >/dev/null 2>&1 || true
+  docker volume rm "$work_volume" "$data_volume" >/dev/null 2>&1 || true
   "${compose[@]}" up --detach --wait postgres
 
   # The test image is the Dockerfile build stage, not the production runtime;
