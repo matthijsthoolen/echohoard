@@ -1,3 +1,5 @@
+import { createHash, randomUUID } from "node:crypto";
+
 /** Contracts for snapshot intake and decryption.  These types intentionally
  * contain no ORM, SQLite, subprocess, or secret/key details. */
 
@@ -95,6 +97,92 @@ export interface FileSystemPort {
   createDirectory(path: string): Promise<void>;
   remove(path: string): Promise<void>;
 }
+
+export interface SnapshotManifestEntry {
+  readonly filename: string;
+  readonly size: number;
+  readonly sha256: Sha256;
+}
+
+export interface SnapshotManifest {
+  readonly snapshotId: SnapshotId;
+  readonly deliveryId: DeliveryId;
+  readonly sourceHash: Sha256;
+  readonly files: readonly SnapshotManifestEntry[];
+  readonly discoveredAt: string;
+  readonly claimedAt: string;
+  readonly capturedAt: string;
+  readonly adapterVersion?: string;
+  readonly outcome?: Readonly<Record<string, string | number | boolean>>;
+}
+
+/** Storage boundary for immutable snapshot publication. Implementations must
+ * make publish atomic: readers only discover a directory after it is ready. */
+export interface SnapshotStorePort {
+  createStaging(snapshotId: SnapshotId): Promise<string>;
+  copy(source: string, destination: string): Promise<void>;
+  writeManifest(stagingPath: string, manifest: SnapshotManifest): Promise<void>;
+  publish(stagingPath: string, snapshotId: SnapshotId): Promise<string>;
+  findReadyBySourceHash(sourceHash: Sha256): Promise<Snapshot | null>;
+}
+
+export interface SnapshotCreateInput {
+  readonly deliveryId: DeliveryId;
+  readonly claimedPath: string;
+  readonly files: readonly DeliveryFile[];
+  readonly discoveredAt: Date;
+  readonly claimedAt: Date;
+  readonly adapterVersion?: string;
+}
+
+export type SnapshotCreateResult = { readonly snapshot: Snapshot; readonly duplicate: boolean };
+
+export class ImmutableSnapshotCreator {
+  public constructor(
+    private readonly hashes: HashingPort,
+    private readonly store: SnapshotStorePort,
+    private readonly clock: ClockPort,
+    private readonly id: () => SnapshotId = () => cryptoRandomId(),
+  ) {}
+
+  public async create(input: SnapshotCreateInput): Promise<SnapshotCreateResult> {
+    const files = [...input.files].sort((a, b) => a.name.localeCompare(b.name));
+    const entries: SnapshotManifestEntry[] = [];
+    for (const file of files) {
+      entries.push({ filename: file.name, size: file.size, sha256: await this.hashes.sha256(`${input.claimedPath}/${file.name}`) });
+    }
+    const sourceHash = stableSourceHash(entries);
+    const existing = await this.store.findReadyBySourceHash(sourceHash);
+    if (existing) return { snapshot: existing, duplicate: true };
+    const snapshotId = this.id();
+    const staging = await this.store.createStaging(snapshotId);
+    try {
+      for (const file of files) {
+        await this.store.copy(`${input.claimedPath}/${file.name}`, `${staging}/${file.name}`);
+        const copiedHash = await this.hashes.sha256(`${staging}/${file.name}`);
+        if (copiedHash !== entries.find((entry) => entry.filename === file.name)?.sha256) throw new Error(`Snapshot hash mismatch for ${file.name}`);
+      }
+      const capturedAt = this.clock.now();
+      await this.store.writeManifest(staging, { snapshotId, deliveryId: input.deliveryId, sourceHash, files: entries,
+        discoveredAt: input.discoveredAt.toISOString(), claimedAt: input.claimedAt.toISOString(), capturedAt: capturedAt.toISOString(),
+        ...(input.adapterVersion ? { adapterVersion: input.adapterVersion } : {}) });
+      let path: string;
+      try { path = await this.store.publish(staging, snapshotId); }
+      catch (error) {
+        const duplicate = await this.store.findReadyBySourceHash(sourceHash);
+        if (duplicate) return { snapshot: duplicate, duplicate: true };
+        throw error;
+      }
+      return { snapshot: { id: snapshotId, deliveryId: input.deliveryId, sourceHash, path, createdAt: capturedAt, status: "ready" }, duplicate: false };
+    } catch (error) { throw error; }
+  }
+}
+
+function stableSourceHash(entries: readonly SnapshotManifestEntry[]): Sha256 {
+  const data = entries.map((entry) => `${entry.filename}\0${entry.size}\0${entry.sha256}`).join("\n");
+  return createHash("sha256").update(data).digest("hex");
+}
+function cryptoRandomId(): string { return randomUUID(); }
 
 /** Operations owned by intake; implementations must make claim atomic. */
 export interface InboxPort {
