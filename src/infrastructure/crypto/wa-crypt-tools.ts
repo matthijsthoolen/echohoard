@@ -2,11 +2,20 @@ import { readFile, stat, open } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 
-export type DecryptFailureKind = "invalid-key" | "corrupt-source" | "unsupported-format" | "timeout" | "io" | "internal";
+export type DecryptFailureKind =
+  | "invalid-key"
+  | "corrupt-source"
+  | "unsupported-format"
+  | "timeout"
+  | "io"
+  | "internal";
 export type DecryptResult = { outputPath: string; bytes: number };
 
 export class DecryptError extends Error {
-  constructor(readonly kind: DecryptFailureKind, message: string) {
+  constructor(
+    readonly kind: DecryptFailureKind,
+    message: string,
+  ) {
     super(redact(message));
     this.name = "DecryptError";
   }
@@ -23,7 +32,8 @@ const DEFAULT_TIMEOUT = 120_000;
 const DEFAULT_OUTPUT = 512 * 1024;
 const DEFAULT_INPUT = 8 * 1024 * 1024 * 1024;
 let secretForRedaction = "";
-const redact = (value: string): string => secretForRedaction ? value.split(secretForRedaction).join("[REDACTED]") : value;
+const redact = (value: string): string =>
+  secretForRedaction ? value.split(secretForRedaction).join("[REDACTED]") : value;
 
 /** Adapter for the pinned wa-crypt-tools `wadecrypt key encrypted output` CLI. */
 export async function decryptCrypt15(
@@ -38,7 +48,8 @@ export async function decryptCrypt15(
   let key: string;
   try {
     const source = await stat(encryptedPath);
-    if (source.size > maxInputBytes) throw new DecryptError("io", "encrypted input exceeds configured limit");
+    if (source.size > maxInputBytes)
+      throw new DecryptError("io", "encrypted input exceeds configured limit");
     key = (await readFile(secretFilePath, "utf8")).trim();
     if (!key) throw new DecryptError("invalid-key", "configured key file is empty");
   } catch (error) {
@@ -47,8 +58,17 @@ export async function decryptCrypt15(
   }
   secretForRedaction = key;
   try {
-    const result = await run(options.executable ?? "wadecrypt", [secretFilePath, encryptedPath, outputPath], timeoutMs, maxOutputBytes);
-    if (result.code !== 0) throw new DecryptError(classify(result.stderr), "wa-crypt-tools failed: " + result.stderr.slice(0, 300));
+    const result = await run(
+      options.executable ?? "wadecrypt",
+      [secretFilePath, encryptedPath, outputPath],
+      timeoutMs,
+      maxOutputBytes,
+    );
+    if (result.code !== 0)
+      throw new DecryptError(
+        classify(result.stderr),
+        "wa-crypt-tools failed: " + result.stderr.slice(0, 300),
+      );
     return await validateSqlite(outputPath);
   } catch (error) {
     if (error instanceof DecryptError) throw error;
@@ -58,11 +78,22 @@ export async function decryptCrypt15(
   }
 }
 
-async function run(command: string, args: string[], timeoutMs: number, maxOutputBytes: number): Promise<{ code: number; stderr: string }> {
-  const child = spawn(command, args, { shell: false, stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+async function run(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  maxOutputBytes: number,
+): Promise<{ code: number; stderr: string }> {
+  const child = spawn(command, args, {
+    shell: false,
+    stdio: ["ignore", "ignore", "pipe"],
+    windowsHide: true,
+  });
   let stderr = "";
   child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk: string) => { if (stderr.length < maxOutputBytes) stderr += chunk.slice(0, maxOutputBytes - stderr.length); });
+  child.stderr.on("data", (chunk: string) => {
+    if (stderr.length < maxOutputBytes) stderr += chunk.slice(0, maxOutputBytes - stderr.length);
+  });
   const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
   const [result] = (await once(child, "close")) as [number | null];
   clearTimeout(timer);
@@ -76,7 +107,8 @@ async function validateSqlite(path: string): Promise<DecryptResult> {
     const header = Buffer.alloc(16);
     await handle.read(header, 0, 16, 0);
     await handle.close();
-    if (header.toString("ascii") !== "SQLite format 3\u0000") throw new DecryptError("unsupported-format", "decrypted output is not SQLite");
+    if (header.toString("ascii") !== "SQLite format 3\u0000")
+      throw new DecryptError("unsupported-format", "decrypted output is not SQLite");
     const bytes = (await stat(path)).size;
     if (!bytes) throw new DecryptError("corrupt-source", "decrypted SQLite output is empty");
     return { outputPath: path, bytes };

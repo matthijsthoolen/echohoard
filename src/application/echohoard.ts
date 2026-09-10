@@ -149,7 +149,11 @@ export class ImmutableSnapshotCreator {
     const files = [...input.files].sort((a, b) => a.name.localeCompare(b.name));
     const entries: SnapshotManifestEntry[] = [];
     for (const file of files) {
-      entries.push({ filename: file.name, size: file.size, sha256: await this.hashes.sha256(`${input.claimedPath}/${file.name}`) });
+      entries.push({
+        filename: file.name,
+        size: file.size,
+        sha256: await this.hashes.sha256(`${input.claimedPath}/${file.name}`),
+      });
     }
     const sourceHash = stableSourceHash(entries);
     const existing = await this.store.findReadyBySourceHash(sourceHash);
@@ -160,29 +164,54 @@ export class ImmutableSnapshotCreator {
       for (const file of files) {
         await this.store.copy(`${input.claimedPath}/${file.name}`, `${staging}/${file.name}`);
         const copiedHash = await this.hashes.sha256(`${staging}/${file.name}`);
-        if (copiedHash !== entries.find((entry) => entry.filename === file.name)?.sha256) throw new Error(`Snapshot hash mismatch for ${file.name}`);
+        if (copiedHash !== entries.find((entry) => entry.filename === file.name)?.sha256)
+          throw new Error(`Snapshot hash mismatch for ${file.name}`);
       }
       const capturedAt = this.clock.now();
-      await this.store.writeManifest(staging, { snapshotId, deliveryId: input.deliveryId, sourceHash, files: entries,
-        discoveredAt: input.discoveredAt.toISOString(), claimedAt: input.claimedAt.toISOString(), capturedAt: capturedAt.toISOString(),
-        ...(input.adapterVersion ? { adapterVersion: input.adapterVersion } : {}) });
+      await this.store.writeManifest(staging, {
+        snapshotId,
+        deliveryId: input.deliveryId,
+        sourceHash,
+        files: entries,
+        discoveredAt: input.discoveredAt.toISOString(),
+        claimedAt: input.claimedAt.toISOString(),
+        capturedAt: capturedAt.toISOString(),
+        ...(input.adapterVersion ? { adapterVersion: input.adapterVersion } : {}),
+      });
       let path: string;
-      try { path = await this.store.publish(staging, snapshotId); }
-      catch (error) {
+      try {
+        path = await this.store.publish(staging, snapshotId);
+      } catch (error) {
         const duplicate = await this.store.findReadyBySourceHash(sourceHash);
         if (duplicate) return { snapshot: duplicate, duplicate: true };
         throw error;
       }
-      return { snapshot: { id: snapshotId, deliveryId: input.deliveryId, sourceHash, path, createdAt: capturedAt, status: "ready" }, duplicate: false };
-    } catch (error) { throw error; }
+      return {
+        snapshot: {
+          id: snapshotId,
+          deliveryId: input.deliveryId,
+          sourceHash,
+          path,
+          createdAt: capturedAt,
+          status: "ready",
+        },
+        duplicate: false,
+      };
+    } catch (error) {
+      throw error;
+    }
   }
 }
 
 function stableSourceHash(entries: readonly SnapshotManifestEntry[]): Sha256 {
-  const data = entries.map((entry) => `${entry.filename}\0${entry.size}\0${entry.sha256}`).join("\n");
+  const data = entries
+    .map((entry) => `${entry.filename}\0${entry.size}\0${entry.sha256}`)
+    .join("\n");
   return createHash("sha256").update(data).digest("hex");
 }
-function cryptoRandomId(): string { return randomUUID(); }
+function cryptoRandomId(): string {
+  return randomUUID();
+}
 
 /** Operations owned by intake; implementations must make claim atomic. */
 export interface InboxPort {
@@ -215,9 +244,14 @@ export class StableBatchClaimer {
 }
 
 const sameFiles = (left: readonly DeliveryFile[], right: readonly DeliveryFile[]): boolean =>
-  left.length === right.length && left.every((file, index) => {
+  left.length === right.length &&
+  left.every((file, index) => {
     const other = right[index];
-    return other?.name === file.name && other.size === file.size && other.modifiedAt.getTime() === file.modifiedAt.getTime();
+    return (
+      other?.name === file.name &&
+      other.size === file.size &&
+      other.modifiedAt.getTime() === file.modifiedAt.getTime()
+    );
   });
 export interface ClockPort {
   now(): Date;

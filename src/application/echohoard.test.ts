@@ -5,6 +5,7 @@ import {
   transitionDelivery,
   transitionImportJob,
   transitionSnapshot,
+  ImmutableSnapshotCreator,
 } from "./echohoard.js";
 
 const date = new Date("2026-01-01T00:00:00Z");
@@ -76,5 +77,68 @@ describe("stable inbox batch claiming", () => {
     const claimer = new StableBatchClaimer(inbox, clock, { quietPeriodMilliseconds: 1 });
     await expect(claimer.settleAndClaim("/inbox", "d")).resolves.toBe("/claimed/d");
     await expect(claimer.settleAndClaim("/inbox", "d")).resolves.toBeNull();
+  });
+});
+
+describe("immutable snapshot creation", () => {
+  const files = [{ name: "db", size: 3, modifiedAt: date }];
+  const clock = { now: () => date, sleep: async () => {} };
+
+  it("copies, verifies, and publishes a snapshot manifest", async () => {
+    const calls: string[] = [];
+    const store = {
+      createStaging: async () => "/snap/.staging-s",
+      copy: async () => {
+        calls.push("copy");
+      },
+      writeManifest: async (_path: string, manifest: { files: readonly unknown[] }) => {
+        expect(manifest.files).toHaveLength(1);
+      },
+      publish: async () => {
+        calls.push("publish");
+        return "/snap/s";
+      },
+      findReadyBySourceHash: async () => null,
+    };
+    const hashes = { sha256: async () => "a".repeat(64) };
+    const result = await new ImmutableSnapshotCreator(hashes, store, clock, () => "s").create({
+      deliveryId: "d",
+      claimedPath: "/inbox/d",
+      files,
+      discoveredAt: date,
+      claimedAt: date,
+    });
+    expect(result.duplicate).toBe(false);
+    expect(result.snapshot.status).toBe("ready");
+    expect(calls).toEqual(["copy", "publish"]);
+  });
+
+  it("returns an existing snapshot for a duplicate source hash", async () => {
+    const existing = {
+      id: "old",
+      deliveryId: "d",
+      sourceHash: "a".repeat(64),
+      path: "/snap/old",
+      createdAt: date,
+      status: "ready" as const,
+    };
+    const store = {
+      createStaging: async () => {
+        throw new Error("must not stage duplicate");
+      },
+      copy: async () => {},
+      writeManifest: async () => {},
+      publish: async () => "",
+      findReadyBySourceHash: async () => existing,
+    };
+    const hashes = { sha256: async () => "a".repeat(64) };
+    const result = await new ImmutableSnapshotCreator(hashes, store, clock, () => "new").create({
+      deliveryId: "d",
+      claimedPath: "/inbox/d",
+      files,
+      discoveredAt: date,
+      claimedAt: date,
+    });
+    expect(result).toEqual({ snapshot: existing, duplicate: true });
   });
 });
