@@ -74,7 +74,7 @@ docker run --rm --read-only --user 10002:10002 \
   '
 
 echo "Checking web cannot access worker data, work, or secrets"
-docker run --rm --read-only "$image" /bin/sh -c '
+docker run --rm --read-only --entrypoint /bin/sh "$image" -c '
   test "$(id -u)" = 10001
   ! test -r /data
   ! test -r /work
