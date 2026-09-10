@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MessageRead } from "../../../application/reads";
+import type { MessageRead } from "../../application/reads.js";
 import {
   emptyTimeline,
   fetchMessagePage,
