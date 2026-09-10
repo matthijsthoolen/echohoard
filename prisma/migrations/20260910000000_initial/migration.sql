@@ -1,0 +1,1 @@
+-- Empty framework migration. Domain tables belong to EH-02 and later.
