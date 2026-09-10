@@ -12,6 +12,7 @@ export default [
         console: "readonly",
         fetch: "readonly",
         process: "readonly",
+        setTimeout: "readonly",
       },
     },
   },
