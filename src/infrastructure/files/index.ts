@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readdir, rename, stat, writeFile, readFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, rename, stat, writeFile, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type {
   DeliveryFile,
@@ -8,6 +8,41 @@ import type {
   SnapshotManifest,
   SnapshotStorePort,
 } from "../../application/echohoard.js";
+import type { ImportJobId, JobWorkPort } from "../../application/intake.js";
+
+/** Disposable plaintext workspace. Job ids are treated as opaque path
+ * components and rejected unless they are safe UUID-like identifiers. */
+export class LocalJobWork implements JobWorkPort {
+  public constructor(private readonly root: string) {}
+
+  public async prepare(jobId: ImportJobId): Promise<{ path: string; restarted: boolean }> {
+    const path = this.pathFor(jobId);
+    let restarted = false;
+    try {
+      await stat(path);
+      await rm(path, { recursive: true, force: true });
+      restarted = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    await mkdir(path, { recursive: false });
+    return { path, restarted };
+  }
+
+  public async cleanup(jobId: ImportJobId, path: string): Promise<void> {
+    if (path !== this.pathFor(jobId)) throw new Error("work path is not owned by job");
+    await rm(path, { recursive: true, force: true });
+  }
+
+  public async cleanupStale(jobId: ImportJobId): Promise<void> {
+    await rm(this.pathFor(jobId), { recursive: true, force: true });
+  }
+
+  private pathFor(jobId: ImportJobId): string {
+    if (!/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error("invalid job identifier");
+    return join(this.root, jobId);
+  }
+}
 
 export class LocalInbox implements InboxPort {
   public async listDeliveries(inboxPath: string): Promise<readonly string[]> {
