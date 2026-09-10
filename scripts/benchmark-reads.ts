@@ -179,6 +179,7 @@ const finalizedMessages = (
     SELECT message.id,
       message."archiveId" AS archive_id,
       message."conversationId" AS conversation_id,
+      message."senderId" AS sender_id,
       message."sentAt" AS sent_at,
       message.metadata
     FROM "Message" message
