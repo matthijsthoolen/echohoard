@@ -1,0 +1,60 @@
+{
+  "contractVersion": "0.1.0",
+  "server": {
+    "name": "echohoard-private-readonly",
+    "version": "0.1.0",
+    "transport": "MCP Streamable HTTP",
+    "authentication": "Bearer credential read from a mounted secret file"
+  },
+  "tools": [
+    {
+      "name": "search_messages",
+      "requiredInputProperties": [],
+      "inputProperties": [
+        "conversationId",
+        "cursor",
+        "direction",
+        "from",
+        "fuzzyName",
+        "fuzzyText",
+        "limit",
+        "mediaType",
+        "personId",
+        "query",
+        "senderDirection",
+        "text",
+        "to"
+      ]
+    },
+    {
+      "name": "get_conversation",
+      "requiredInputProperties": ["conversationId"],
+      "inputProperties": ["conversationId", "cursor", "direction", "limit"]
+    },
+    {
+      "name": "list_conversations",
+      "requiredInputProperties": [],
+      "inputProperties": ["cursor", "direction", "limit", "search"]
+    },
+    {
+      "name": "find_person",
+      "requiredInputProperties": [],
+      "inputProperties": ["cursor", "direction", "limit", "name", "query"]
+    },
+    {
+      "name": "find_media",
+      "requiredInputProperties": [],
+      "inputProperties": ["attachmentId", "cursor", "direction", "limit", "mediaType", "messageId"]
+    },
+    {
+      "name": "get_timeline",
+      "requiredInputProperties": [],
+      "inputProperties": ["cursor", "direction", "from", "limit", "to"]
+    },
+    {
+      "name": "archive_status",
+      "requiredInputProperties": [],
+      "inputProperties": []
+    }
+  ]
+}

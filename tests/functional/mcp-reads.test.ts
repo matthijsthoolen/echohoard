@@ -1,5 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ArchiveHealthService } from "../../src/application/health-reads.js";
 import { ArchiveReadService, CursorCodec } from "../../src/application/reads.js";
@@ -28,6 +29,18 @@ const principal = {
   subject: "synthetic-mcp-client",
   issuer: "functional-test",
 } as const;
+type ContractSnapshot = {
+  contractVersion: string;
+  server: { name: string; version: string };
+  tools: Array<{
+    name: string;
+    requiredInputProperties: string[];
+    inputProperties: string[];
+  }>;
+};
+const contract = JSON.parse(
+  await readFile(new URL("../../docs/mcp-contract.v0.1.json", import.meta.url), "utf8"),
+) as ContractSnapshot;
 let activeApp: PrivateMcpServer | undefined;
 let activeSessionId = "";
 const auditRecords: McpAuditRecord[] = [];
@@ -103,6 +116,13 @@ describe("PostgreSQL private MCP read traversal", () => {
     activeApp = app;
     const response = await app.handleRequest(initializeRequest());
     expect(response.status).toBe(200);
+    const initializeBody = (await response.clone().json()) as {
+      result?: { serverInfo?: { name?: string; version?: string } };
+    };
+    expect(initializeBody.result?.serverInfo).toEqual({
+      name: contract.server.name,
+      version: contract.server.version,
+    });
     sessionId = response.headers.get("mcp-session-id") ?? "";
     activeSessionId = sessionId;
   });
@@ -115,10 +135,24 @@ describe("PostgreSQL private MCP read traversal", () => {
 
   it("discovers seven tools and completes bounded calls against PostgreSQL", async () => {
     const discovered = await call("tools/list", {});
-    expect(discovered.result.tools.map((tool: { name: string }) => tool.name)).toEqual(
-      MCP_ALLOWED_TOOL_NAMES,
-    );
+    const discoveredTools = discovered.result.tools as Array<{
+      name: string;
+      inputSchema: { properties?: Record<string, unknown>; required?: string[] };
+    }>;
+    expect(discoveredTools.map((tool) => tool.name)).toEqual(MCP_ALLOWED_TOOL_NAMES);
     expect(discovered.result.tools).toHaveLength(7);
+    expect(contract.contractVersion).toBe("0.1.0");
+    expect(discoveredTools).toHaveLength(contract.tools.length);
+    for (const expected of contract.tools) {
+      const actual = discoveredTools.find((tool) => tool.name === expected.name);
+      expect(actual, `missing contract tool ${expected.name}`).toBeDefined();
+      expect(Object.keys(actual?.inputSchema.properties ?? {}).sort()).toEqual(
+        expected.inputProperties,
+      );
+      expect((actual?.inputSchema.required ?? []).slice().sort()).toEqual(
+        expected.requiredInputProperties,
+      );
+    }
 
     const calls = await Promise.all([
       call("tools/call", { name: "search_messages", arguments: { query: "" } }),
