@@ -128,3 +128,4 @@ export class LocalSnapshotStore implements SnapshotStorePort {
 export const infrastructureFiles = "files";
 
 export * from "./media-paths.js";
+export * from "./media-cas.js";

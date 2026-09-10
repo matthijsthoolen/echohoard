@@ -14,3 +14,15 @@ export type MediaResolution =
 export interface MediaPathResolverPort {
   resolve(observation: MediaObservation): Promise<MediaResolution>;
 }
+
+export interface MediaCasObject {
+  readonly sha256: string;
+  readonly path: string;
+  readonly size: number;
+  readonly duplicate: boolean;
+}
+
+/** Stores resolved source bytes in EchoHoard-owned content-addressed storage. */
+export interface MediaCasStorePort {
+  store(sourcePath: string, expectedSha256?: string): Promise<MediaCasObject>;
+}
