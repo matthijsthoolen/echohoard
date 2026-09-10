@@ -4,11 +4,11 @@ export type ArchivePrincipal = {
   subject: string;
   issuer: string;
 };
-export type OidcClaims = { iss?: unknown; sub?: unknown; exp?: unknown };
+export type OidcClaims = { iss?: unknown; sub?: unknown; exp?: unknown; nonce?: unknown };
 
 export interface OidcProvider {
-  authorizationUrl(state: string): string;
-  exchange(code: string): Promise<OidcClaims>;
+  authorizationUrl(state: string, nonce?: string): string;
+  exchange(code: string, nonce?: string): Promise<OidcClaims>;
 }
 
 export interface PrincipalDirectory {
@@ -43,14 +43,15 @@ export class OidcAuth {
     private readonly directory: PrincipalDirectory,
     private readonly sessions: SessionStore,
   ) {}
-  login(state: string): string {
-    return this.provider.authorizationUrl(state);
+  login(state: string, nonce?: string): string {
+    return this.provider.authorizationUrl(state, nonce);
   }
-  async callback(code: string): Promise<string | null> {
+  async callback(code: string, expectedNonce?: string): Promise<string | null> {
     const claims = await this.provider.exchange(code);
     if (
       typeof claims.iss !== "string" ||
       typeof claims.sub !== "string" ||
+      (expectedNonce !== undefined && claims.nonce !== expectedNonce) ||
       (typeof claims.exp === "number" && claims.exp * 1000 <= Date.now())
     )
       return null;
