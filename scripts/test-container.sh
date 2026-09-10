@@ -55,8 +55,8 @@ fi
 echo "Checking non-root identities and writable path boundaries"
 [ "$(docker image inspect --format '{{.Config.User}}' "$image")" = "10001:10001" ]
 docker run --rm --read-only --user 10002:10002 \
-  --mount type=tmpfs,destination=/data,tmpfs-mode=700,tmpfs-uid=10002,tmpfs-gid=10002 \
-  --mount type=tmpfs,destination=/work,tmpfs-mode=700,tmpfs-uid=10002,tmpfs-gid=10002 \
+  --tmpfs /data:rw,uid=10002,gid=10002,mode=700 \
+  --tmpfs /work:rw,uid=10002,gid=10002,mode=700 \
   --entrypoint /bin/sh "$image" -c '
     test "$(id -u)" = 10002
     touch /data/approved /work/approved
