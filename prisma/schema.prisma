@@ -24,6 +24,10 @@ model Archive {
   sources   Source[]
   snapshots Snapshot[]
   importJobs ImportJob[]
+  people    Person[]
+  identities Identity[]
+  conversations Conversation[]
+  participants ConversationParticipant[]
   @@unique([id, userId])
   @@unique([userId, name])
   @@index([userId])
@@ -87,4 +91,67 @@ model ImportJob {
   snapshot    Snapshot? @relation(fields: [snapshotId, archiveId], references: [id, archiveId], onDelete: Restrict)
   @@unique([archiveId, id])
   @@index([archiveId, status])
+}
+
+model Person {
+  id           String                   @id @default(uuid()) @db.Uuid
+  archiveId    String                   @db.Uuid
+  displayName  String?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+  archive      Archive                  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  identities   Identity[]
+  participants ConversationParticipant[]
+  @@unique([archiveId, id])
+  @@index([archiveId])
+}
+
+model Identity {
+  id          String   @id @default(uuid()) @db.Uuid
+  archiveId   String   @db.Uuid
+  personId    String   @db.Uuid
+  kind        String
+  value       String
+  displayName String?
+  provenance  Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  person      Person   @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  @@unique([archiveId, id])
+  @@unique([archiveId, kind, value])
+  @@index([archiveId, personId])
+}
+
+model Conversation {
+  id           String                    @id @default(uuid()) @db.Uuid
+  archiveId    String                    @db.Uuid
+  kind         String
+  stableKey    String
+  title        String?
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  archive      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  participants ConversationParticipant[]
+  @@unique([archiveId, id])
+  @@unique([archiveId, stableKey])
+  @@index([archiveId, kind])
+}
+
+model ConversationParticipant {
+  id             String       @id @default(uuid()) @db.Uuid
+  archiveId      String       @db.Uuid
+  conversationId String       @db.Uuid
+  personId       String       @db.Uuid
+  role           String?
+  joinedAt       DateTime?
+  leftAt         DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  person         Person       @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  @@unique([archiveId, id])
+  @@unique([archiveId, conversationId, personId])
+  @@index([archiveId, personId])
 }
