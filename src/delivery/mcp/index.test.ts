@@ -70,6 +70,10 @@ describe("private MCP Streamable HTTP transport", () => {
     expect(toolsBody).toContain('"name":"search_messages"');
     expect(toolsBody).toContain('"name":"get_conversation"');
     expect(toolsBody).toContain('"name":"list_conversations"');
+    expect(toolsBody).toContain('"name":"find_person"');
+    expect(toolsBody).toContain('"name":"find_media"');
+    expect(toolsBody).toContain('"name":"get_timeline"');
+    expect(toolsBody).toContain('"name":"archive_status"');
     expect(toolsBody).not.toContain("archive-a");
     await app.close();
   });

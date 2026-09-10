@@ -7,7 +7,8 @@ import {
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { ArchivePrincipal } from "../../application/auth.js";
 import type { ReadPorts } from "../../application/reads.js";
-import { registerConversationReadTools } from "./tools.js";
+import { registerArchiveReadTools, registerConversationReadTools } from "./tools.js";
+import type { McpHealthService } from "./tools.js";
 export * from "./tools.js";
 
 export const mcpDelivery = "mcp";
@@ -90,6 +91,8 @@ export interface McpServerCompositionOptions {
   readonly authenticator: McpCredentialAuthenticator;
   /** Application read services are the only dependency available to tools. */
   readonly reads: McpReadServices;
+  /** Sanitized archive health application service for archive_status. */
+  readonly health?: McpHealthService;
 }
 
 type McpSession = {
@@ -130,7 +133,7 @@ export class PrivateMcpServer {
       return session.transport.handleRequest(request);
     }
 
-    const server = createMcpServer(this.options.reads, principal.archiveId);
+    const server = createMcpServer(this.options.reads, principal.archiveId, this.options.health);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
       enableJsonResponse: true,
@@ -158,9 +161,14 @@ export class PrivateMcpServer {
 
 /** Official SDK server composition. Only the bounded EH-09-02 read tools are
  * registered here; later stories may add their explicitly scoped tools. */
-export const createMcpServer = (reads: McpReadServices, archiveId = ""): McpServer => {
+export const createMcpServer = (
+  reads: McpReadServices,
+  archiveId = "",
+  health?: McpHealthService,
+): McpServer => {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
   registerConversationReadTools(server, reads, archiveId);
+  registerArchiveReadTools(server, archiveId, health);
   return server;
 };
 

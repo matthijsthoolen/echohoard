@@ -50,6 +50,7 @@ const fakeReads = (overrides: Partial<ReadPorts> = {}): ReadPorts =>
 
 async function connectedApp(
   reads: ReadPorts,
+  health?: { getHealth: (query: { archiveId: string }) => Promise<any> },
 ): Promise<{ app: PrivateMcpServer; sessionId: string }> {
   const root = await mkdtemp(join(tmpdir(), "echohoard-mcp-tools-"));
   const credentialFile = join(root, "credential");
@@ -57,6 +58,7 @@ async function connectedApp(
   const app = new PrivateMcpServer({
     authenticator: new McpCredentialAuthenticator(credentialFile, principal),
     reads,
+    ...(health ? { health } : {}),
   });
   const initialized = await app.handleRequest(
     new Request("http://localhost/mcp", {
@@ -102,6 +104,10 @@ describe("bounded private MCP conversation and search tools", () => {
       "search_messages",
       "get_conversation",
       "list_conversations",
+      "find_person",
+      "find_media",
+      "get_timeline",
+      "archive_status",
     ]);
     const searchTool = body.result.tools[0];
     expect(searchTool.inputSchema.additionalProperties).toBe(false);
@@ -109,6 +115,10 @@ describe("bounded private MCP conversation and search tools", () => {
     expect(searchTool.inputSchema.properties.cursor.maxLength).toBe(MCP_MAX_CURSOR_LENGTH);
     expect(body.result.tools[1].inputSchema.required).toContain("conversationId");
     expect(body.result.tools[2].inputSchema.properties.search.maxLength).toBe(200);
+    expect(body.result.tools[3].inputSchema.additionalProperties).toBe(false);
+    expect(body.result.tools[4].inputSchema.properties.messageId.maxLength).toBe(200);
+    expect(body.result.tools[5].inputSchema.properties.from.maxLength).toBe(64);
+    expect(body.result.tools[6].inputSchema.additionalProperties).toBe(false);
     expect(JSON.stringify(body)).not.toContain(principal.archiveId);
     await app.close();
   });
@@ -225,6 +235,104 @@ describe("bounded private MCP conversation and search tools", () => {
       query: "x",
     });
     expect(JSON.stringify(hugePayload.body).length).toBeLessThan(MCP_MAX_PAYLOAD_BYTES);
+    await app.close();
+  });
+
+  it("returns found, not-found, and ambiguous person states without implicit selection", async () => {
+    const listPeople = vi
+      .fn()
+      .mockResolvedValueOnce({
+        items: [{ id: "person-a", displayName: "Alex", identityCount: 2 }],
+        hasMore: false,
+      })
+      .mockResolvedValueOnce({ items: [], hasMore: false })
+      .mockResolvedValueOnce({
+        items: [
+          { id: "person-a", displayName: "Alex", identityCount: 1 },
+          { id: "person-b", displayName: "Alex", identityCount: 1 },
+        ],
+        hasMore: false,
+      });
+    const reads = fakeReads({ listPeople });
+    const { app, sessionId } = await connectedApp(reads);
+    const found = await callTool(app, sessionId, "find_person", { query: "Alex" });
+    expect(found.body.result.structuredContent.status).toBe("found");
+    const missing = await callTool(app, sessionId, "find_person", { name: "Nobody" });
+    expect(missing.body.result.structuredContent.status).toBe("not_found");
+    const ambiguous = await callTool(app, sessionId, "find_person", { query: "Alex", limit: 2 });
+    expect(ambiguous.body.result.structuredContent.status).toBe("ambiguous");
+    expect(ambiguous.body.result.structuredContent.items).toHaveLength(2);
+    expect(listPeople).toHaveBeenLastCalledWith(
+      expect.objectContaining({ archiveId: "archive-a", search: "Alex", limit: 2 }),
+    );
+    const invalid = await callTool(app, sessionId, "find_person", {});
+    expect(isToolError(invalid.body)).toBe(true);
+    await app.close();
+  });
+
+  it("reports missing media, timeline bounds, and sanitized archive status", async () => {
+    const listMedia = vi.fn(async () => ({
+      items: [
+        {
+          id: "attachment-a",
+          messageId: "message-a",
+          mediaType: "image",
+          availability: "missing" as const,
+          mimeType: "image/jpeg",
+        },
+      ],
+      hasMore: false,
+    }));
+    const listTimeline = vi.fn(async () => ({
+      items: [
+        { id: "message-a", kind: "message" as const, occurredAt: "2026-01-01T00:00:00.000Z" },
+      ],
+      hasMore: false,
+    }));
+    const health = {
+      getHealth: vi.fn(async () => ({
+        archiveId: "archive-a",
+        state: "warning" as const,
+        freshness: "fresh" as const,
+        snapshots: {},
+        jobs: [],
+        counts: {
+          messages: 1,
+          conversations: 1,
+          people: 1,
+          mediaReferenced: 1,
+          mediaAvailable: 0,
+          unsupported: 0,
+        },
+        media: { referenced: 1, available: 0, missing: 1, unsafe: 0, unresolved: 0 },
+        unsupportedTypes: [{ type: "../secret", count: 1 }],
+        failures: [{ code: "INVALID_KEY", message: "secret /private body", retryable: false }],
+      })),
+    };
+    const reads = fakeReads({ listMedia, listTimeline });
+    const { app, sessionId } = await connectedApp(reads, health);
+    const media = await callTool(app, sessionId, "find_media", { messageId: "message-a" });
+    expect(media.body.result.structuredContent.items[0]).toMatchObject({
+      id: "attachment-a",
+      availability: "missing",
+    });
+    expect(JSON.stringify(media.body)).not.toContain("/private");
+    const timeline = await callTool(app, sessionId, "get_timeline", {
+      from: "2026-01-01T00:00:00.000Z",
+      to: "2026-01-02T00:00:00.000Z",
+    });
+    expect(timeline.body.result.structuredContent.items[0].provenance.untrusted).toBe(true);
+    const tooWide = await callTool(app, sessionId, "get_timeline", {
+      from: "2000-01-01T00:00:00.000Z",
+      to: "2020-01-02T00:00:00.000Z",
+    });
+    expect(isToolError(tooWide.body)).toBe(true);
+    const status = await callTool(app, sessionId, "archive_status", {});
+    expect(status.body.result.structuredContent.media.missing).toBe(1);
+    expect(JSON.stringify(status.body)).not.toContain("secret");
+    expect(JSON.stringify(status.body)).not.toContain("../");
+    expect(listMedia).toHaveBeenCalledWith(expect.objectContaining({ archiveId: "archive-a" }));
+    expect(listTimeline).toHaveBeenCalledWith(expect.objectContaining({ archiveId: "archive-a" }));
     await app.close();
   });
 });
