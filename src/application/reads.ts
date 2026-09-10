@@ -260,6 +260,9 @@ export interface SearchResultRead {
   readonly id: string;
   readonly kind: "message" | "person" | "conversation";
   readonly score?: number;
+  /** Optional context fields let delivery open the exact stable message anchor. */
+  readonly conversationId?: string;
+  readonly sentAt?: string;
 }
 export interface StatisticsRead {
   readonly messageCount: number;
@@ -377,6 +380,7 @@ export interface SearchPersistenceRow {
   readonly score: number;
   /** A non-null sortable timestamp; messages without sentAt use a high sentinel. */
   readonly sortSentAt: string;
+  readonly conversationId?: string;
 }
 export interface MessagePersistenceRow {
   readonly id: string;
@@ -558,6 +562,8 @@ export class ArchiveReadService {
       id: row.id,
       kind: "message" as const,
       score: row.score,
+      ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+      ...(row.sortSentAt.startsWith("9999-") ? {} : { sentAt: row.sortSentAt }),
     }));
     return this.page(
       items,

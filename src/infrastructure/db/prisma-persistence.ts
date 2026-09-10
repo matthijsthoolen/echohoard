@@ -163,11 +163,12 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         : Prisma.sql`ranked.score ASC, ranked.sort_sent_at DESC, ranked.id DESC`;
 
     const rows = await this.prisma.$queryRaw<
-      Array<{ id: string; score: number; sort_sent_at: Date }>
+      Array<{ id: string; score: number; sort_sent_at: Date; conversation_id: string }>
     >(Prisma.sql`
       WITH ranked AS (
         SELECT
           message.id,
+          message."conversationId" AS conversation_id,
           GREATEST(
             CASE WHEN ${input.query.trim()} <> '' THEN ts_rank_cd(
               message."searchVector",
@@ -188,7 +189,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
           ON conversation.id = message."conversationId" AND conversation."archiveId" = message."archiveId"
         WHERE ${where}
       )
-      SELECT ranked.id, ranked.score, ranked.sort_sent_at
+      SELECT ranked.id, ranked.score, ranked.sort_sent_at, ranked.conversation_id
       FROM ranked
       WHERE TRUE
       ${afterPredicate}
@@ -199,6 +200,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       id: row.id,
       score: row.score,
       sortSentAt: row.sort_sent_at.toISOString(),
+      ...(row.conversation_id ? { conversationId: row.conversation_id } : {}),
     }));
   }
 

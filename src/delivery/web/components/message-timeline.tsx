@@ -221,9 +221,11 @@ function isDirection(value: unknown): value is MessageRead["direction"] {
 export function MessageTimeline({
   conversationId,
   endpoint,
+  messageId,
 }: {
   readonly conversationId: string;
   readonly endpoint?: string;
+  readonly messageId?: string;
 }) {
   const [state, setState] = useState<TimelineState>(emptyTimeline);
   const [status, setStatus] = useState<"loading" | "ready" | "unauthorized" | "error">("loading");
@@ -263,6 +265,12 @@ export function MessageTimeline({
     () => state.messages.slice(range.start, range.end),
     [range.end, range.start, state.messages],
   );
+
+  useEffect(() => {
+    if (!messageId) return;
+    const target = document.getElementById(`message-${messageId}`);
+    target?.scrollIntoView({ block: "center" });
+  }, [messageId, visible]);
 
   if (status === "loading") return <TimelineStatus title="Loading messages" busy />;
   if (status === "unauthorized")
@@ -352,7 +360,11 @@ export function MessageTimeline({
 function MessageRow({ message }: { readonly message: MessageRead }) {
   const body = renderSafeBody(message);
   return (
-    <article className={`message-row message-${message.direction}`} data-message-id={message.id}>
+    <article
+      id={`message-${message.id}`}
+      className={`message-row message-${message.direction}`}
+      data-message-id={message.id}
+    >
       <div className="message-meta">
         <span>
           {message.direction === "sent"

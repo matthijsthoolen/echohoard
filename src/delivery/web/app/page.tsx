@@ -3,13 +3,17 @@
 import { useEffect, useState } from "react";
 import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
+import { SearchPanel } from "../components/search-panel";
 
 export default function Home() {
   const [conversationId, setConversationId] = useState<string | undefined>();
+  const [messageId, setMessageId] = useState<string | undefined>();
 
   useEffect(() => {
     const value = new URLSearchParams(window.location.search).get("conversation");
     setConversationId(value || undefined);
+    const message = new URLSearchParams(window.location.search).get("message");
+    setMessageId(message || undefined);
   }, []);
 
   return (
@@ -43,10 +47,11 @@ export default function Home() {
         </nav>
         <div className="content-grid" id="main-content">
           <aside className="list-pane" aria-label="Conversation navigation">
+            <SearchPanel />
             <ConversationList />
           </aside>
           {conversationId ? (
-            <MessageTimeline conversationId={conversationId} />
+            <MessageTimeline conversationId={conversationId} messageId={messageId} />
           ) : (
             <section className="welcome-pane" aria-labelledby="welcome-heading">
               <p className="eyebrow">Your archive</p>

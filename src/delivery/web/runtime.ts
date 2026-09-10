@@ -3,7 +3,7 @@ import type { ArchiveHealthRead } from "../../application/health-reads.js";
 import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
 
-export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages"> & {
+export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages" | "search"> & {
   readonly archiveHealth?: (query: { readonly archiveId: string }) => Promise<ArchiveHealthRead>;
 };
 
