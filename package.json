@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@9.15.5",
-  "engines": { "node": ">=22.14.0 <23" },
+  "engines": {
+    "node": ">=22.14.0 <23"
+  },
   "scripts": {
     "build": "pnpm build:web && pnpm build:worker",
     "build:web": "next build src/delivery/web",
