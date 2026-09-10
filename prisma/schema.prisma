@@ -28,6 +28,9 @@ model Archive {
   identities Identity[]
   conversations Conversation[]
   participants ConversationParticipant[]
+  messages  Message[]
+  revisions MessageRevision[]
+  reactions Reaction[]
   @@unique([id, userId])
   @@unique([userId, name])
   @@index([userId])
@@ -102,6 +105,8 @@ model Person {
   archive      Archive                  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   identities   Identity[]
   participants ConversationParticipant[]
+  sentMessages Message[]
+  reactions    Reaction[]
   @@unique([archiveId, id])
   @@index([archiveId])
 }
@@ -133,6 +138,7 @@ model Conversation {
   updatedAt    DateTime                  @updatedAt
   archive      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   participants ConversationParticipant[]
+  messages     Message[]
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
   @@index([archiveId, kind])
@@ -154,4 +160,73 @@ model ConversationParticipant {
   @@unique([archiveId, id])
   @@unique([archiveId, conversationId, personId])
   @@index([archiveId, personId])
+}
+
+model Message {
+  id          String           @id @default(uuid()) @db.Uuid
+  archiveId   String           @db.Uuid
+  conversationId String        @db.Uuid
+  senderId    String?          @db.Uuid
+  replyToId   String?          @db.Uuid
+  stableKey   String
+  sourceType  String?
+  sourceKey   String?
+  messageType String
+  body        String?
+  metadata    Json?
+  sentAt      DateTime?
+  firstSeenAt DateTime         @default(now())
+  lastSeenAt  DateTime         @default(now())
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  archive     Archive          @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation Conversation     @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  sender      Person?          @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  replyTo     Message?         @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
+  replies     Message[]        @relation("MessageReplies")
+  revisions   MessageRevision[]
+  reactions   Reaction[]
+  @@unique([archiveId, id])
+  @@unique([archiveId, conversationId, id])
+  @@unique([archiveId, stableKey])
+  @@index([archiveId, conversationId, sentAt])
+  @@index([archiveId, senderId])
+}
+
+model MessageRevision {
+  id          String   @id @default(uuid()) @db.Uuid
+  archiveId   String   @db.Uuid
+  messageId   String   @db.Uuid
+  revisionKey String
+  body        String?
+  metadata    Json?
+  firstSeenAt DateTime @default(now())
+  observedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  message     Message  @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  @@unique([archiveId, id])
+  @@unique([archiveId, messageId, revisionKey])
+  @@index([archiveId, messageId, firstSeenAt])
+}
+
+model Reaction {
+  id          String   @id @default(uuid()) @db.Uuid
+  archiveId   String   @db.Uuid
+  messageId   String   @db.Uuid
+  personId    String   @db.Uuid
+  emoji       String
+  stableKey   String
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  message     Message  @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  person      Person   @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  @@unique([archiveId, id])
+  @@unique([archiveId, messageId, stableKey])
+  @@index([archiveId, messageId])
 }
