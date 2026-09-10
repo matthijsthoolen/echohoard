@@ -31,6 +31,8 @@ model Archive {
   messages  Message[]
   revisions MessageRevision[]
   reactions Reaction[]
+  attachments Attachment[]
+  messageAttachments MessageAttachment[]
   @@unique([id, userId])
   @@unique([userId, name])
   @@index([userId])
@@ -186,6 +188,7 @@ model Message {
   replies     Message[]        @relation("MessageReplies")
   revisions   MessageRevision[]
   reactions   Reaction[]
+  attachments MessageAttachment[]
   @@unique([archiveId, id])
   @@unique([archiveId, conversationId, id])
   @@unique([archiveId, stableKey])
@@ -228,5 +231,48 @@ model Reaction {
   person      Person   @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Restrict)
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, stableKey])
+  @@index([archiveId, messageId])
+}
+
+model Attachment {
+  id            String              @id @default(uuid()) @db.Uuid
+  archiveId     String              @db.Uuid
+  sha256        String              @db.VarChar(64)
+  availability  String              @default("missing")
+  casKey        String?
+  originalName  String?
+  originalPath  String?
+  mimeType      String?
+  byteSize      BigInt?
+  width         Int?
+  height        Int?
+  durationMs    Int?
+  sourceMetadata Json?
+  firstSeenAt   DateTime            @default(now())
+  lastSeenAt    DateTime            @default(now())
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  archive       Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  messageLinks  MessageAttachment[]
+  @@unique([archiveId, id])
+  @@unique([archiveId, sha256])
+  @@index([archiveId, availability])
+}
+
+model MessageAttachment {
+  id           String     @id @default(uuid()) @db.Uuid
+  archiveId    String     @db.Uuid
+  messageId    String     @db.Uuid
+  attachmentId String     @db.Uuid
+  ordinal      Int?
+  role         String?
+  metadata     Json?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  archive      Archive    @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  message      Message    @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  attachment   Attachment @relation(fields: [attachmentId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  @@unique([archiveId, id])
+  @@unique([archiveId, messageId, attachmentId])
   @@index([archiveId, messageId])
 }
