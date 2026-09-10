@@ -26,6 +26,39 @@ export const MCP_MAX_OUTPUT_REVISIONS = 5;
 export const MCP_MAX_OUTPUT_REACTIONS = 10;
 export const MCP_MAX_PAYLOAD_BYTES = 256 * 1024;
 
+/** The complete MCP capability surface. Keep this list in lockstep with the
+ * registrations below; createMcpServer rejects any accidental expansion. */
+export const MCP_ALLOWED_TOOL_NAMES = Object.freeze([
+  "search_messages",
+  "get_conversation",
+  "list_conversations",
+  "find_person",
+  "find_media",
+  "get_timeline",
+  "archive_status",
+] as const);
+export type McpToolName = (typeof MCP_ALLOWED_TOOL_NAMES)[number];
+
+export interface McpAuditPrincipal {
+  readonly userId: string;
+  readonly archiveId: string;
+  readonly subject: string;
+  readonly issuer: string;
+}
+
+/** Deliberately content-free metadata suitable for a narrow audit sink. */
+export interface McpAuditRecord {
+  readonly tool: McpToolName;
+  readonly principal: McpAuditPrincipal;
+  readonly startedAt: string;
+  readonly durationMs: number;
+  readonly itemCount: number;
+  readonly payloadBytes: number;
+  readonly status: "ok" | "error";
+}
+
+export type McpAuditSink = (record: McpAuditRecord) => void | Promise<void>;
+
 const pageInput = {
   limit: z.number().int().min(1).max(MAX_READ_LIMIT).optional(),
   cursor: z.string().min(1).max(MAX_CURSOR_LENGTH).optional(),
@@ -111,6 +144,12 @@ const provenanceSchema = z
     untrusted: z.literal(true),
   })
   .strict();
+const evidenceEnvelopeSchema = z
+  .object({
+    kind: z.literal("untrusted_evidence"),
+    provenance: provenanceSchema,
+  })
+  .strict();
 const pageOutput = {
   nextCursor: z.string().max(MAX_CURSOR_LENGTH).optional(),
   hasMore: z.boolean(),
@@ -126,12 +165,14 @@ const conversationOutputSchema = z
             participantCount: z.number().int().nonnegative(),
             lastMessageAt: z.string().optional(),
             provenance: provenanceSchema,
+            evidence: evidenceEnvelopeSchema,
           })
           .strict(),
       )
       .max(MAX_READ_LIMIT),
     ...pageOutput,
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 const messageOutputSchema = z
@@ -175,6 +216,7 @@ const messageOutputSchema = z
       )
       .max(MCP_MAX_OUTPUT_REACTIONS),
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 const conversationReadOutputSchema = z
@@ -183,6 +225,7 @@ const conversationReadOutputSchema = z
     items: z.array(messageOutputSchema).max(MAX_READ_LIMIT),
     ...pageOutput,
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 const searchOutputSchema = z
@@ -195,12 +238,14 @@ const searchOutputSchema = z
             kind: z.enum(["message", "person", "conversation"]),
             score: z.number().optional(),
             provenance: provenanceSchema,
+            evidence: evidenceEnvelopeSchema,
           })
           .strict(),
       )
       .max(MAX_READ_LIMIT),
     ...pageOutput,
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 
@@ -215,12 +260,14 @@ const personOutputSchema = z
             displayName: z.string().max(MCP_MAX_OUTPUT_TEXT),
             identityCount: z.number().int().nonnegative(),
             provenance: provenanceSchema,
+            evidence: evidenceEnvelopeSchema,
           })
           .strict(),
       )
       .max(MAX_READ_LIMIT),
     ...pageOutput,
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 const mediaOutputSchema = z
@@ -239,12 +286,14 @@ const mediaOutputSchema = z
             height: z.number().int().nonnegative().optional(),
             durationMs: z.number().int().nonnegative().optional(),
             provenance: provenanceSchema,
+            evidence: evidenceEnvelopeSchema,
           })
           .strict(),
       )
       .max(MAX_READ_LIMIT),
     ...pageOutput,
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 const timelineOutputSchema = z
@@ -257,12 +306,14 @@ const timelineOutputSchema = z
             kind: z.enum(["message", "media"]),
             occurredAt: z.string().max(MCP_MAX_DATE_LENGTH),
             provenance: provenanceSchema,
+            evidence: evidenceEnvelopeSchema,
           })
           .strict(),
       )
       .max(MAX_READ_LIMIT),
     ...pageOutput,
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 const archiveStatusOutputSchema = z
@@ -321,6 +372,7 @@ const archiveStatusOutputSchema = z
       .array(z.object({ code: z.string().max(32), retryable: z.boolean() }).strict())
       .max(20),
     provenance: provenanceSchema,
+    evidence: evidenceEnvelopeSchema,
   })
   .strict();
 
@@ -332,12 +384,18 @@ export type FindPersonInput = z.infer<typeof findPersonInputSchema>;
 export type FindMediaInput = z.infer<typeof findMediaInputSchema>;
 export type GetTimelineInput = z.infer<typeof getTimelineInputSchema>;
 
+export interface McpRegistrationOptions {
+  readonly audit?: McpAuditSink;
+  readonly principal?: McpAuditPrincipal;
+}
+
 /** Register all non-status read tools. The archive is supplied by the
  * authenticated transport and cannot be selected by a caller. */
 export function registerConversationReadTools(
   server: McpServer,
   reads: ReadPorts,
   archiveId: string,
+  options: McpRegistrationOptions = {},
 ): void {
   const provenance = (): McpProvenance => ({
     source: "echohoard",
@@ -355,31 +413,32 @@ export function registerConversationReadTools(
       outputSchema: searchOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      try {
-        const validated = searchMessagesInputSchema.parse(input);
-        validateDateRange(validated.from, validated.to);
-        if (validated.query !== undefined && validated.text !== undefined)
-          throw new InvalidReadRequestError("query and text cannot both be supplied");
-        const result = await reads.search({
-          archiveId,
-          ...pageArgs(validated),
-          ...(validated.query !== undefined ? { query: validated.query } : {}),
-          ...(validated.text !== undefined ? { query: validated.text } : {}),
-          ...(validated.conversationId ? { conversationId: validated.conversationId } : {}),
-          ...(validated.personId ? { personId: validated.personId } : {}),
-          ...(validated.senderDirection ? { senderDirection: validated.senderDirection } : {}),
-          ...(validated.from ? { from: validated.from } : {}),
-          ...(validated.to ? { to: validated.to } : {}),
-          ...(validated.mediaType ? { mediaType: validated.mediaType } : {}),
-          ...(validated.fuzzyName ? { fuzzyName: validated.fuzzyName } : {}),
-          ...(validated.fuzzyText ? { fuzzyText: validated.fuzzyText } : {}),
-        });
-        return resultForSearch(result, provenance());
-      } catch (error) {
-        throw safeToolError(error);
-      }
-    },
+    async (input) =>
+      auditedTool("search_messages", options, async () => {
+        try {
+          const validated = searchMessagesInputSchema.parse(input);
+          validateDateRange(validated.from, validated.to);
+          if (validated.query !== undefined && validated.text !== undefined)
+            throw new InvalidReadRequestError("query and text cannot both be supplied");
+          const result = await reads.search({
+            archiveId,
+            ...pageArgs(validated),
+            ...(validated.query !== undefined ? { query: validated.query } : {}),
+            ...(validated.text !== undefined ? { query: validated.text } : {}),
+            ...(validated.conversationId ? { conversationId: validated.conversationId } : {}),
+            ...(validated.personId ? { personId: validated.personId } : {}),
+            ...(validated.senderDirection ? { senderDirection: validated.senderDirection } : {}),
+            ...(validated.from ? { from: validated.from } : {}),
+            ...(validated.to ? { to: validated.to } : {}),
+            ...(validated.mediaType ? { mediaType: validated.mediaType } : {}),
+            ...(validated.fuzzyName ? { fuzzyName: validated.fuzzyName } : {}),
+            ...(validated.fuzzyText ? { fuzzyText: validated.fuzzyText } : {}),
+          });
+          return resultForSearch(result, provenance());
+        } catch (error) {
+          throw safeToolError(error);
+        }
+      }),
   );
 
   server.registerTool(
@@ -392,19 +451,20 @@ export function registerConversationReadTools(
       outputSchema: conversationReadOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      try {
-        const validated = getConversationInputSchema.parse(input);
-        const result = await reads.listMessages({
-          archiveId,
-          conversationId: validated.conversationId,
-          ...pageArgs(validated),
-        });
-        return resultForMessages(validated.conversationId, result, provenance());
-      } catch (error) {
-        throw safeToolError(error);
-      }
-    },
+    async (input) =>
+      auditedTool("get_conversation", options, async () => {
+        try {
+          const validated = getConversationInputSchema.parse(input);
+          const result = await reads.listMessages({
+            archiveId,
+            conversationId: validated.conversationId,
+            ...pageArgs(validated),
+          });
+          return resultForMessages(validated.conversationId, result, provenance());
+        } catch (error) {
+          throw safeToolError(error);
+        }
+      }),
   );
 
   server.registerTool(
@@ -417,19 +477,20 @@ export function registerConversationReadTools(
       outputSchema: conversationOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      try {
-        const validated = listConversationsInputSchema.parse(input);
-        const result = await reads.listConversations({
-          archiveId,
-          ...pageArgs(validated),
-          ...(validated.search !== undefined ? { search: validated.search } : {}),
-        });
-        return resultForConversations(result, provenance());
-      } catch (error) {
-        throw safeToolError(error);
-      }
-    },
+    async (input) =>
+      auditedTool("list_conversations", options, async () => {
+        try {
+          const validated = listConversationsInputSchema.parse(input);
+          const result = await reads.listConversations({
+            archiveId,
+            ...pageArgs(validated),
+            ...(validated.search !== undefined ? { search: validated.search } : {}),
+          });
+          return resultForConversations(result, provenance());
+        } catch (error) {
+          throw safeToolError(error);
+        }
+      }),
   );
 
   server.registerTool(
@@ -442,20 +503,21 @@ export function registerConversationReadTools(
       outputSchema: personOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      try {
-        const validated = findPersonInputSchema.parse(input);
-        const search = validated.query ?? validated.name!;
-        const result = await reads.listPeople({
-          archiveId,
-          ...pageArgs(validated),
-          search,
-        });
-        return resultForPeople(result, provenance());
-      } catch (error) {
-        throw safeToolError(error);
-      }
-    },
+    async (input) =>
+      auditedTool("find_person", options, async () => {
+        try {
+          const validated = findPersonInputSchema.parse(input);
+          const search = validated.query ?? validated.name!;
+          const result = await reads.listPeople({
+            archiveId,
+            ...pageArgs(validated),
+            search,
+          });
+          return resultForPeople(result, provenance());
+        } catch (error) {
+          throw safeToolError(error);
+        }
+      }),
   );
 
   server.registerTool(
@@ -468,21 +530,22 @@ export function registerConversationReadTools(
       outputSchema: mediaOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      try {
-        const validated = findMediaInputSchema.parse(input);
-        const result = await reads.listMedia({
-          archiveId,
-          ...pageArgs(validated),
-          ...(validated.messageId ? { messageId: validated.messageId } : {}),
-          ...(validated.attachmentId ? { attachmentId: validated.attachmentId } : {}),
-          ...(validated.mediaType ? { mediaType: validated.mediaType } : {}),
-        });
-        return resultForMedia(result, provenance());
-      } catch (error) {
-        throw safeToolError(error);
-      }
-    },
+    async (input) =>
+      auditedTool("find_media", options, async () => {
+        try {
+          const validated = findMediaInputSchema.parse(input);
+          const result = await reads.listMedia({
+            archiveId,
+            ...pageArgs(validated),
+            ...(validated.messageId ? { messageId: validated.messageId } : {}),
+            ...(validated.attachmentId ? { attachmentId: validated.attachmentId } : {}),
+            ...(validated.mediaType ? { mediaType: validated.mediaType } : {}),
+          });
+          return resultForMedia(result, provenance());
+        } catch (error) {
+          throw safeToolError(error);
+        }
+      }),
   );
 
   server.registerTool(
@@ -495,21 +558,22 @@ export function registerConversationReadTools(
       outputSchema: timelineOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      try {
-        const validated = getTimelineInputSchema.parse(input);
-        validateDateRange(validated.from, validated.to);
-        const result = await reads.listTimeline({
-          archiveId,
-          ...pageArgs(validated),
-          ...(validated.from ? { from: validated.from } : {}),
-          ...(validated.to ? { to: validated.to } : {}),
-        });
-        return resultForTimeline(result, provenance());
-      } catch (error) {
-        throw safeToolError(error);
-      }
-    },
+    async (input) =>
+      auditedTool("get_timeline", options, async () => {
+        try {
+          const validated = getTimelineInputSchema.parse(input);
+          validateDateRange(validated.from, validated.to);
+          const result = await reads.listTimeline({
+            archiveId,
+            ...pageArgs(validated),
+            ...(validated.from ? { from: validated.from } : {}),
+            ...(validated.to ? { to: validated.to } : {}),
+          });
+          return resultForTimeline(result, provenance());
+        } catch (error) {
+          throw safeToolError(error);
+        }
+      }),
   );
 }
 
@@ -523,6 +587,7 @@ export function registerArchiveReadTools(
   server: McpServer,
   archiveId: string,
   health?: McpHealthService,
+  options: McpRegistrationOptions = {},
 ): void {
   server.registerTool(
     "archive_status",
@@ -534,16 +599,17 @@ export function registerArchiveReadTools(
       outputSchema: archiveStatusOutputSchema,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async (input) => {
-      try {
-        archiveStatusInputSchema.parse(input);
-        if (!health) throw new Error("Archive health is unavailable");
-        const result = await health.getHealth({ archiveId });
-        return resultForHealth(result, provenanceFor(archiveId));
-      } catch (error) {
-        throw safeToolError(error);
-      }
-    },
+    async (input) =>
+      auditedTool("archive_status", options, async () => {
+        try {
+          archiveStatusInputSchema.parse(input);
+          if (!health) throw new Error("Archive health is unavailable");
+          const result = await health.getHealth({ archiveId });
+          return resultForHealth(result, provenanceFor(archiveId));
+        } catch (error) {
+          throw safeToolError(error);
+        }
+      }),
   );
 }
 
@@ -565,13 +631,19 @@ function resultForConversations(
 ): CallToolResult {
   const output = {
     items: result.items.slice(0, MAX_READ_LIMIT).map((item) => ({
-      ...item,
+      id: safeIdentifier(item.id),
       title: boundedText(item.title),
+      participantCount: safeCount(item.participantCount),
+      ...(item.lastMessageAt
+        ? { lastMessageAt: boundedText(item.lastMessageAt, MCP_MAX_DATE_LENGTH) }
+        : {}),
       provenance,
+      evidence: evidenceFor(provenance),
     })),
     ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
     hasMore: result.hasMore,
     provenance,
+    evidence: evidenceFor(provenance),
   };
   return toolResult(output);
 }
@@ -582,7 +654,7 @@ function resultForMessages(
   provenance: McpProvenance,
 ): CallToolResult {
   const output = {
-    conversationId,
+    conversationId: safeIdentifier(conversationId),
     items: result.items.slice(0, MAX_READ_LIMIT).map((item) => ({
       id: safeIdentifier(item.id),
       conversationId: safeIdentifier(item.conversationId),
@@ -614,10 +686,12 @@ function resultForMessages(
         emoji: boundedText(reaction.emoji, 32),
       })),
       provenance,
+      evidence: evidenceFor(provenance),
     })),
     ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
     hasMore: result.hasMore,
     provenance,
+    evidence: evidenceFor(provenance),
   };
   return toolResult(output);
 }
@@ -627,10 +701,19 @@ function resultForSearch(
   provenance: McpProvenance,
 ): CallToolResult {
   const output = {
-    items: result.items.map((item) => ({ ...item, provenance })),
+    items: result.items.slice(0, MAX_READ_LIMIT).map((item) => ({
+      id: safeIdentifier(item.id),
+      kind: item.kind,
+      ...(typeof item.score === "number" && Number.isFinite(item.score)
+        ? { score: item.score }
+        : {}),
+      provenance,
+      evidence: evidenceFor(provenance),
+    })),
     ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
     hasMore: result.hasMore,
     provenance,
+    evidence: evidenceFor(provenance),
   };
   return toolResult(output);
 }
@@ -644,6 +727,7 @@ function resultForPeople(
     displayName: boundedText(item.displayName),
     identityCount: safeCount(item.identityCount),
     provenance,
+    evidence: evidenceFor(provenance),
   }));
   const output = {
     status:
@@ -656,6 +740,7 @@ function resultForPeople(
     ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
     hasMore: result.hasMore,
     provenance,
+    evidence: evidenceFor(provenance),
   };
   return toolResult(output);
 }
@@ -681,10 +766,12 @@ function resultForMedia(result: ReadPage<MediaRead>, provenance: McpProvenance):
         ? { durationMs: safeCountOptional(item.durationMs) }
         : {}),
       provenance,
+      evidence: evidenceFor(provenance),
     })),
     ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
     hasMore: result.hasMore,
     provenance,
+    evidence: evidenceFor(provenance),
   };
   return toolResult(output);
 }
@@ -699,10 +786,12 @@ function resultForTimeline(
       kind: item.kind,
       occurredAt: boundedText(item.occurredAt, MCP_MAX_DATE_LENGTH),
       provenance,
+      evidence: evidenceFor(provenance),
     })),
     ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
     hasMore: result.hasMore,
     provenance,
+    evidence: evidenceFor(provenance),
   };
   return toolResult(output);
 }
@@ -778,12 +867,99 @@ function resultForHealth(result: ArchiveHealthRead, provenance: McpProvenance): 
       retryable: item.retryable === true,
     })),
     provenance,
+    evidence: evidenceFor(provenance),
   };
   return toolResult(output);
 }
 
 function provenanceFor(archiveId: string): McpProvenance {
   return { source: "echohoard", archiveId, untrusted: true };
+}
+
+function evidenceFor(provenance: McpProvenance): {
+  kind: "untrusted_evidence";
+  provenance: McpProvenance;
+} {
+  return { kind: "untrusted_evidence", provenance };
+}
+
+/** Verify the SDK registry at the composition boundary, so an accidental
+ * future registration cannot silently expand the model-facing capability set. */
+export function assertMcpToolAllowlist(server: McpServer): void {
+  const registered = (
+    server as unknown as {
+      _registeredTools?: Record<string, unknown>;
+    }
+  )._registeredTools;
+  const names = registered ? Object.keys(registered).sort() : [];
+  const expected = [...MCP_ALLOWED_TOOL_NAMES].sort();
+  if (names.length !== expected.length || names.some((name, index) => name !== expected[index]))
+    throw new Error("MCP tool allowlist violation");
+}
+
+async function auditedTool(
+  tool: McpToolName,
+  options: McpRegistrationOptions,
+  action: () => Promise<CallToolResult>,
+): Promise<CallToolResult> {
+  const startedAt = new Date();
+  try {
+    const result = await action();
+    await writeAudit(options, tool, startedAt, "ok", result);
+    return result;
+  } catch (error) {
+    await writeAudit(options, tool, startedAt, "error");
+    throw error;
+  }
+}
+
+async function writeAudit(
+  options: McpRegistrationOptions,
+  tool: McpToolName,
+  startedAt: Date,
+  status: "ok" | "error",
+  result?: CallToolResult,
+): Promise<void> {
+  if (!options.audit) return;
+  const principal = options.principal ?? {
+    userId: "unknown",
+    archiveId: "unknown",
+    subject: "unknown",
+    issuer: "unknown",
+  };
+  const serialized = result?.structuredContent
+    ? JSON.stringify(result.structuredContent)
+    : undefined;
+  const record: McpAuditRecord = {
+    tool,
+    principal: {
+      userId: auditValue(principal.userId),
+      archiveId: auditValue(principal.archiveId),
+      subject: auditValue(principal.subject),
+      issuer: auditValue(principal.issuer),
+    },
+    startedAt: startedAt.toISOString(),
+    durationMs: Math.max(0, Date.now() - startedAt.getTime()),
+    itemCount: resultItemCount(result),
+    payloadBytes: serialized ? Buffer.byteLength(serialized, "utf8") : 0,
+    status,
+  };
+  try {
+    await options.audit(record);
+  } catch {
+    // Audit sinks are deliberately best-effort and must never expose source
+    // errors or turn a successful read into a content-bearing error response.
+  }
+}
+
+function resultItemCount(result: CallToolResult | undefined): number {
+  if (!result?.structuredContent || typeof result.structuredContent !== "object") return 0;
+  const items = (result.structuredContent as { items?: unknown }).items;
+  return Array.isArray(items) ? items.length : 0;
+}
+
+function auditValue(value: string): string {
+  return value.replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, MCP_MAX_ID_LENGTH);
 }
 
 function safeIdentifier(value: string): string {

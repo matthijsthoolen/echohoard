@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ArchiveHealthService } from "../../src/application/health-reads.js";
 import { ArchiveReadService, CursorCodec } from "../../src/application/reads.js";
 import { McpCredentialAuthenticator, PrivateMcpServer } from "../../src/delivery/mcp/index.js";
+import { MCP_ALLOWED_TOOL_NAMES, type McpAuditRecord } from "../../src/delivery/mcp/tools.js";
 import {
   PrismaHealthReadPersistence,
   PrismaReadPersistence,
@@ -29,6 +30,7 @@ const principal = {
 } as const;
 let activeApp: PrivateMcpServer | undefined;
 let activeSessionId = "";
+const auditRecords: McpAuditRecord[] = [];
 
 describe("PostgreSQL private MCP read traversal", () => {
   let app: PrivateMcpServer;
@@ -94,6 +96,9 @@ describe("PostgreSQL private MCP read traversal", () => {
         new CursorCodec("cursor-secret"),
       ),
       health: new ArchiveHealthService(new PrismaHealthReadPersistence(prisma)),
+      audit: (record) => {
+        auditRecords.push(record);
+      },
     });
     activeApp = app;
     const response = await app.handleRequest(initializeRequest());
@@ -110,15 +115,10 @@ describe("PostgreSQL private MCP read traversal", () => {
 
   it("discovers seven tools and completes bounded calls against PostgreSQL", async () => {
     const discovered = await call("tools/list", {});
-    expect(discovered.result.tools.map((tool: { name: string }) => tool.name)).toEqual([
-      "search_messages",
-      "get_conversation",
-      "list_conversations",
-      "find_person",
-      "find_media",
-      "get_timeline",
-      "archive_status",
-    ]);
+    expect(discovered.result.tools.map((tool: { name: string }) => tool.name)).toEqual(
+      MCP_ALLOWED_TOOL_NAMES,
+    );
+    expect(discovered.result.tools).toHaveLength(7);
 
     const calls = await Promise.all([
       call("tools/call", { name: "search_messages", arguments: { query: "" } }),
@@ -135,11 +135,25 @@ describe("PostgreSQL private MCP read traversal", () => {
       id: attachmentId,
       availability: "missing",
     });
+    expect(calls[1]?.result.structuredContent.items[0].text).toBe(
+      "hostile source text must remain inert",
+    );
     expect(calls[6]?.result.structuredContent.provenance).toMatchObject({
       source: "echohoard",
       archiveId,
       untrusted: true,
     });
+    expect(calls[1]?.result.structuredContent.evidence.kind).toBe("untrusted_evidence");
+    expect(auditRecords).toHaveLength(7);
+    expect(auditRecords.every((record) => record.status === "ok")).toBe(true);
+    expect(JSON.stringify(auditRecords)).not.toContain("hostile source text");
+    expect(JSON.stringify(auditRecords)).not.toContain("synthetic-mcp-token");
+
+    const extra = await call("tools/call", {
+      name: "read_everything",
+      arguments: {},
+    });
+    expect(extra.error || extra.result?.isError).toBeTruthy();
   });
 
   it("rejects invalid credentials and cross-archive probes without leakage", async () => {

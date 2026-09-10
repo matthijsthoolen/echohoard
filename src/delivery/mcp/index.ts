@@ -7,7 +7,13 @@ import {
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { ArchivePrincipal } from "../../application/auth.js";
 import type { ReadPorts } from "../../application/reads.js";
-import { registerArchiveReadTools, registerConversationReadTools } from "./tools.js";
+import {
+  assertMcpToolAllowlist,
+  registerArchiveReadTools,
+  registerConversationReadTools,
+  type McpAuditPrincipal,
+  type McpAuditSink,
+} from "./tools.js";
 import type { McpHealthService } from "./tools.js";
 export * from "./tools.js";
 
@@ -93,6 +99,8 @@ export interface McpServerCompositionOptions {
   readonly reads: McpReadServices;
   /** Sanitized archive health application service for archive_status. */
   readonly health?: McpHealthService;
+  /** Optional content-free audit sink. It never receives tool arguments/results. */
+  readonly audit?: McpAuditSink;
 }
 
 type McpSession = {
@@ -133,7 +141,13 @@ export class PrivateMcpServer {
       return session.transport.handleRequest(request);
     }
 
-    const server = createMcpServer(this.options.reads, principal.archiveId, this.options.health);
+    const server = createMcpServer(
+      this.options.reads,
+      principal.archiveId,
+      this.options.health,
+      this.options.audit,
+      principal,
+    );
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
       enableJsonResponse: true,
@@ -165,10 +179,14 @@ export const createMcpServer = (
   reads: McpReadServices,
   archiveId = "",
   health?: McpHealthService,
+  audit?: McpAuditSink,
+  principal?: McpAuditPrincipal,
 ): McpServer => {
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
-  registerConversationReadTools(server, reads, archiveId);
-  registerArchiveReadTools(server, archiveId, health);
+  const registration = { ...(audit ? { audit } : {}), ...(principal ? { principal } : {}) };
+  registerConversationReadTools(server, reads, archiveId, registration);
+  registerArchiveReadTools(server, archiveId, health, registration);
+  assertMcpToolAllowlist(server);
   return server;
 };
 
