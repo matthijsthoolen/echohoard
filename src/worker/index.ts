@@ -25,6 +25,10 @@ async function main(): Promise<void> {
   installSignalHandlers(lifecycle);
   await lifecycle.start();
   console.log("EchoHoard worker ready");
+  // The composition root is a long-lived service. Keep the event loop alive
+  // until a termination signal reaches the lifecycle handlers; without this
+  // await, a worker with no queue work exits immediately after startup.
+  await new Promise<void>(() => undefined);
 }
 
 main().catch(() => {
