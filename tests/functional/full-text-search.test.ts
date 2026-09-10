@@ -59,7 +59,7 @@ describe("PostgreSQL full-text message search", () => {
   afterAll(async () => {
     await prisma.$executeRaw`DELETE FROM "User" WHERE id = ${userId}::uuid`;
     await prisma.$disconnect();
-  });
+  }, 30_000);
 
   it("returns ranked, bounded results with stable cursor pagination", async () => {
     const first = await service.search({ archiveId: archiveOneId, query: "alpha", limit: 1 });
