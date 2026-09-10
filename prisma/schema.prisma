@@ -1,5 +1,8 @@
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // The packaged runtime uses Debian Bookworm/OpenSSL 3. Keep native for
+  // local development while embedding the deployment engine explicitly.
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
 datasource db {
@@ -15,64 +18,67 @@ model User {
 }
 
 model Archive {
-  id        String      @id @default(uuid()) @db.Uuid
-  userId    String      @db.Uuid
-  name      String
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sources   Source[]
-  snapshots Snapshot[]
-  importJobs ImportJob[]
-  people    Person[]
-  identities Identity[]
-  conversations Conversation[]
-  participants ConversationParticipant[]
-  messages  Message[]
-  revisions MessageRevision[]
-  reactions Reaction[]
-  attachments Attachment[]
+  id                 String                    @id @default(uuid()) @db.Uuid
+  userId             String                    @db.Uuid
+  name               String
+  createdAt          DateTime                  @default(now())
+  updatedAt          DateTime                  @updatedAt
+  user               User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sources            Source[]
+  snapshots          Snapshot[]
+  importJobs         ImportJob[]
+  people             Person[]
+  identities         Identity[]
+  conversations      Conversation[]
+  participants       ConversationParticipant[]
+  messages           Message[]
+  revisions          MessageRevision[]
+  reactions          Reaction[]
+  attachments        Attachment[]
   messageAttachments MessageAttachment[]
+
   @@unique([id, userId])
   @@unique([userId, name])
   @@index([userId])
 }
 
 model Source {
-  id             String       @id @default(uuid()) @db.Uuid
-  archiveId      String       @db.Uuid
-  kind           String
-  stableKey      String
-  sha256         String       @db.VarChar(64)
-  originalPath   String?
-  provenance     Json?
-  lifecycle      String       @default("discovered")
-  discoveredAt   DateTime     @default(now())
-  claimedAt      DateTime?
-  completedAt    DateTime?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  snapshots      Snapshot[]
-  importJobs     ImportJob[]
+  id           String      @id @default(uuid()) @db.Uuid
+  archiveId    String      @db.Uuid
+  kind         String
+  stableKey    String
+  sha256       String      @db.VarChar(64)
+  originalPath String?
+  provenance   Json?
+  lifecycle    String      @default("discovered")
+  discoveredAt DateTime    @default(now())
+  claimedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  archive      Archive     @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  snapshots    Snapshot[]
+  importJobs   ImportJob[]
+
   @@unique([archiveId, kind, stableKey])
   @@unique([archiveId, id])
   @@index([archiveId, sha256])
 }
 
 model Snapshot {
-  id          String   @id @default(uuid()) @db.Uuid
-  archiveId   String   @db.Uuid
-  sourceId    String   @db.Uuid
-  sha256      String   @db.VarChar(64)
+  id          String      @id @default(uuid()) @db.Uuid
+  archiveId   String      @db.Uuid
+  sourceId    String      @db.Uuid
+  sha256      String      @db.VarChar(64)
   provenance  Json?
-  lifecycle   String   @default("snapshotted")
-  capturedAt DateTime  @default(now())
+  lifecycle   String      @default("snapshotted")
+  capturedAt  DateTime    @default(now())
   completedAt DateTime?
-  createdAt   DateTime @default(now())
-  source      Source   @relation(fields: [sourceId, archiveId], references: [id, archiveId], onDelete: Restrict)
-  archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  createdAt   DateTime    @default(now())
+  source      Source      @relation(fields: [sourceId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  archive     Archive     @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   importJobs  ImportJob[]
+
   @@unique([archiveId, id])
   @@unique([archiveId, sourceId, sha256])
   @@index([archiveId, sourceId])
@@ -81,37 +87,39 @@ model Snapshot {
 }
 
 model ImportJob {
-  id          String    @id @default(uuid()) @db.Uuid
-  archiveId   String    @db.Uuid
-  sourceId    String    @db.Uuid
-  snapshotId  String?   @db.Uuid
-  status      String    @default("discovered")
+  id             String    @id @default(uuid()) @db.Uuid
+  archiveId      String    @db.Uuid
+  sourceId       String    @db.Uuid
+  snapshotId     String?   @db.Uuid
+  status         String    @default("discovered")
   adapterVersion String?
-  outcome     Json?
-  errorClass  String?
-  startedAt   DateTime?
-  finishedAt  DateTime?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  archive     Archive   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  source      Source    @relation(fields: [sourceId, archiveId], references: [id, archiveId], onDelete: Restrict)
-  snapshot    Snapshot? @relation(fields: [snapshotId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  outcome        Json?
+  errorClass     String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  archive        Archive   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  source         Source    @relation(fields: [sourceId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  snapshot       Snapshot? @relation(fields: [snapshotId, archiveId], references: [id, archiveId], onDelete: Restrict)
+
   @@unique([archiveId, id])
   @@index([archiveId, status])
   @@index([archiveId, createdAt])
 }
 
 model Person {
-  id           String                   @id @default(uuid()) @db.Uuid
-  archiveId    String                   @db.Uuid
+  id           String                    @id @default(uuid()) @db.Uuid
+  archiveId    String                    @db.Uuid
   displayName  String?
-  createdAt    DateTime                 @default(now())
-  updatedAt    DateTime                 @updatedAt
-  archive      Archive                  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  archive      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   identities   Identity[]
   participants ConversationParticipant[]
   sentMessages Message[]
   reactions    Reaction[]
+
   @@unique([archiveId, id])
   @@index([archiveId])
 }
@@ -128,6 +136,7 @@ model Identity {
   updatedAt   DateTime @updatedAt
   archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   person      Person   @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
   @@unique([archiveId, id])
   @@unique([archiveId, kind, value])
   @@index([archiveId, personId])
@@ -144,6 +153,7 @@ model Conversation {
   archive      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   participants ConversationParticipant[]
   messages     Message[]
+
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
   @@index([archiveId, kind])
@@ -162,36 +172,38 @@ model ConversationParticipant {
   archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   conversation   Conversation @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
   person         Person       @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
   @@unique([archiveId, id])
   @@unique([archiveId, conversationId, personId])
   @@index([archiveId, personId])
 }
 
 model Message {
-  id          String           @id @default(uuid()) @db.Uuid
-  archiveId   String           @db.Uuid
-  conversationId String        @db.Uuid
-  senderId    String?          @db.Uuid
-  replyToId   String?          @db.Uuid
-  stableKey   String
-  sourceType  String?
-  sourceKey   String?
-  messageType String
-  body        String?
-  metadata    Json?
-  sentAt      DateTime?
-  firstSeenAt DateTime         @default(now())
-  lastSeenAt  DateTime         @default(now())
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  archive     Archive          @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  conversation Conversation     @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  sender      Person?          @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
-  replyTo     Message?         @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
-  replies     Message[]        @relation("MessageReplies")
-  revisions   MessageRevision[]
-  reactions   Reaction[]
-  attachments MessageAttachment[]
+  id             String              @id @default(uuid()) @db.Uuid
+  archiveId      String              @db.Uuid
+  conversationId String              @db.Uuid
+  senderId       String?             @db.Uuid
+  replyToId      String?             @db.Uuid
+  stableKey      String
+  sourceType     String?
+  sourceKey      String?
+  messageType    String
+  body           String?
+  metadata       Json?
+  sentAt         DateTime?
+  firstSeenAt    DateTime            @default(now())
+  lastSeenAt     DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  archive        Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation   Conversation        @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  sender         Person?             @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  replyTo        Message?            @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
+  replies        Message[]           @relation("MessageReplies")
+  revisions      MessageRevision[]
+  reactions      Reaction[]
+  attachments    MessageAttachment[]
+
   @@unique([archiveId, id])
   @@unique([archiveId, conversationId, id])
   @@unique([archiveId, stableKey])
@@ -213,6 +225,7 @@ model MessageRevision {
   updatedAt   DateTime @updatedAt
   archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   message     Message  @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, revisionKey])
   @@index([archiveId, messageId, firstSeenAt])
@@ -233,32 +246,34 @@ model Reaction {
   archive     Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   message     Message  @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
   person      Person   @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Restrict)
+
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, stableKey])
   @@index([archiveId, messageId])
 }
 
 model Attachment {
-  id            String              @id @default(uuid()) @db.Uuid
-  archiveId     String              @db.Uuid
-  stableKey     String?
-  sha256        String              @db.VarChar(64)
-  availability  String              @default("missing")
-  casKey        String?
-  originalName  String?
-  originalPath  String?
-  mimeType      String?
-  byteSize      BigInt?
-  width         Int?
-  height        Int?
-  durationMs    Int?
+  id             String              @id @default(uuid()) @db.Uuid
+  archiveId      String              @db.Uuid
+  stableKey      String?
+  sha256         String              @db.VarChar(64)
+  availability   String              @default("missing")
+  casKey         String?
+  originalName   String?
+  originalPath   String?
+  mimeType       String?
+  byteSize       BigInt?
+  width          Int?
+  height         Int?
+  durationMs     Int?
   sourceMetadata Json?
-  firstSeenAt   DateTime            @default(now())
-  lastSeenAt    DateTime            @default(now())
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  archive       Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  messageLinks  MessageAttachment[]
+  firstSeenAt    DateTime            @default(now())
+  lastSeenAt     DateTime            @default(now())
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  archive        Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  messageLinks   MessageAttachment[]
+
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
   @@unique([archiveId, sha256])
@@ -278,6 +293,7 @@ model MessageAttachment {
   archive      Archive    @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   message      Message    @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
   attachment   Attachment @relation(fields: [attachmentId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, attachmentId])
   @@index([archiveId, messageId])
