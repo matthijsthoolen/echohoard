@@ -28,7 +28,10 @@ async function main(): Promise<void> {
   // The composition root is a long-lived service. Keep the event loop alive
   // until a termination signal reaches the lifecycle handlers; without this
   // await, a worker with no queue work exits immediately after startup.
-  await new Promise<void>(() => undefined);
+  // A pending Promise alone does not keep Node's event loop alive, so use a
+  // low-frequency handle for the idle queue runner. Signal handlers call
+  // process.exit after draining and terminate this handle with the process.
+  setInterval(() => undefined, 60_000);
 }
 
 main().catch(() => {
