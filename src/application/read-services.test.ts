@@ -116,7 +116,14 @@ describe("archive read services", () => {
       codec,
     );
     const first = await service.search({ archiveId: "archive-a", query: "needle", limit: 1 });
-    expect(first.items).toEqual([{ id: "m1", kind: "message", score: 0.9 }]);
+    expect(first.items).toEqual([
+      {
+        id: "m1",
+        kind: "message",
+        score: 0.9,
+        sentAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
     expect(first.hasMore).toBe(true);
     expect(
       (
