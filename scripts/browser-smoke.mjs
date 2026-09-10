@@ -1,39 +1,38 @@
-import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 
-const page = `<!doctype html><html><head><title>EchoHoard</title></head><body><main><h1>EchoHoard</h1></main></body></html>`;
-
-const server = createServer((request, response) => {
-  if (request.url === "/health") {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ status: "ok" }));
-    return;
-  }
-  if (request.url === "/") {
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-    response.end(page);
-    return;
-  }
-  response.writeHead(404);
-  response.end();
+const port = 4317;
+const baseUrl = `http://127.0.0.1:${port}`;
+const command = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const run = (args) => new Promise((resolve, reject) => {
+  const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] }); let output = "";
+  child.stdout.on("data", (chunk) => { output += chunk; }); child.stderr.on("data", (chunk) => { output += chunk; });
+  child.on("error", reject); child.on("close", (code) => resolve({ code, output }));
 });
-
-server.listen(0, "127.0.0.1", async () => {
-  const { port } = server.address();
-  const baseUrl = `http://127.0.0.1:${port}`;
+let start;
+let output = "";
+const deadline = Date.now() + 15000;
+const waitForApp = async () => { let lastError = ""; while (Date.now() < deadline) { try { if ((await fetch(`${baseUrl}/health`)).ok) return; } catch (error) { lastError = error.message; } await new Promise((resolve) => setTimeout(resolve, 250)); } throw new Error(`production app did not become ready (${lastError})\n${output}`); };
+const main = async () => {
   try {
+    const build = await run(["build:web"]); if (build.code !== 0) throw new Error(`production build failed\n${build.output}`);
+    start = spawn(command, ["exec", "next", "start", "src/delivery/web", "-p", String(port)], { stdio: ["ignore", "pipe", "pipe"] });
+    start.stdout.on("data", (chunk) => { output += chunk; }); start.stderr.on("data", (chunk) => { output += chunk; });
+    await waitForApp();
     const pageResponse = await fetch(`${baseUrl}/`);
     if (pageResponse.status !== 200) throw new Error(`page status was ${pageResponse.status}`);
     const html = await pageResponse.text();
-    if (!html.includes("<title>EchoHoard</title>") || !html.includes("<h1>EchoHoard</h1>")) throw new Error("synthetic page content mismatch");
+    if (!html.includes("<h1>EchoHoard</h1>")) throw new Error("production page content mismatch");
     const healthResponse = await fetch(`${baseUrl}/health`);
     if (healthResponse.status !== 200) throw new Error(`health status was ${healthResponse.status}`);
     const health = await healthResponse.json();
     if (health.status !== "ok") throw new Error("health response was not ok");
-    console.log("Browser harness smoke passed: page and health seam are reachable");
+    console.log("Browser harness smoke passed: production page and health seam are reachable");
   } catch (error) {
     console.error(`Browser harness smoke failed: ${error.message}`);
     process.exitCode = 1;
   } finally {
-    server.close();
+    if (start) start.kill("SIGTERM");
   }
-});
+};
+
+await main();
