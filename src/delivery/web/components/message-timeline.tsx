@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  MessageAttachmentRead,
   MessageRead,
   MessageReactionRead,
   MessageRevisionRead,
 } from "../../../application/reads";
+import { RichMessage } from "./rich-message";
 
 export const TIMELINE_PAGE_LIMIT = 50;
 export const TIMELINE_ROW_HEIGHT = 88;
@@ -149,6 +151,9 @@ function parseMessage(value: unknown): MessageRead {
   )
     throw new Error("invalid message text");
   const replyTo = message.replyTo === undefined ? undefined : parseReply(message.replyTo);
+  const attachments =
+    message.attachments === undefined ? undefined : parseAttachments(message.attachments);
+  const metadata = message.metadata === undefined ? undefined : parseMetadata(message.metadata);
   return {
     id: message.id,
     conversationId: message.conversationId,
@@ -158,12 +163,86 @@ function parseMessage(value: unknown): MessageRead {
     sentAt: message.sentAt,
     ...(typeof message.text === "string" ? { text: message.text } : {}),
     attachmentCount: message.attachmentCount,
+    ...(attachments ? { attachments } : {}),
     direction: message.direction,
     messageType: message.messageType,
+    ...(metadata ? { metadata } : {}),
     ...(replyTo ? { replyTo } : {}),
     revisions: message.revisions.map(parseRevision),
     reactions: message.reactions.map(parseReaction),
   };
+}
+
+function parseAttachments(value: unknown): readonly MessageAttachmentRead[] {
+  if (!Array.isArray(value) || value.length > 32) throw new Error("invalid message attachments");
+  return value.map((item) => {
+    if (typeof item !== "object" || item === null) throw new Error("invalid message attachment");
+    const attachment = item as Record<string, unknown>;
+    if (
+      typeof attachment.id !== "string" ||
+      !attachment.id ||
+      attachment.id.length > 128 ||
+      /[\\/\u0000]/u.test(attachment.id) ||
+      !isAttachmentState(attachment.availability)
+    )
+      throw new Error("invalid message attachment");
+    const result: MessageAttachmentRead = {
+      id: attachment.id,
+      availability: attachment.availability,
+      ...(boundedString(attachment.mimeType, 255)
+        ? { mimeType: boundedString(attachment.mimeType, 255) }
+        : {}),
+      ...(boundedString(attachment.originalName, 255)
+        ? { originalName: boundedString(attachment.originalName, 255) }
+        : {}),
+      ...(safeNonNegative(attachment.byteSize) !== undefined
+        ? { byteSize: safeNonNegative(attachment.byteSize) }
+        : {}),
+      ...(safeNonNegative(attachment.width) !== undefined
+        ? { width: safeNonNegative(attachment.width) }
+        : {}),
+      ...(safeNonNegative(attachment.height) !== undefined
+        ? { height: safeNonNegative(attachment.height) }
+        : {}),
+      ...(safeNonNegative(attachment.durationMs) !== undefined
+        ? { durationMs: safeNonNegative(attachment.durationMs) }
+        : {}),
+      ...(safeNonNegative(attachment.ordinal) !== undefined
+        ? { ordinal: safeNonNegative(attachment.ordinal) }
+        : {}),
+      ...(boundedString(attachment.role, 128) ? { role: boundedString(attachment.role, 128) } : {}),
+    };
+    return result;
+  });
+}
+
+function parseMetadata(
+  value: unknown,
+): Readonly<Record<string, string | number | boolean>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("invalid message metadata");
+  const result: Record<string, string | number | boolean> = {};
+  for (const [key, item] of Object.entries(value).slice(0, 32)) {
+    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(key)) continue;
+    if (typeof item === "string" && item.length <= 2_000) result[key] = item;
+    else if (typeof item === "boolean") result[key] = item;
+    else if (typeof item === "number" && Number.isFinite(item)) result[key] = item;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function boundedString(value: unknown, limit: number): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= limit ? value : undefined;
+}
+
+function safeNonNegative(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function isAttachmentState(value: unknown): value is MessageAttachmentRead["availability"] {
+  return (
+    value === "available" || value === "missing" || value === "unsafe" || value === "unresolved"
+  );
 }
 
 function parseReply(value: unknown): MessageRead["replyTo"] {
@@ -358,7 +437,6 @@ export function MessageTimeline({
 }
 
 function MessageRow({ message }: { readonly message: MessageRead }) {
-  const body = renderSafeBody(message);
   return (
     <article
       id={`message-${message.id}`}
@@ -378,7 +456,7 @@ function MessageRow({ message }: { readonly message: MessageRead }) {
       {message.replyTo ? (
         <div className="message-reply">Reply to {message.replyTo.text || "preserved message"}</div>
       ) : null}
-      <p className="message-body">{body}</p>
+      <RichMessage message={message} />
       {message.revisions.length > 0 ? (
         <details className="message-edits">
           <summary>Edited ({message.revisions.length})</summary>
@@ -398,15 +476,6 @@ function MessageRow({ message }: { readonly message: MessageRead }) {
       ) : null}
     </article>
   );
-}
-
-function renderSafeBody(message: MessageRead): string {
-  if (message.messageType === "unsupported")
-    return "Unsupported message type (content preserved safely)";
-  if (message.text !== undefined) return message.text;
-  if (message.attachmentCount > 0)
-    return "Attachment preserved; media preview is unavailable here.";
-  return "Message content unavailable";
 }
 
 function formatTimestamp(value: string): string {

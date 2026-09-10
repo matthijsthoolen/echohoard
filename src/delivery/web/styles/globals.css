@@ -214,6 +214,75 @@ button:focus-visible {
   margin: 0.25rem 0 0;
   white-space: pre-wrap;
 }
+.rich-message {
+  margin-top: 0.25rem;
+}
+.rich-media-list {
+  display: grid;
+  gap: 0.5rem;
+}
+.rich-image {
+  margin: 0;
+  max-width: min(100%, 28rem);
+}
+.rich-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 24rem;
+  border-radius: 0.5rem;
+  object-fit: contain;
+}
+.rich-image figcaption {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+.rich-player {
+  display: grid;
+  gap: 0.375rem;
+  max-width: min(100%, 32rem);
+}
+.rich-player audio,
+.rich-player video {
+  width: 100%;
+}
+.rich-player video {
+  max-height: 22rem;
+  background: #101820;
+}
+.rich-document,
+.rich-location,
+.rich-contact,
+.rich-reaction,
+.rich-system,
+.media-state {
+  display: grid;
+  gap: 0.25rem;
+}
+.rich-document {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+.rich-document .button {
+  min-height: 2.25rem;
+  font-size: 0.8125rem;
+}
+.media-state {
+  padding: 0.625rem 0.75rem;
+  border: 1px dashed var(--line);
+  border-radius: 0.5rem;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+.media-state strong {
+  color: var(--ink);
+}
+.rich-location span,
+.rich-contact span,
+.rich-reaction span:last-child,
+.rich-system {
+  color: var(--ink-muted);
+}
 .message-reply {
   margin-top: 0.375rem;
   padding-left: 0.625rem;
