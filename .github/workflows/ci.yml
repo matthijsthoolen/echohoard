@@ -1,0 +1,44 @@
+name: Pull request checks
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.5
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Format
+        run: pnpm format
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Architecture boundaries
+        run: pnpm architecture
+      - name: Unit tests and coverage
+        run: pnpm test:unit
+      - name: PostgreSQL functional smoke
+        run: pnpm test:functional
+      - name: Browser smoke
+        run: pnpm test:browser
+      - name: Production build
+        run: pnpm build
