@@ -48,10 +48,35 @@ describe("archive health read service", () => {
   });
 
   it.each([
-    ["empty", { ...base, latestCompletedSnapshot: undefined, counts: { messages: 0, conversations: 0, people: 0 } }],
-    ["failed", { ...base, jobs: [{ ...base.jobs[0]!, status: "failed", errorClass: "invalid-key /secret" }] }],
-    ["in-progress", { ...base, jobs: [{ ...base.jobs[0]!, status: "decrypting", finishedAt: undefined }] }],
-    ["stale", { ...base, latestCompletedSnapshot: { ...base.latestCompletedSnapshot!, completedAt: new Date("2026-09-08T00:00:00.000Z") } }],
+    [
+      "empty",
+      {
+        ...base,
+        latestCompletedSnapshot: undefined,
+        counts: { messages: 0, conversations: 0, people: 0 },
+      },
+    ],
+    [
+      "failed",
+      {
+        ...base,
+        jobs: [{ ...base.jobs[0]!, status: "failed", errorClass: "invalid-key /secret" }],
+      },
+    ],
+    [
+      "in-progress",
+      { ...base, jobs: [{ ...base.jobs[0]!, status: "decrypting", finishedAt: undefined }] },
+    ],
+    [
+      "stale",
+      {
+        ...base,
+        latestCompletedSnapshot: {
+          ...base.latestCompletedSnapshot!,
+          completedAt: new Date("2026-09-08T00:00:00.000Z"),
+        },
+      },
+    ],
     ["unsupported", { ...base, unsupportedTypes: [{ type: "999", count: 2 }] }],
   ] as const)("classifies %s state from persistence evidence", async (state, evidence) => {
     const result = await new ArchiveHealthService(

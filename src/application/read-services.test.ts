@@ -40,8 +40,7 @@ const port = (rows: {
           !q.after ||
           r.score < q.after[0] ||
           (r.score === q.after[0] &&
-            (r.sortSentAt > q.after[1] ||
-              (r.sortSentAt === q.after[1] && r.id > q.after[2]))),
+            (r.sortSentAt > q.after[1] || (r.sortSentAt === q.after[1] && r.id > q.after[2]))),
       )
       .slice(0, q.limit),
 });
@@ -133,10 +132,7 @@ describe("archive read services", () => {
 
   it("treats whitespace-only search as a deterministic empty page", async () => {
     const searchMessages = vi.fn(async () => []);
-    const service = new ArchiveReadService(
-      { ...port({}), searchMessages },
-      codec,
-    );
+    const service = new ArchiveReadService({ ...port({}), searchMessages }, codec);
     await expect(service.search({ archiveId: "archive-a", query: "  " })).resolves.toEqual({
       items: [],
       hasMore: false,

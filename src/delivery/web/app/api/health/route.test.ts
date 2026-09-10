@@ -60,7 +60,11 @@ describe("archive health route", () => {
     const failed = createHealthRoute({
       getRuntime: () => ({
         auth: { principalForRequest: () => principal },
-        reads: { archiveHealth: vi.fn(async () => { throw new Error("secret /path message"); }) },
+        reads: {
+          archiveHealth: vi.fn(async () => {
+            throw new Error("secret /path message");
+          }),
+        },
       }),
     });
     expect(await (await failed(new Request("http://localhost/api/health"))).json()).toEqual({

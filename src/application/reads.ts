@@ -4,11 +4,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * delivery types, and every query is scoped to exactly one archive. */
 export type ReadArchiveId = string;
 export type ReadDirection = "forward" | "backward";
-export type ReadSort =
-  | "createdAt,id"
-  | "sentAt,id"
-  | "displayName,id"
-  | "searchScore,sentAt,id";
+export type ReadSort = "createdAt,id" | "sentAt,id" | "displayName,id" | "searchScore,sentAt,id";
 
 export const DEFAULT_READ_LIMIT = 50;
 export const MAX_READ_LIMIT = 100;

@@ -94,8 +94,16 @@ describe("PostgreSQL full-text message search", () => {
   });
 
   it("isolates matching messages by archive", async () => {
-    const archiveOne = await service.search({ archiveId: archiveOneId, query: "private", limit: 10 });
-    const archiveTwo = await service.search({ archiveId: archiveTwoId, query: "private", limit: 10 });
+    const archiveOne = await service.search({
+      archiveId: archiveOneId,
+      query: "private",
+      limit: 10,
+    });
+    const archiveTwo = await service.search({
+      archiveId: archiveTwoId,
+      query: "private",
+      limit: 10,
+    });
     expect(archiveOne.items).toEqual([]);
     expect(archiveTwo.items).toHaveLength(1);
   });

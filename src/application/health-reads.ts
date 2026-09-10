@@ -272,5 +272,7 @@ function sanitizeType(value: string): string {
 }
 
 function safeCount(value: number): number {
-  return Number.isFinite(value) && value >= 0 ? Math.min(Math.floor(value), Number.MAX_SAFE_INTEGER) : 0;
+  return Number.isFinite(value) && value >= 0
+    ? Math.min(Math.floor(value), Number.MAX_SAFE_INTEGER)
+    : 0;
 }

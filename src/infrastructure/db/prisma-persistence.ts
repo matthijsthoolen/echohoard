@@ -310,7 +310,6 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       })),
     }));
   }
-
 }
 
 /** One bounded, archive-scoped aggregate read for the private health surface.
@@ -342,43 +341,54 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
       count(args: unknown): Promise<number>;
     };
 
-    const [discoveredRows, completedRows, messageRows, jobs, messages, conversations, people, mediaRows, unsupportedRows] =
-      await Promise.all([
-        snapshotDelegate.findMany({
-          where: { archiveId: input.archiveId },
-          orderBy: { capturedAt: "desc" },
-          take: 1,
-          select: { id: true, lifecycle: true, capturedAt: true, completedAt: true },
-        }),
-        snapshotDelegate.findMany({
-          where: { archiveId: input.archiveId, lifecycle: "completed", completedAt: { not: null } },
-          orderBy: { completedAt: "desc" },
-          take: 1,
-          select: { id: true, lifecycle: true, capturedAt: true, completedAt: true },
-        }),
-        messageDelegate.findMany({
-          where: { archiveId: input.archiveId, sentAt: { not: null } },
-          orderBy: [{ sentAt: "desc" }, { id: "desc" }],
-          take: 1,
-          select: { sentAt: true },
-        }),
-        jobDelegate.findMany({
-          where: { archiveId: input.archiveId },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take: input.jobLimit,
-          select: {
-            id: true,
-            status: true,
-            startedAt: true,
-            finishedAt: true,
-            createdAt: true,
-            errorClass: true,
-          },
-        }),
-        messageDelegate.count({ where: { archiveId: input.archiveId } }),
-        conversationDelegate.count({ where: { archiveId: input.archiveId } }),
-        personDelegate.count({ where: { archiveId: input.archiveId } }),
-        this.prisma.$queryRaw<Array<{ availability: string; referenced: bigint | number }>>(Prisma.sql`
+    const [
+      discoveredRows,
+      completedRows,
+      messageRows,
+      jobs,
+      messages,
+      conversations,
+      people,
+      mediaRows,
+      unsupportedRows,
+    ] = await Promise.all([
+      snapshotDelegate.findMany({
+        where: { archiveId: input.archiveId },
+        orderBy: { capturedAt: "desc" },
+        take: 1,
+        select: { id: true, lifecycle: true, capturedAt: true, completedAt: true },
+      }),
+      snapshotDelegate.findMany({
+        where: { archiveId: input.archiveId, lifecycle: "completed", completedAt: { not: null } },
+        orderBy: { completedAt: "desc" },
+        take: 1,
+        select: { id: true, lifecycle: true, capturedAt: true, completedAt: true },
+      }),
+      messageDelegate.findMany({
+        where: { archiveId: input.archiveId, sentAt: { not: null } },
+        orderBy: [{ sentAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: { sentAt: true },
+      }),
+      jobDelegate.findMany({
+        where: { archiveId: input.archiveId },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: input.jobLimit,
+        select: {
+          id: true,
+          status: true,
+          startedAt: true,
+          finishedAt: true,
+          createdAt: true,
+          errorClass: true,
+        },
+      }),
+      messageDelegate.count({ where: { archiveId: input.archiveId } }),
+      conversationDelegate.count({ where: { archiveId: input.archiveId } }),
+      personDelegate.count({ where: { archiveId: input.archiveId } }),
+      this.prisma.$queryRaw<
+        Array<{ availability: string; referenced: bigint | number }>
+      >(Prisma.sql`
           SELECT a.availability, COUNT(DISTINCT ma."attachmentId")::bigint AS referenced
           FROM "MessageAttachment" ma
           JOIN "Attachment" a
@@ -386,7 +396,7 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
           WHERE ma."archiveId" = ${input.archiveId}::uuid
           GROUP BY a.availability
         `),
-        this.prisma.$queryRaw<Array<{ type: string; count: bigint | number }>>(Prisma.sql`
+      this.prisma.$queryRaw<Array<{ type: string; count: bigint | number }>>(Prisma.sql`
           SELECT COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown') AS type,
                  COUNT(*)::bigint AS count
           FROM "Message" m
@@ -394,7 +404,7 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
           GROUP BY COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown')
           ORDER BY type ASC
         `),
-      ]);
+    ]);
 
     const snapshots = asHealthSnapshots(discoveredRows);
     const completedSnapshots = asHealthSnapshots(completedRows);
@@ -415,7 +425,10 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
       jobs: asHealthJobs(jobs),
       counts: { messages, conversations, people },
       media,
-      unsupportedTypes: unsupportedRows.map((row) => ({ type: row.type, count: countValue(row.count) })),
+      unsupportedTypes: unsupportedRows.map((row) => ({
+        type: row.type,
+        count: countValue(row.count),
+      })),
     };
   }
 }
@@ -471,7 +484,8 @@ function countValue(value: bigint | number): number {
 }
 
 function messageDirection(metadata: unknown): "sent" | "received" | "unknown" {
-  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) return "unknown";
+  if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata))
+    return "unknown";
   const direction = (metadata as Record<string, unknown>).direction;
   return direction === "sent" || direction === "received" ? direction : "unknown";
 }
