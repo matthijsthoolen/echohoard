@@ -25,6 +25,7 @@
     "test:fixtures": "vitest run src/adapters/whatsapp/fixtures.test.ts src/adapters/whatsapp/contract.test.ts",
     "generate:fixtures": "tsx scripts/generate-whatsapp-fixtures.ts",
     "generate:corpus": "tsx scripts/generate-reference-corpus.ts",
+    "benchmark:reads": "tsx scripts/benchmark-reads.ts",
     "test:browser": "node scripts/browser-smoke.mjs",
     "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
