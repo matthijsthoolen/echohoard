@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@9.15.5",
-  "engines": { "node": ">=22.14.0 <23" },
+  "engines": {
+    "node": ">=22.14.0 <23"
+  },
   "scripts": {
     "build": "pnpm build:web && pnpm build:worker",
     "build:web": "next build src/delivery/web",
@@ -11,8 +13,32 @@
     "dev": "next dev",
     "start": "next start src/delivery/web",
     "start:worker": "node dist/worker/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit",
+    "format": "prettier --check .",
+    "format:write": "prettier --write .",
+    "lint": "eslint . --max-warnings 0",
+    "architecture": "node scripts/check-architecture.mjs",
+    "test:unit": "vitest run --coverage",
+    "test:browser": "node scripts/browser-smoke.mjs",
+    "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
-  "dependencies": { "next": "15.5.3", "react": "19.1.1", "react-dom": "19.1.1", "zod": "4.1.5" },
-  "devDependencies": { "@types/node": "22.15.30", "@types/react": "19.1.10", "@types/react-dom": "19.1.7", "typescript": "5.9.2" }
+  "dependencies": {
+    "next": "15.5.3",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "zod": "4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.30",
+    "@types/react": "19.1.10",
+    "@types/react-dom": "19.1.7",
+    "typescript": "5.9.2",
+    "@eslint/js": "9.35.0",
+"eslint": "8.57.1",
+    "eslint-config-next": "15.5.3",
+    "prettier": "3.6.2",
+    "vitest": "3.2.4",
+    "@vitest/coverage-v8": "3.2.4",
+    "tsx": "4.20.5"
+  }
 }
