@@ -22,6 +22,8 @@
     "format:write": "prettier --write .",
     "lint": "eslint . --max-warnings 0",
     "test:unit": "vitest run --coverage src",
+    "test:fixtures": "vitest run src/adapters/whatsapp/fixtures.test.ts src/adapters/whatsapp/contract.test.ts",
+    "generate:fixtures": "tsx scripts/generate-whatsapp-fixtures.ts",
     "test:browser": "node scripts/browser-smoke.mjs",
     "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
