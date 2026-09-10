@@ -22,14 +22,14 @@
     {
       "name": "node-build",
       "reference": "node:22.14.0-bookworm-slim",
-      "digest": null,
-      "releaseNote": "Resolve with docker buildx imagetools inspect and record before publishing."
+      "digest": "sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b",
+      "releaseNote": "Resolved from the Docker Hub manifest index on 2026-09-10; re-resolve if the base tag changes before a release."
     },
     {
       "name": "python-runtime",
       "reference": "python:3.12.8-slim-bookworm",
-      "digest": null,
-      "releaseNote": "Resolve with docker buildx imagetools inspect and record before publishing."
+      "digest": "sha256:2199a62885a12290dc9c5be3ca0681d367576ab7bf037da120e564723292a2f0",
+      "releaseNote": "Resolved from the Docker Hub manifest index on 2026-09-10; re-resolve if the base tag changes before a release."
     }
   ],
   "waCryptTools": {
