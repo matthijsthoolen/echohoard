@@ -95,6 +95,42 @@ export interface FileSystemPort {
   createDirectory(path: string): Promise<void>;
   remove(path: string): Promise<void>;
 }
+
+/** Operations owned by intake; implementations must make claim atomic. */
+export interface InboxPort {
+  listDeliveries(inboxPath: string): Promise<readonly string[]>;
+  inspect(deliveryPath: string): Promise<readonly DeliveryFile[]>;
+  claim(deliveryPath: string, deliveryId: DeliveryId): Promise<string | null>;
+}
+
+export interface StableBatchOptions {
+  readonly quietPeriodMilliseconds: number;
+}
+
+export class StableBatchClaimer {
+  public constructor(
+    private readonly inbox: InboxPort,
+    private readonly clock: ClockPort,
+    private readonly options: StableBatchOptions,
+  ) {}
+
+  /** Returns a claimed path only when metadata is identical across the quiet period. */
+  public async settleAndClaim(inboxPath: string, deliveryId: DeliveryId): Promise<string | null> {
+    const deliveryPath = `${inboxPath}/${deliveryId}`;
+    const before = await this.inbox.inspect(deliveryPath);
+    if (before.length === 0) return null;
+    await this.clock.sleep(this.options.quietPeriodMilliseconds);
+    const after = await this.inbox.inspect(deliveryPath);
+    if (!sameFiles(before, after)) return null;
+    return this.inbox.claim(deliveryPath, deliveryId);
+  }
+}
+
+const sameFiles = (left: readonly DeliveryFile[], right: readonly DeliveryFile[]): boolean =>
+  left.length === right.length && left.every((file, index) => {
+    const other = right[index];
+    return other?.name === file.name && other.size === file.size && other.modifiedAt.getTime() === file.modifiedAt.getTime();
+  });
 export interface ClockPort {
   now(): Date;
   sleep(milliseconds: number): Promise<void>;
