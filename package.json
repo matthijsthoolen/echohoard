@@ -29,6 +29,7 @@
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:viewer": "node scripts/viewer-acceptance.mjs",
     "test:container": "sh scripts/test-container.sh",
+    "test:container-acceptance": "bash scripts/test-container-acceptance.sh",
     "test:compose-lifecycle": "sh scripts/test-compose-lifecycle.sh",
     "profile:viewer-memory": "node scripts/profile-viewer-memory.mjs",
     "supply-chain:verify": "node scripts/verify-supply-chain.mjs",

@@ -20,7 +20,8 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS production-dependencies
-RUN pnpm prune --prod
+COPY prisma ./prisma
+RUN pnpm exec prisma generate && pnpm prune --prod
 
 FROM node-base AS build
 COPY --from=dependencies /app/node_modules ./node_modules
@@ -59,8 +60,8 @@ COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
 COPY --from=production-dependencies /app/node_modules ./node_modules
 COPY --from=worker-dependencies /opt/worker-python /opt/worker-python
 COPY --from=build /app/src/delivery/web ./src/delivery/web
+COPY --from=build /app/.next ./.next
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=build /app/prisma ./prisma
 COPY container/entrypoint.sh /usr/local/bin/echohoard
 RUN groupadd --gid "${ECHOHOARD_WEB_GID}" echohoard-web \
