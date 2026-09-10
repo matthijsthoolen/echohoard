@@ -60,6 +60,8 @@ COPY --from=production-dependencies /app/node_modules ./node_modules
 COPY --from=worker-dependencies /opt/worker-python /opt/worker-python
 COPY --from=build /app/src/delivery/web ./src/delivery/web
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=build /app/prisma ./prisma
 COPY container/entrypoint.sh /usr/local/bin/echohoard
 RUN groupadd --gid "${ECHOHOARD_WEB_GID}" echohoard-web \
     && useradd --uid "${ECHOHOARD_WEB_UID}" --gid "${ECHOHOARD_WEB_GID}" \
