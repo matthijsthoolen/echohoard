@@ -10,7 +10,13 @@ import {
   FULL_CORPUS,
   corpusDistribution,
 } from "../src/infrastructure/corpus/reference-corpus.js";
-import { PrismaReadPersistence } from "../src/infrastructure/db/prisma-persistence.js";
+import {
+  PrismaHealthReadPersistence,
+  PrismaReadPersistence,
+  PrismaStatisticsPersistence,
+} from "../src/infrastructure/db/prisma-persistence.js";
+import { ArchiveHealthService } from "../src/application/health-reads.js";
+import { ArchiveStatisticsService } from "../src/application/statistics.js";
 
 type Options = {
   databaseUrl: string;
@@ -35,7 +41,15 @@ type Stats = {
 type BenchmarkCase =
   | { id: string; kind: "conversation-list" }
   | { id: string; kind: "search"; query: string; from?: string; to?: string }
-  | { id: string; kind: "fuzzy-search"; fuzzyText: string };
+  | { id: string; kind: "fuzzy-search"; fuzzyText: string }
+  | { id: string; kind: "health" }
+  | { id: string; kind: "statistics"; from?: string; to?: string };
+
+type BenchmarkServices = {
+  readonly reads: ArchiveReadService;
+  readonly health: ArchiveHealthService;
+  readonly statistics: ArchiveStatisticsService;
+};
 
 const parsePositiveInt = (value: string | undefined, fallback: number): number => {
   if (value === undefined) return fallback;
@@ -60,7 +74,7 @@ const options = (): Options => {
     throw new Error("DATABASE_URL is required; benchmark execution is database-backed");
   return {
     databaseUrl,
-    output: resolve(argument(args, "--output") ?? "docs/benchmarks/eh-06-06-latest.json"),
+    output: resolve(argument(args, "--output") ?? "docs/benchmarks/eh-08-05-latest.json"),
     seed,
     expectedMessages: parsePositiveInt(
       argument(args, "--expected-messages"),
@@ -123,14 +137,24 @@ const toNumber = (value: bigint | number): number => Number(value);
 const queryName = (item: BenchmarkCase): string => item.id;
 
 const runCase = async (
-  service: ArchiveReadService,
+  services: BenchmarkServices,
   archiveId: string,
   item: BenchmarkCase,
 ): Promise<unknown> => {
-  if (item.kind === "conversation-list") return service.listConversations({ archiveId, limit: 50 });
+  if (item.kind === "health") return services.health.getArchiveHealth({ archiveId });
+  if (item.kind === "statistics")
+    return services.statistics.getStatistics({
+      archiveId,
+      bucket: "day",
+      limit: 20,
+      ...(item.from ? { from: item.from } : {}),
+      ...(item.to ? { to: item.to } : {}),
+    });
+  if (item.kind === "conversation-list")
+    return services.reads.listConversations({ archiveId, limit: 50 });
   if (item.kind === "fuzzy-search")
-    return service.search({ archiveId, fuzzyText: item.fuzzyText, limit: 50 });
-  return service.search({
+    return services.reads.search({ archiveId, fuzzyText: item.fuzzyText, limit: 50 });
+  return services.reads.search({
     archiveId,
     query: item.query,
     limit: 50,
@@ -139,12 +163,51 @@ const runCase = async (
   });
 };
 
+const explain = async (prisma: PrismaClient, query: Prisma.Sql): Promise<unknown> => {
+  const rows = await prisma.$queryRaw<Array<{ "QUERY PLAN": unknown }>>(Prisma.sql`
+    EXPLAIN (ANALYZE, BUFFERS, COSTS OFF, FORMAT JSON)
+    ${query}
+  `);
+  return planSummary(rows[0]?.["QUERY PLAN"] ?? null);
+};
+
+const finalizedMessages = (
+  archiveId: string,
+  datePredicates: Prisma.Sql = Prisma.empty,
+): Prisma.Sql => Prisma.sql`
+  WITH finalized_messages AS (
+    SELECT message.id,
+      message."archiveId" AS archive_id,
+      message."conversationId" AS conversation_id,
+      message."sentAt" AS sent_at,
+      message.metadata
+    FROM "Message" message
+    WHERE message."archiveId" = ${archiveId}::uuid
+      AND EXISTS (
+        SELECT 1
+        FROM "Snapshot" snapshot
+        JOIN "ImportJob" job
+          ON job."archiveId" = snapshot."archiveId"
+          AND job."snapshotId" = snapshot.id
+        WHERE snapshot."archiveId" = message."archiveId"
+          AND snapshot.id::text = COALESCE(
+            message.metadata->>'lastSeenSnapshotId',
+            message.metadata->>'firstSeenSnapshotId'
+          )
+          AND snapshot.lifecycle = 'completed'
+          AND job.status = 'completed'
+      )
+      ${datePredicates}
+  )
+`;
+
 const explainSearch = async (
   prisma: PrismaClient,
   archiveId: string,
   item: BenchmarkCase,
 ): Promise<unknown> => {
-  if (item.kind === "conversation-list") return null;
+  if (item.kind === "conversation-list" || item.kind === "health" || item.kind === "statistics")
+    return null;
   const search =
     item.kind === "fuzzy-search"
       ? Prisma.sql`message.body % ${item.fuzzyText}`
@@ -196,6 +259,123 @@ const explainConversationList = async (
     LIMIT 51
   `);
   return plan[0]?.["QUERY PLAN"] ?? null;
+};
+
+const explainHealth = async (
+  prisma: PrismaClient,
+  archiveId: string,
+): Promise<Record<string, unknown>> => {
+  const [messages, media, unsupported, snapshots, jobs] = await Promise.all([
+    explain(
+      prisma,
+      Prisma.sql`SELECT COUNT(*)::bigint AS count FROM "Message" WHERE "archiveId" = ${archiveId}::uuid`,
+    ),
+    explain(
+      prisma,
+      Prisma.sql`SELECT a.availability, COUNT(DISTINCT ma."attachmentId")::bigint AS referenced
+        FROM "MessageAttachment" ma
+        JOIN "Attachment" a ON a.id = ma."attachmentId" AND a."archiveId" = ma."archiveId"
+        WHERE ma."archiveId" = ${archiveId}::uuid
+        GROUP BY a.availability`,
+    ),
+    explain(
+      prisma,
+      Prisma.sql`SELECT COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown') AS type,
+        COUNT(*)::bigint AS count
+        FROM "Message" m
+        WHERE m."archiveId" = ${archiveId}::uuid AND m."messageType" = 'unsupported'
+        GROUP BY COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown')`,
+    ),
+    explain(
+      prisma,
+      Prisma.sql`SELECT id, lifecycle, "capturedAt", "completedAt"
+        FROM "Snapshot"
+        WHERE "archiveId" = ${archiveId}::uuid
+        ORDER BY "capturedAt" DESC
+        LIMIT 1`,
+    ),
+    explain(
+      prisma,
+      Prisma.sql`SELECT id, status, "createdAt"
+        FROM "ImportJob"
+        WHERE "archiveId" = ${archiveId}::uuid
+        ORDER BY "createdAt" DESC, id DESC
+        LIMIT 20`,
+    ),
+  ]);
+  return { messages, media, unsupported, snapshots, jobs };
+};
+
+const statisticsDatePredicates = (item: BenchmarkCase): Prisma.Sql => {
+  if (item.kind !== "statistics") return Prisma.empty;
+  const predicates: Prisma.Sql[] = [];
+  if (item.from)
+    predicates.push(Prisma.sql`AND message."sentAt" >= CAST(${item.from} AS timestamptz)`);
+  if (item.to) predicates.push(Prisma.sql`AND message."sentAt" < CAST(${item.to} AS timestamptz)`);
+  return predicates.length ? Prisma.join(predicates, " ") : Prisma.empty;
+};
+
+const explainStatistics = async (
+  prisma: PrismaClient,
+  archiveId: string,
+  item: BenchmarkCase,
+): Promise<Record<string, unknown>> => {
+  const base = finalizedMessages(archiveId, statisticsDatePredicates(item));
+  const [totals, direction, activity, conversations] = await Promise.all([
+    explain(
+      prisma,
+      Prisma.sql`${base}
+        SELECT COUNT(DISTINCT fm.id)::bigint AS messages,
+          COUNT(DISTINCT fm.conversation_id)::bigint AS conversations,
+          COUNT(DISTINCT fm.sender_id)::bigint AS people
+        FROM finalized_messages fm`,
+    ),
+    explain(
+      prisma,
+      Prisma.sql`${base}
+        SELECT CASE WHEN fm.metadata->>'direction' IN ('sent', 'received')
+          THEN fm.metadata->>'direction' ELSE 'unknown' END AS direction,
+          COUNT(*)::bigint AS count
+        FROM finalized_messages fm
+        GROUP BY direction`,
+    ),
+    explain(
+      prisma,
+      Prisma.sql`${base}
+        SELECT date_trunc('day', fm.sent_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start,
+          COUNT(*)::bigint AS count
+        FROM finalized_messages fm
+        WHERE fm.sent_at IS NOT NULL
+        GROUP BY bucket_start
+        ORDER BY bucket_start ASC
+        LIMIT 366`,
+    ),
+    explain(
+      prisma,
+      Prisma.sql`${base}
+        SELECT fm.conversation_id, COUNT(*)::bigint AS message_count
+        FROM finalized_messages fm
+        JOIN "Conversation" conversation
+          ON conversation."archiveId" = fm.archive_id
+          AND conversation.id = fm.conversation_id
+        GROUP BY fm.conversation_id
+        ORDER BY message_count DESC, fm.conversation_id ASC
+        LIMIT 20`,
+    ),
+  ]);
+  return { totals, direction, activity, conversations };
+};
+
+const explainCase = async (
+  prisma: PrismaClient,
+  archiveId: string,
+  item: BenchmarkCase,
+): Promise<unknown> => {
+  if (item.kind === "health") return explainHealth(prisma, archiveId);
+  if (item.kind === "statistics") return explainStatistics(prisma, archiveId, item);
+  if (item.kind === "conversation-list")
+    return planSummary(await explainConversationList(prisma, archiveId));
+  return planSummary(await explainSearch(prisma, archiveId, item));
 };
 
 const planSummary = (plan: unknown): Record<string, unknown> | null => {
@@ -286,6 +466,14 @@ const main = async (): Promise<void> => {
         to: "2021-01-01T00:00:00.000Z",
       },
       { id: "search-fuzzy-body", kind: "fuzzy-search", fuzzyText: config.searchTerm },
+      { id: "health-overview", kind: "health" },
+      { id: "statistics-overview", kind: "statistics" },
+      {
+        id: "statistics-date-window",
+        kind: "statistics",
+        from: "2020-01-01T00:00:00.000Z",
+        to: "2021-01-01T00:00:00.000Z",
+      },
     ];
     const targetScale =
       toNumber(counts.messages) >= config.expectedMessages &&
@@ -296,7 +484,7 @@ const main = async (): Promise<void> => {
         coldSession: Stats;
         warm: Stats;
         meetsWarmTarget: boolean;
-        explain: Record<string, unknown> | null;
+        explain: unknown;
       }
     > = {};
     for (const item of cases) {
@@ -305,18 +493,15 @@ const main = async (): Promise<void> => {
         const client = new PrismaClient({ datasourceUrl: config.databaseUrl });
         await client.$connect();
         try {
-          cold.push(
-            await measure(() =>
-              runCase(
-                new ArchiveReadService(
-                  new PrismaReadPersistence(client),
-                  new CursorCodec("benchmark-only-secret"),
-                ),
-                archiveId,
-                item,
-              ),
+          const services: BenchmarkServices = {
+            reads: new ArchiveReadService(
+              new PrismaReadPersistence(client),
+              new CursorCodec("benchmark-only-secret"),
             ),
-          );
+            health: new ArchiveHealthService(new PrismaHealthReadPersistence(client)),
+            statistics: new ArchiveStatisticsService(new PrismaStatisticsPersistence(client)),
+          };
+          cold.push(await measure(() => runCase(services, archiveId, item)));
         } finally {
           await client.$disconnect();
         }
@@ -324,25 +509,26 @@ const main = async (): Promise<void> => {
       const warmClient = new PrismaClient({ datasourceUrl: config.databaseUrl });
       await warmClient.$connect();
       try {
-        const service = new ArchiveReadService(
-          new PrismaReadPersistence(warmClient),
-          new CursorCodec("benchmark-only-secret"),
-        );
+        const services: BenchmarkServices = {
+          reads: new ArchiveReadService(
+            new PrismaReadPersistence(warmClient),
+            new CursorCodec("benchmark-only-secret"),
+          ),
+          health: new ArchiveHealthService(new PrismaHealthReadPersistence(warmClient)),
+          statistics: new ArchiveStatisticsService(new PrismaStatisticsPersistence(warmClient)),
+        };
         for (let index = 0; index < config.warmup; index += 1)
-          await runCase(service, archiveId, item);
+          await runCase(services, archiveId, item);
         const warm: number[] = [];
         for (let index = 0; index < config.iterations; index += 1)
-          warm.push(await measure(() => runCase(service, archiveId, item)));
-        const explain =
-          item.kind === "conversation-list"
-            ? await explainConversationList(warmClient, archiveId)
-            : await explainSearch(warmClient, archiveId, item);
+          warm.push(await measure(() => runCase(services, archiveId, item)));
+        const explain = await explainCase(warmClient, archiveId, item);
         const warmStats = statistics(warm);
         measurements[queryName(item)] = {
           coldSession: statistics(cold),
           warm: warmStats,
           meetsWarmTarget: warmStats.p95Ms <= 2000,
-          explain: planSummary(explain),
+          explain,
         };
       } finally {
         await warmClient.$disconnect();
@@ -352,10 +538,16 @@ const main = async (): Promise<void> => {
       (measurement) => measurement.meetsWarmTarget,
     );
     const report = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       generatedAt: new Date().toISOString(),
       gitCommit: commandValue("git", ["rev-parse", "HEAD"]) ?? "unknown",
       command: `pnpm benchmark:reads -- --seed ${config.seed}`,
+      benchmark: {
+        scope: "archive health, archive statistics, and bounded reads",
+        representativeCases: cases.map((item) => item.id),
+        optimizationPolicy:
+          "No index, cache, or incremental-maintenance change is accepted without a measured before/after plan and latency comparison.",
+      },
       corpus: {
         seed: config.seed,
         expectedMessages: config.expectedMessages,
@@ -389,6 +581,12 @@ const main = async (): Promise<void> => {
       conditions: {
         cold: "new Prisma client/session per sample; timer starts after connect; PostgreSQL and OS buffer caches are not flushed",
         warm: `${config.warmup} excluded warm-up calls followed by ${config.iterations} calls on one Prisma client`,
+        archiveSelection:
+          "largest archive by message count; archive identifier is not written to the report",
+        statisticsPublication:
+          "statistics queries include only messages linked to a completed snapshot and completed import job",
+        healthRead:
+          "health queries are archive-scoped and bounded to one latest snapshot, one latest completed snapshot, and 20 jobs",
         pageLimit: 50,
         coldIterations: config.coldIterations,
         warmup: config.warmup,
@@ -399,6 +597,8 @@ const main = async (): Promise<void> => {
         eligible: targetScale,
         allWarmQueriesWithinTarget,
         accepted: targetScale && allWarmQueriesWithinTarget,
+        acceptance:
+          "accepted only when the measured corpus reaches the requested scale and every representative case has warm p95 <= 2000 ms",
       },
       queries: measurements,
     };
