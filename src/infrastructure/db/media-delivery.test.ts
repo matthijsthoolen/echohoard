@@ -12,7 +12,9 @@ const hash = createHash("sha256").update(content).digest("hex");
 
 describe("Prisma media delivery", () => {
   it("looks up by archive and streams the archive-owned CAS object", async () => {
-    const root = await mkdtemp(join(cwd(), ".tmp/echohoard-media-delivery-"));
+    const tempRoot = join(cwd(), ".tmp");
+    await mkdir(tempRoot, { recursive: true });
+    const root = await mkdtemp(join(tempRoot, "echohoard-media-delivery-"));
     const objectPath = join(root, "sha256", hash.slice(0, 2), hash);
     await mkdir(join(root, "sha256", hash.slice(0, 2)), { recursive: true });
     await writeFile(objectPath, content);
