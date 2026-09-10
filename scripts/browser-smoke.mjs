@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
 
 const port = 4317;
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -48,7 +49,21 @@ const main = async () => {
     const pageResponse = await fetch(`${baseUrl}/`);
     if (pageResponse.status !== 200) throw new Error(`page status was ${pageResponse.status}`);
     const html = await pageResponse.text();
-    if (!html.includes("<h1>EchoHoard</h1>")) throw new Error("production page content mismatch");
+    for (const marker of [
+      "EchoHoard",
+      'aria-label="Primary navigation"',
+      'href="#main-content"',
+      "Loading conversations",
+    ]) {
+      if (!html.includes(marker)) throw new Error(`production page missing ${marker}`);
+    }
+    const anonymousConversations = await fetch(`${baseUrl}/api/conversations`);
+    if (anonymousConversations.status !== 401)
+      throw new Error(`anonymous conversation status was ${anonymousConversations.status}`);
+    const shellStyles = await readFile("src/delivery/web/styles/globals.css", "utf8");
+    for (const marker of [":focus-visible", "@media (max-width: 719px)", ".mobile-nav"]) {
+      if (!shellStyles.includes(marker)) throw new Error(`shell styles missing ${marker}`);
+    }
     const healthResponse = await fetch(`${baseUrl}/health`);
     if (healthResponse.status !== 200)
       throw new Error(`health status was ${healthResponse.status}`);

@@ -74,6 +74,12 @@ export class WebAuthBoundary {
   principal(request: Request, archiveId: string): ArchivePrincipal | null {
     return this.auth.validate(readCookie(request, SESSION_COOKIE), archiveId);
   }
+
+  /** Resolve the session principal before selecting any archive-scoped read.
+   * Callers must use the returned archiveId rather than trusting request input. */
+  principalForRequest(request: Request): ArchivePrincipal | null {
+    return this.auth.validate(readCookie(request, SESSION_COOKIE));
+  }
 }
 
 export { NONCE_COOKIE, SESSION_COOKIE, STATE_COOKIE };
