@@ -11,6 +11,8 @@
     "dev": "next dev",
     "start": "next start src/delivery/web",
     "start:worker": "node dist/worker/index.js",
+    "architecture": "node tools/check-architecture.mjs",
+    "architecture:fixture": "node tools/check-architecture.mjs --fixture",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.worker.json --noEmit"
   },
   "dependencies": { "next": "15.5.3", "react": "19.1.1", "react-dom": "19.1.1", "zod": "4.1.5" },
