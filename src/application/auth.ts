@@ -1,4 +1,9 @@
-export type ArchivePrincipal = { userId: string; archiveId: string; subject: string; issuer: string };
+export type ArchivePrincipal = {
+  userId: string;
+  archiveId: string;
+  subject: string;
+  issuer: string;
+};
 export type OidcClaims = { iss?: unknown; sub?: unknown; exp?: unknown };
 
 export interface OidcProvider {
@@ -21,18 +26,34 @@ export class SessionStore {
   get(token: string | undefined): ArchivePrincipal | null {
     if (!token) return null;
     const session = this.sessions.get(token);
-    if (!session || session.expiresAt <= Date.now()) { this.sessions.delete(token); return null; }
+    if (!session || session.expiresAt <= Date.now()) {
+      this.sessions.delete(token);
+      return null;
+    }
     return session.principal;
   }
-  revoke(token: string | undefined): void { if (token) this.sessions.delete(token); }
+  revoke(token: string | undefined): void {
+    if (token) this.sessions.delete(token);
+  }
 }
 
 export class OidcAuth {
-  constructor(private readonly provider: OidcProvider, private readonly directory: PrincipalDirectory, private readonly sessions: SessionStore) {}
-  login(state: string): string { return this.provider.authorizationUrl(state); }
+  constructor(
+    private readonly provider: OidcProvider,
+    private readonly directory: PrincipalDirectory,
+    private readonly sessions: SessionStore,
+  ) {}
+  login(state: string): string {
+    return this.provider.authorizationUrl(state);
+  }
   async callback(code: string): Promise<string | null> {
     const claims = await this.provider.exchange(code);
-    if (typeof claims.iss !== "string" || typeof claims.sub !== "string" || (typeof claims.exp === "number" && claims.exp * 1000 <= Date.now())) return null;
+    if (
+      typeof claims.iss !== "string" ||
+      typeof claims.sub !== "string" ||
+      (typeof claims.exp === "number" && claims.exp * 1000 <= Date.now())
+    )
+      return null;
     const principal = await this.directory.findBySubject(claims.iss, claims.sub);
     return principal ? this.sessions.create(principal) : null;
   }
@@ -40,10 +61,16 @@ export class OidcAuth {
     const principal = this.sessions.get(session);
     return principal && (!archiveId || principal.archiveId === archiveId) ? principal : null;
   }
-  logout(session: string | undefined): void { this.sessions.revoke(session); }
+  logout(session: string | undefined): void {
+    this.sessions.revoke(session);
+  }
 }
 
-export const requireArchivePrincipal = (auth: OidcAuth, session: string | undefined, archiveId: string): ArchivePrincipal => {
+export const requireArchivePrincipal = (
+  auth: OidcAuth,
+  session: string | undefined,
+  archiveId: string,
+): ArchivePrincipal => {
   const principal = auth.validate(session, archiveId);
   if (!principal) throw new Error("archive access denied");
   return principal;
