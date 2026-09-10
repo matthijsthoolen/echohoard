@@ -3,6 +3,7 @@ import type {
   NormalizedDirection,
   NormalizedMessageKind,
   NormalizedMessageRecord,
+  NormalizedMessageMetadata,
   NormalizedRecord,
   NormalizedRevisionRecord,
   WhatsAppAdapterVersion,
@@ -92,6 +93,7 @@ export function normalizeWhatsAppMessages(
       messageKind: registration.kind === "collision" ? "unsupported" : messageKind,
       ...(body.value !== undefined ? { body: body.value } : {}),
       bodyState: body.state,
+      ...metadataFor(row),
       ...(number(row.quoted_message_id ?? row.quoted_row_id) !== undefined
         ? { replyToKey: "pending" }
         : {}),
@@ -101,6 +103,19 @@ export function normalizeWhatsAppMessages(
     };
     byRow.set(number(row._id) ?? -1, record);
     result.push(record);
+  }
+
+  // Reaction targets are resolved only after all source rows have identities.
+  for (const row of messages) {
+    const record = byRow.get(number(row._id) ?? -1);
+    const target = byRow.get(number(row.reaction_target_id) ?? -1);
+    if (!record || record.messageKind !== "reaction" || !target) continue;
+    const index = result.indexOf(record);
+    if (index < 0) continue;
+    result[index] = {
+      ...record,
+      metadata: { ...record.metadata, reactsToKey: target.stableKey },
+    };
   }
 
   // Resolve replies only after every stable key has been derived.
@@ -191,8 +206,60 @@ function kindFor(code: number | undefined): NormalizedMessageKind {
   if (code === 6) return "location";
   if (code === 7) return "document";
   if (code === 8) return "sticker";
+  if (code === 9) return "reaction";
   if (code === 10) return "system";
   return "unsupported";
+}
+function boundedText(value: unknown, max = 512): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= max ? value : undefined;
+}
+function boundedNumber(value: unknown, min?: number, max?: number): number | undefined {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    (min === undefined || value >= min) &&
+    (max === undefined || value <= max)
+    ? value
+    : undefined;
+}
+function metadataFor(row: Row): Pick<NormalizedMessageRecord, "metadata"> {
+  const mimeType = boundedText(row.media_mime_type, 128);
+  const filename = boundedText(row.media_name, 255);
+  const metadata: NormalizedMessageMetadata = {
+    ...(boundedText(row.media_caption) ? { caption: boundedText(row.media_caption) } : {}),
+    ...(mimeType && /^[a-z0-9.+-]+\/[a-z0-9.+-]+$/iu.test(mimeType)
+      ? { mimeType: mimeType.toLowerCase() }
+      : {}),
+    ...(filename && !/[\\/\0]/u.test(filename) ? { filename } : {}),
+    ...(boundedNumber(row.media_width, 1, 100_000)
+      ? { width: boundedNumber(row.media_width, 1, 100_000) }
+      : {}),
+    ...(boundedNumber(row.media_height, 1, 100_000)
+      ? { height: boundedNumber(row.media_height, 1, 100_000) }
+      : {}),
+    ...(boundedNumber(row.media_duration_ms, 0, 86_400_000) !== undefined
+      ? { durationMs: boundedNumber(row.media_duration_ms, 0, 86_400_000) }
+      : {}),
+    ...(boundedNumber(row.latitude, -90, 90) !== undefined
+      ? { latitude: boundedNumber(row.latitude, -90, 90) }
+      : {}),
+    ...(boundedNumber(row.longitude, -180, 180) !== undefined
+      ? { longitude: boundedNumber(row.longitude, -180, 180) }
+      : {}),
+    ...(boundedText(row.contact_name, 255)
+      ? { contactName: boundedText(row.contact_name, 255) }
+      : {}),
+    ...(boundedText(row.contact_phone, 64)
+      ? { contactPhone: boundedText(row.contact_phone, 64) }
+      : {}),
+    ...(row.sticker_animated === 1 || row.sticker_animated === true
+      ? { stickerAnimated: true }
+      : {}),
+    ...(boundedText(row.reaction_text, 32)
+      ? { reactionEmoji: boundedText(row.reaction_text, 32) }
+      : {}),
+    ...(boundedText(row.event_type, 128) ? { sourceEvent: boundedText(row.event_type, 128) } : {}),
+  };
+  return Object.keys(metadata).length > 0 ? { metadata } : {};
 }
 function bodyFor(value: unknown): { value?: string; state: "present" | "missing" | "damaged" } {
   if (value === null || value === undefined || value === "") return { state: "missing" };

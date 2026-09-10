@@ -19,6 +19,7 @@ export type NormalizedMessageKind =
   | "location"
   | "contact"
   | "sticker"
+  | "reaction"
   | "system"
   | "unsupported";
 
@@ -84,8 +85,27 @@ export interface NormalizedMessageRecord {
   readonly body?: string;
   readonly bodyState: "present" | "missing" | "damaged";
   readonly replyToKey?: string;
+  /** Non-secret, bounded metadata describing a rich message. */
+  readonly metadata?: NormalizedMessageMetadata;
   /** Retain an unmapped native message code as inert evidence. */
   readonly unsupportedTypeCode?: number;
+}
+
+export interface NormalizedMessageMetadata {
+  readonly caption?: string;
+  readonly mimeType?: string;
+  readonly filename?: string;
+  readonly width?: number;
+  readonly height?: number;
+  readonly durationMs?: number;
+  readonly latitude?: number;
+  readonly longitude?: number;
+  readonly contactName?: string;
+  readonly contactPhone?: string;
+  readonly stickerAnimated?: boolean;
+  readonly reactionEmoji?: string;
+  readonly reactsToKey?: string;
+  readonly sourceEvent?: string;
 }
 
 export type NormalizedRecord =
