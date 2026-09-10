@@ -3,6 +3,7 @@ set -eu
 
 image="${ECHOHOARD_IMAGE:-echohoard:eh-10-01-smoke}"
 web_container=""
+worker_container=""
 sentinel_dir="$(mktemp -d)"
 sentinel_secret="${sentinel_dir}/worker.key"
 sentinel_value="eh-10-02-secret-sentinel"
@@ -13,6 +14,9 @@ cleanup() {
   if [ -n "$web_container" ]; then
     docker rm --force "$web_container" >/dev/null 2>&1 || true
   fi
+  if [ -n "$worker_container" ]; then
+    docker rm --force "$worker_container" >/dev/null 2>&1 || true
+  fi
   rm -rf "$sentinel_dir"
 }
 trap cleanup EXIT INT TERM
@@ -21,9 +25,32 @@ echo "Building $image"
 docker build --tag "$image" .
 
 echo "Checking worker role and worker-only decryption dependency"
-worker_output="$(docker run --rm --user 10002:10002 --env ECHOHOARD_ROLE=worker "$image")"
-printf '%s\n' "$worker_output" | grep -F "EchoHoard decryption adapter ready" >/dev/null
-printf '%s\n' "$worker_output" | grep -F "EchoHoard worker ready" >/dev/null
+worker_container="$(docker run --detach \
+  --user 10002:10002 \
+  --env ECHOHOARD_ROLE=worker \
+  --env ECHOHOARD_WORKER_STATUS_FILE=/work/worker.status \
+  "$image")"
+worker_ready=false
+for _attempt in $(seq 1 20); do
+  worker_output="$(docker logs "$worker_container" 2>&1 || true)"
+  worker_status="$(docker exec "$worker_container" sh -c \
+    'cat /work/worker.status 2>/dev/null' 2>/dev/null || true)"
+  if printf '%s\n' "$worker_output" | grep -F "EchoHoard decryption adapter ready" >/dev/null \
+    && printf '%s\n' "$worker_output" | grep -F "EchoHoard worker ready" >/dev/null \
+    && [ "$worker_status" = ready ]; then
+    worker_ready=true
+    break
+  fi
+  if [ "$(docker inspect --format '{{.State.Running}}' "$worker_container" 2>/dev/null || true)" != true ]; then
+    break
+  fi
+  sleep 1
+done
+if [ "$worker_ready" != true ]; then
+  echo "worker role smoke check did not reach decryption and ready state" >&2
+  docker logs "$worker_container" >&2 || true
+  exit 1
+fi
 
 echo "Checking non-root identities and writable path boundaries"
 [ "$(docker image inspect --format '{{.Config.User}}' "$image")" = "10001:10001" ]
