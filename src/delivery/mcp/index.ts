@@ -7,6 +7,8 @@ import {
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import type { ArchivePrincipal } from "../../application/auth.js";
 import type { ReadPorts } from "../../application/reads.js";
+import { registerConversationReadTools } from "./tools.js";
+export * from "./tools.js";
 
 export const mcpDelivery = "mcp";
 export const MCP_SERVER_NAME = "echohoard-private-readonly";
@@ -128,7 +130,7 @@ export class PrivateMcpServer {
       return session.transport.handleRequest(request);
     }
 
-    const server = createMcpServer(this.options.reads);
+    const server = createMcpServer(this.options.reads, principal.archiveId);
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
       enableJsonResponse: true,
@@ -154,10 +156,13 @@ export class PrivateMcpServer {
   }
 }
 
-/** Official SDK server composition. No mutation, file, or network tools are
- * registered in this story. `reads` is retained for the leaf-tool stories. */
-export const createMcpServer = (_reads: McpReadServices): McpServer =>
-  new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
+/** Official SDK server composition. Only the bounded EH-09-02 read tools are
+ * registered here; later stories may add their explicitly scoped tools. */
+export const createMcpServer = (reads: McpReadServices, archiveId = ""): McpServer => {
+  const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
+  registerConversationReadTools(server, reads, archiveId);
+  return server;
+};
 
 export const createPrivateMcpServer = (options: McpServerCompositionOptions): PrivateMcpServer =>
   new PrivateMcpServer(options);

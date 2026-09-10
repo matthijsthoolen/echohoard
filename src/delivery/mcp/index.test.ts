@@ -67,7 +67,9 @@ describe("private MCP Streamable HTTP transport", () => {
     );
     expect(tools.status).toBe(200);
     const toolsBody = await tools.text();
-    expect(toolsBody).toContain('"code":-32601');
+    expect(toolsBody).toContain('"name":"search_messages"');
+    expect(toolsBody).toContain('"name":"get_conversation"');
+    expect(toolsBody).toContain('"name":"list_conversations"');
     expect(toolsBody).not.toContain("archive-a");
     await app.close();
   });
