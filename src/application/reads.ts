@@ -1,0 +1,253 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+/** Application-level read contracts. They deliberately contain no ORM or
+ * delivery types, and every query is scoped to exactly one archive. */
+export type ReadArchiveId = string;
+export type ReadDirection = "forward" | "backward";
+export type ReadSort = "createdAt,id" | "sentAt,id" | "displayName,id";
+
+export const DEFAULT_READ_LIMIT = 50;
+export const MAX_READ_LIMIT = 100;
+export const MAX_CURSOR_LENGTH = 2048;
+export const CURSOR_VERSION = 1;
+export const READ_ORDER = Object.freeze({
+  conversations: "createdAt,id" as const,
+  people: "displayName,id" as const,
+  messages: "sentAt,id" as const,
+});
+const DEFAULT_CURSOR_TTL = 24 * 60 * 60 * 1000;
+
+export interface PageRequest {
+  readonly archiveId: ReadArchiveId;
+  readonly limit?: number;
+  readonly cursor?: string;
+  readonly direction?: ReadDirection;
+}
+
+export interface ValidatedPageRequest {
+  readonly archiveId: ReadArchiveId;
+  readonly limit: number;
+  readonly cursor?: string;
+  readonly direction: ReadDirection;
+}
+
+export interface ReadPage<T> {
+  readonly items: readonly T[];
+  readonly nextCursor?: string;
+  readonly hasMore: boolean;
+}
+
+export interface CursorPosition {
+  readonly sort: ReadSort;
+  readonly values: readonly (string | number)[];
+}
+
+interface CursorPayload extends CursorPosition {
+  readonly version: typeof CURSOR_VERSION;
+  readonly archiveId: ReadArchiveId;
+  readonly direction: ReadDirection;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+}
+
+export class InvalidReadRequestError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "InvalidReadRequestError";
+  }
+}
+
+export class InvalidCursorError extends InvalidReadRequestError {
+  public constructor() {
+    super("Invalid or expired cursor");
+    this.name = "InvalidCursorError";
+  }
+}
+
+export class CursorScopeError extends InvalidReadRequestError {
+  public constructor() {
+    super("Cursor does not belong to the requested archive");
+    this.name = "CursorScopeError";
+  }
+}
+
+export function validatePageRequest(input: PageRequest): ValidatedPageRequest {
+  if (!input.archiveId.trim()) throw new InvalidReadRequestError("archiveId is required");
+  const limit = input.limit ?? DEFAULT_READ_LIMIT;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_READ_LIMIT)
+    throw new InvalidReadRequestError(`limit must be an integer from 1 to ${MAX_READ_LIMIT}`);
+  if (input.direction && input.direction !== "forward" && input.direction !== "backward")
+    throw new InvalidReadRequestError("direction is invalid");
+  if (input.cursor !== undefined && input.cursor.length > MAX_CURSOR_LENGTH)
+    throw new InvalidCursorError();
+  return {
+    archiveId: input.archiveId,
+    limit,
+    ...(input.cursor ? { cursor: input.cursor } : {}),
+    direction: input.direction ?? "forward",
+  };
+}
+
+export class CursorCodec {
+  public constructor(
+    private readonly secret: string,
+    private readonly now: () => number = Date.now,
+    private readonly ttlMilliseconds = DEFAULT_CURSOR_TTL,
+  ) {
+    if (!secret) throw new Error("cursor signing secret is required");
+    if (!Number.isSafeInteger(ttlMilliseconds) || ttlMilliseconds < 1)
+      throw new Error("cursor TTL must be a positive integer");
+  }
+
+  public encode(input: {
+    readonly archiveId: ReadArchiveId;
+    readonly direction: ReadDirection;
+    readonly sort: ReadSort;
+    readonly values: readonly (string | number)[];
+  }): string {
+    if (
+      !input.archiveId.trim() ||
+      input.values.length === 0 ||
+      !isSort(input.sort) ||
+      (input.direction !== "forward" && input.direction !== "backward")
+    )
+      throw new InvalidCursorError();
+    const issuedAt = this.now();
+    const payload: CursorPayload = {
+      version: CURSOR_VERSION,
+      archiveId: input.archiveId,
+      direction: input.direction,
+      sort: input.sort,
+      values: input.values,
+      issuedAt,
+      expiresAt: issuedAt + this.ttlMilliseconds,
+    };
+    const body = base64url(JSON.stringify(payload));
+    const cursor = `${body}.${this.sign(body)}`;
+    if (cursor.length > MAX_CURSOR_LENGTH) throw new InvalidCursorError();
+    return cursor;
+  }
+
+  public decode(
+    cursor: string,
+    archiveId: ReadArchiveId,
+  ): CursorPosition & { direction: ReadDirection } {
+    if (!cursor || cursor.length > MAX_CURSOR_LENGTH) throw new InvalidCursorError();
+    const [body, signature, extra] = cursor.split(".");
+    if (!body || !signature || extra) throw new InvalidCursorError();
+    const expected = this.sign(body);
+    const actualBytes = Buffer.from(signature);
+    const expectedBytes = Buffer.from(expected);
+    if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes))
+      throw new InvalidCursorError();
+    let payload: Partial<CursorPayload>;
+    try {
+      payload = JSON.parse(
+        Buffer.from(body, "base64url").toString("utf8"),
+      ) as Partial<CursorPayload>;
+    } catch {
+      throw new InvalidCursorError();
+    }
+    if (
+      payload.version !== CURSOR_VERSION ||
+      (payload.direction !== "forward" && payload.direction !== "backward") ||
+      !isSort(payload.sort) ||
+      !Array.isArray(payload.values) ||
+      payload.values.length === 0 ||
+      !Number.isSafeInteger(payload.issuedAt) ||
+      !Number.isSafeInteger(payload.expiresAt) ||
+      this.now() >= payload.expiresAt
+    )
+      throw new InvalidCursorError();
+    if (payload.archiveId !== archiveId) throw new CursorScopeError();
+    return { sort: payload.sort, values: payload.values, direction: payload.direction };
+  }
+
+  private sign(body: string): string {
+    return createHmac("sha256", this.secret).update(body).digest("base64url");
+  }
+}
+
+const isSort = (value: unknown): value is ReadSort =>
+  value === "createdAt,id" || value === "sentAt,id" || value === "displayName,id";
+
+const base64url = (value: string): string => Buffer.from(value, "utf8").toString("base64url");
+
+export interface ConversationRead {
+  readonly id: string;
+  readonly title: string;
+  readonly participantCount: number;
+  readonly lastMessageAt?: string;
+}
+export interface PersonRead {
+  readonly id: string;
+  readonly displayName: string;
+  readonly identityCount: number;
+}
+export interface MessageRead {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly senderPersonId?: string;
+  readonly sentAt: string;
+  readonly text?: string;
+  readonly attachmentCount: number;
+}
+export interface MediaRead {
+  readonly id: string;
+  readonly messageId: string;
+  readonly mediaType: string;
+}
+export interface TimelineRead {
+  readonly id: string;
+  readonly kind: "message" | "media";
+  readonly occurredAt: string;
+}
+export interface SearchResultRead {
+  readonly id: string;
+  readonly kind: "message" | "person" | "conversation";
+  readonly score?: number;
+}
+export interface StatisticsRead {
+  readonly messageCount: number;
+  readonly personCount: number;
+  readonly conversationCount: number;
+  readonly mediaCount: number;
+}
+
+export interface ConversationListQuery extends PageRequest {
+  readonly sort?: "createdAt,id";
+  readonly search?: string;
+}
+export interface PersonListQuery extends PageRequest {
+  readonly sort?: "displayName,id";
+  readonly search?: string;
+}
+export interface MessageWindowQuery extends PageRequest {
+  readonly conversationId: string;
+  readonly sort?: "sentAt,id";
+}
+export interface MediaListQuery extends PageRequest {
+  readonly messageId?: string;
+}
+export interface TimelineQuery extends PageRequest {
+  readonly from?: string;
+  readonly to?: string;
+}
+export interface SearchQuery extends PageRequest {
+  readonly query: string;
+}
+export interface StatisticsQuery {
+  readonly archiveId: ReadArchiveId;
+  readonly from?: string;
+  readonly to?: string;
+}
+
+export interface ReadPorts {
+  listConversations(query: ConversationListQuery): Promise<ReadPage<ConversationRead>>;
+  listPeople(query: PersonListQuery): Promise<ReadPage<PersonRead>>;
+  listMessages(query: MessageWindowQuery): Promise<ReadPage<MessageRead>>;
+  listMedia(query: MediaListQuery): Promise<ReadPage<MediaRead>>;
+  listTimeline(query: TimelineQuery): Promise<ReadPage<TimelineRead>>;
+  search(query: SearchQuery): Promise<ReadPage<SearchResultRead>>;
+  statistics(query: StatisticsQuery): Promise<StatisticsRead>;
+}
