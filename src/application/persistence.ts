@@ -22,6 +22,7 @@ export interface MessagePort extends ArchiveScopedPort {}
 export interface RevisionPort extends ArchiveScopedPort {}
 export interface ReactionPort extends ArchiveScopedPort {}
 export interface AttachmentPort extends ArchiveScopedPort {}
+export interface MessageAttachmentPort extends ArchiveScopedPort {}
 
 export interface PersistencePorts {
   users: UserPort;
@@ -36,4 +37,5 @@ export interface PersistencePorts {
   revisions: RevisionPort;
   reactions: ReactionPort;
   attachments: AttachmentPort;
+  messageAttachments: MessageAttachmentPort;
 }

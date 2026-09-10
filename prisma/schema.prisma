@@ -237,6 +237,7 @@ model Reaction {
 model Attachment {
   id            String              @id @default(uuid()) @db.Uuid
   archiveId     String              @db.Uuid
+  stableKey     String?
   sha256        String              @db.VarChar(64)
   availability  String              @default("missing")
   casKey        String?
@@ -255,6 +256,7 @@ model Attachment {
   archive       Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   messageLinks  MessageAttachment[]
   @@unique([archiveId, id])
+  @@unique([archiveId, stableKey])
   @@unique([archiveId, sha256])
   @@index([archiveId, availability])
 }

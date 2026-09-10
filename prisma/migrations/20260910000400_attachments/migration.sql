@@ -1,6 +1,7 @@
 CREATE TABLE "Attachment" (
   "id" UUID NOT NULL DEFAULT gen_random_uuid(),
   "archiveId" UUID NOT NULL,
+  "stableKey" TEXT,
   "sha256" VARCHAR(64) NOT NULL,
   "availability" TEXT NOT NULL DEFAULT 'missing',
   "casKey" TEXT,
@@ -33,6 +34,7 @@ CREATE TABLE "MessageAttachment" (
 );
 
 CREATE UNIQUE INDEX "Attachment_archiveId_id_key" ON "Attachment"("archiveId", "id");
+CREATE UNIQUE INDEX "Attachment_archiveId_stableKey_key" ON "Attachment"("archiveId", "stableKey");
 CREATE UNIQUE INDEX "Attachment_archiveId_sha256_key" ON "Attachment"("archiveId", "sha256");
 CREATE INDEX "Attachment_archiveId_availability_idx" ON "Attachment"("archiveId", "availability");
 CREATE UNIQUE INDEX "MessageAttachment_archiveId_id_key" ON "MessageAttachment"("archiveId", "id");

@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient, Prisma } from "@prisma/client";
+import { reconcileAttachmentAvailability } from "../../application/text-import.js";
 import type {
+  ImportAttachmentAvailability,
+  ImportAttachmentRecord,
   TextSnapshotImportInput,
   TextSnapshotImporter,
 } from "../../application/text-import.js";
@@ -234,6 +237,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           });
         }
       }
+      for (const record of input.records) {
+        if (record.kind !== "attachment") continue;
+        const messageId = messages.get(record.messageKey);
+        if (!messageId) continue;
+        await importAttachment(tx, input.archiveId, input.observedAt, messageId, record);
+      }
       await tx.snapshot.update({
         where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
         data: { lifecycle: "completed", completedAt: input.observedAt },
@@ -245,6 +254,102 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
       return { imported: input.records.length };
     });
   }
+}
+
+async function importAttachment(
+  tx: Tx,
+  archiveId: string,
+  observedAt: Date,
+  messageId: string,
+  record: ImportAttachmentRecord,
+): Promise<void> {
+  const byStableKey = await tx.attachment.findFirst({
+    where: { archiveId, stableKey: record.stableKey },
+  });
+  const byHash = await tx.attachment.findUnique({
+    where: { archiveId_sha256: { archiveId, sha256: record.sha256 } },
+  });
+  const prior = byStableKey ?? byHash;
+  const observedAvailability: ImportAttachmentAvailability =
+    record.availability === "available" && !record.casKey ? "unresolved" : record.availability;
+  const availability = reconcileAttachmentAvailability(
+    prior?.availability as ImportAttachmentAvailability | undefined,
+    observedAvailability,
+  );
+  const availableObservation = observedAvailability === "available";
+  const casKey =
+    prior?.availability === "available"
+      ? prior.casKey
+      : availableObservation
+        ? record.casKey
+        : prior?.casKey;
+  const attachment = prior
+    ? await tx.attachment.update({
+        where: { archiveId_id: { archiveId, id: prior.id } },
+        data: {
+          ...(prior.sha256 === record.sha256 || prior.availability === "available"
+            ? {}
+            : { sha256: record.sha256 }),
+          stableKey: prior.stableKey ?? record.stableKey,
+          availability,
+          ...(casKey ? { casKey } : {}),
+          ...attachmentMetadata(record, observedAt, prior),
+        },
+      })
+    : await tx.attachment.create({
+        data: {
+          archiveId,
+          stableKey: record.stableKey,
+          sha256: record.sha256,
+          availability,
+          ...(casKey ? { casKey } : {}),
+          ...attachmentMetadata(record, observedAt),
+          firstSeenAt: observedAt,
+          lastSeenAt: observedAt,
+        },
+      });
+  await tx.messageAttachment.upsert({
+    where: {
+      archiveId_messageId_attachmentId: { archiveId, messageId, attachmentId: attachment.id },
+    },
+    create: {
+      archiveId,
+      messageId,
+      attachmentId: attachment.id,
+      ordinal: record.ordinal,
+      role: record.role,
+      metadata: record.metadata ? json(record.metadata) : undefined,
+    },
+    update: {
+      ordinal: record.ordinal,
+      role: record.role,
+      ...(record.metadata ? { metadata: json(record.metadata) } : {}),
+    },
+  });
+}
+
+function attachmentMetadata(
+  record: ImportAttachmentRecord,
+  observedAt: Date,
+  prior?: { readonly originalName: string | null; readonly originalPath: string | null },
+): Prisma.AttachmentUpdateInput {
+  return {
+    ...(record.originalName !== undefined ? { originalName: record.originalName } : {}),
+    ...(record.originalPath !== undefined ? { originalPath: record.originalPath } : {}),
+    ...(record.mimeType !== undefined ? { mimeType: record.mimeType } : {}),
+    ...(record.byteSize !== undefined ? { byteSize: BigInt(record.byteSize) } : {}),
+    ...(record.width !== undefined ? { width: record.width } : {}),
+    ...(record.height !== undefined ? { height: record.height } : {}),
+    ...(record.durationMs !== undefined ? { durationMs: record.durationMs } : {}),
+    ...(record.sourceMetadata !== undefined ? { sourceMetadata: json(record.sourceMetadata) } : {}),
+    lastSeenAt: observedAt,
+    ...(prior?.originalName && record.originalName === undefined
+      ? { originalName: prior.originalName }
+      : {}),
+    ...(prior?.originalPath && record.originalPath === undefined
+      ? { originalPath: prior.originalPath }
+      : {}),
+  };
 }
 
 async function identityPersonId(

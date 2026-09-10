@@ -77,6 +77,7 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     revisions: scoped(prisma.messageRevision as unknown as Delegate),
     reactions: scoped(prisma.reaction as unknown as Delegate),
     attachments: scoped(prisma.attachment as unknown as Delegate),
+    messageAttachments: scoped(prisma.messageAttachment as unknown as Delegate),
   };
 };
 

@@ -4,7 +4,8 @@ export type ImportRecord =
   | ImportConversationRecord
   | ImportParticipantRecord
   | ImportMessageRecord
-  | ImportRevisionRecord;
+  | ImportRevisionRecord
+  | ImportAttachmentRecord;
 export interface ImportPersonRecord {
   readonly kind: "person";
   readonly stableKey: string;
@@ -51,6 +52,44 @@ export interface ImportRevisionRecord {
   readonly body?: string;
   readonly bodyState: string;
   readonly firstSeenSnapshotId: string;
+}
+
+export type ImportAttachmentAvailability = "available" | "missing" | "unsafe" | "unresolved";
+
+/** Apply the append-preserving media state policy to one new observation. */
+export function reconcileAttachmentAvailability(
+  prior: ImportAttachmentAvailability | undefined,
+  observed: ImportAttachmentAvailability,
+): ImportAttachmentAvailability {
+  // A missing observation is never allowed to hide bytes already owned by the
+  // archive. Unsafe observations remain explicit until a later available CAS
+  // observation is positively verified by the caller.
+  if (prior === "available") return "available";
+  if (prior === "unsafe" && observed !== "available") return "unsafe";
+  return observed;
+}
+
+/** A source-neutral attachment observation. The hash is the expected content
+ * identity when the source can provide one; stableKey keeps a logical media
+ * reference reconciliable when its bytes are absent from this delivery. */
+export interface ImportAttachmentRecord {
+  readonly kind: "attachment";
+  readonly stableKey: string;
+  readonly messageKey: string;
+  readonly sha256: string;
+  readonly availability: ImportAttachmentAvailability;
+  readonly casKey?: string;
+  readonly originalName?: string;
+  readonly originalPath?: string;
+  readonly mimeType?: string;
+  readonly byteSize?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly durationMs?: number;
+  readonly sourceMetadata?: Readonly<Record<string, unknown>>;
+  readonly ordinal?: number;
+  readonly role?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
 export interface TextSnapshotImportInput {
