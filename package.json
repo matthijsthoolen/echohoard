@@ -21,7 +21,7 @@
     "format": "prettier --check .",
     "format:write": "prettier --write .",
     "lint": "eslint . --max-warnings 0",
-    "test:unit": "vitest run --coverage",
+    "test:unit": "vitest run --coverage src",
     "test:browser": "node scripts/browser-smoke.mjs",
     "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
