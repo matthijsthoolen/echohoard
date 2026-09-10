@@ -25,10 +25,13 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         if (record.kind === "person") {
           const existing = await tx.person.upsert({
             where: {
-              archiveId_id: { archiveId: input.archiveId, id: stableUuid(record.stableKey) },
+              archiveId_id: {
+                archiveId: input.archiveId,
+                id: stableUuid(input.archiveId, record.stableKey),
+              },
             },
             create: {
-              id: stableUuid(record.stableKey),
+              id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               displayName: record.displayName,
             },
@@ -50,7 +53,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               },
             },
             create: {
-              id: stableUuid(record.stableKey),
+              id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               personId,
               kind: record.source.namespace,
@@ -75,7 +78,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               archiveId_stableKey: { archiveId: input.archiveId, stableKey: record.stableKey },
             },
             create: {
-              id: stableUuid(record.stableKey),
+              id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               kind: record.conversationKind,
               stableKey: record.stableKey,
@@ -89,7 +92,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
       for (const record of input.records) {
         if (record.kind === "participant") {
           const conversationId = conversations.get(record.conversationKey);
-          const personId = identityPersonId(
+          const personId = await identityPersonId(
             input.archiveId,
             identities.get(record.identityKey),
             tx,
@@ -127,7 +130,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             archiveId_stableKey: { archiveId: input.archiveId, stableKey: record.stableKey },
           },
           create: {
-            id: stableUuid(record.stableKey),
+            id: stableUuid(input.archiveId, record.stableKey),
             archiveId: input.archiveId,
             conversationId,
             senderId,
@@ -157,6 +160,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             metadata: json({
               direction: record.direction,
               bodyState: record.bodyState,
+              firstSeenSnapshotId: input.snapshotId,
               lastSeenSnapshotId: input.snapshotId,
             }),
           },
@@ -185,7 +189,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               },
             },
             create: {
-              id: stableUuid(record.stableKey),
+              id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               messageId,
               revisionKey: record.stableKey,
@@ -227,7 +231,10 @@ async function identityPersonId(
   return identity?.personId ?? null;
 }
 
-function stableUuid(key: string): string {
-  const hex = createHash("sha256").update(key, "utf8").digest("hex").slice(0, 32);
+function stableUuid(archiveId: string, key: string): string {
+  const hex = createHash("sha256")
+    .update(`${archiveId}\0${key}`, "utf8")
+    .digest("hex")
+    .slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
 }
