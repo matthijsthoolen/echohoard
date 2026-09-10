@@ -139,4 +139,63 @@ describe("archive read services", () => {
     });
     expect(searchMessages).not.toHaveBeenCalled();
   });
+
+  it("composes filters and binds their scope into the cursor", async () => {
+    const searchMessages = vi.fn(async (q) => [
+      { id: "m1", score: 0.8, sortSentAt: "2026-01-01T00:00:00.000Z" },
+      { id: "m2", score: 0.7, sortSentAt: "2026-01-02T00:00:00.000Z" },
+      ...(q.after ? [] : [{ id: "m3", score: 0.6, sortSentAt: "2026-01-03T00:00:00.000Z" }]),
+    ]);
+    const service = new ArchiveReadService({ ...port({}), searchMessages }, codec);
+    const first = await service.search({
+      archiveId: "archive-a",
+      query: "needle",
+      fuzzyName: "Alex",
+      conversationId: "conversation-a",
+      personId: "person-a",
+      senderDirection: "received",
+      from: "2026-01-01T00:00:00.000Z",
+      to: "2026-01-04T00:00:00.000Z",
+      mediaType: "image",
+      limit: 2,
+    });
+    expect(first.nextCursor).toBeDefined();
+    expect(searchMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "needle",
+        fuzzyName: "Alex",
+        conversationId: "conversation-a",
+        personId: "person-a",
+        senderDirection: "received",
+        from: "2026-01-01T00:00:00.000Z",
+        to: "2026-01-04T00:00:00.000Z",
+        mediaType: "image",
+      }),
+    );
+    await expect(
+      service.search({
+        archiveId: "archive-a",
+        query: "other",
+        fuzzyName: "Alex",
+        cursor: first.nextCursor,
+      }),
+    ).rejects.toThrow("Invalid or expired cursor");
+  });
+
+  it("rejects invalid filter bounds before persistence", async () => {
+    const searchMessages = vi.fn(async () => []);
+    const service = new ArchiveReadService({ ...port({}), searchMessages }, codec);
+    await expect(
+      service.search({ archiveId: "archive-a", query: "x", from: "not-a-date" }),
+    ).rejects.toThrow("from is invalid");
+    await expect(
+      service.search({
+        archiveId: "archive-a",
+        query: "x",
+        from: "2026-01-02",
+        to: "2026-01-01",
+      }),
+    ).rejects.toThrow("from must be before to");
+    expect(searchMessages).not.toHaveBeenCalled();
+  });
 });

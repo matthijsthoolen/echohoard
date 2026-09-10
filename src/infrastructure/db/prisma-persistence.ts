@@ -15,6 +15,7 @@ import type {
   MessagePersistenceRow,
   PersonPersistenceRow,
   SearchPersistenceRow,
+  SearchMediaType,
 } from "../../application/reads.js";
 import type {
   HealthJobPersistenceRow,
@@ -132,6 +133,30 @@ export class PrismaReadPersistence implements ReadPersistencePort {
             )
           )`
       : Prisma.empty;
+    const conditions = [Prisma.sql`message."archiveId" = ${input.archiveId}::uuid`];
+    if (input.query.trim())
+      conditions.push(
+        Prisma.sql`message."searchVector" @@ plainto_tsquery('simple'::regconfig, ${input.query})`,
+      );
+    if (input.fuzzyText) conditions.push(Prisma.sql`message.body % ${input.fuzzyText}`);
+    if (input.conversationId)
+      conditions.push(Prisma.sql`message."conversationId" = ${input.conversationId}::uuid`);
+    if (input.personId) conditions.push(Prisma.sql`message."senderId" = ${input.personId}::uuid`);
+    if (input.senderDirection)
+      conditions.push(
+        Prisma.sql`CASE WHEN message.metadata->>'direction' IN ('sent', 'received')
+          THEN message.metadata->>'direction' ELSE 'unknown' END = ${input.senderDirection}`,
+      );
+    if (input.from)
+      conditions.push(Prisma.sql`message."sentAt" >= CAST(${input.from} AS timestamp)`);
+    if (input.to) conditions.push(Prisma.sql`message."sentAt" < CAST(${input.to} AS timestamp)`);
+    if (input.mediaType) conditions.push(mediaTypePredicate(input.mediaType));
+    if (input.fuzzyName)
+      conditions.push(
+        Prisma.sql`(sender."displayName" % ${input.fuzzyName}
+          OR conversation.title % ${input.fuzzyName})`,
+      );
+    const where = Prisma.join(conditions, " AND ");
     const ordering =
       input.direction === "forward"
         ? Prisma.sql`ranked.score DESC, ranked.sort_sent_at ASC, ranked.id ASC`
@@ -143,17 +168,25 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       WITH ranked AS (
         SELECT
           message.id,
-          ts_rank_cd(
-            message."searchVector",
-            plainto_tsquery('simple'::regconfig, ${input.query})
+          GREATEST(
+            CASE WHEN ${input.query.trim()} <> '' THEN ts_rank_cd(
+              message."searchVector",
+              plainto_tsquery('simple'::regconfig, ${input.query})
+            ) ELSE 0 END,
+            COALESCE(similarity(message.body, ${input.fuzzyText ?? ""}), 0),
+            COALESCE(similarity(sender."displayName", ${input.fuzzyName ?? ""}), 0),
+            COALESCE(similarity(conversation.title, ${input.fuzzyName ?? ""}), 0)
           )::double precision AS score,
           COALESCE(
             message."sentAt",
             TIMESTAMP '9999-12-31 23:59:59.999'
           ) AS sort_sent_at
         FROM "Message" AS message
-        WHERE message."archiveId" = ${input.archiveId}::uuid
-          AND message."searchVector" @@ plainto_tsquery('simple'::regconfig, ${input.query})
+        LEFT JOIN "Person" AS sender
+          ON sender.id = message."senderId" AND sender."archiveId" = message."archiveId"
+        JOIN "Conversation" AS conversation
+          ON conversation.id = message."conversationId" AND conversation."archiveId" = message."archiveId"
+        WHERE ${where}
       )
       SELECT ranked.id, ranked.score, ranked.sort_sent_at
       FROM ranked
@@ -488,6 +521,31 @@ function messageDirection(metadata: unknown): "sent" | "received" | "unknown" {
     return "unknown";
   const direction = (metadata as Record<string, unknown>).direction;
   return direction === "sent" || direction === "received" ? direction : "unknown";
+}
+
+function mediaTypePredicate(mediaType: SearchMediaType): Prisma.Sql {
+  const mimeCondition =
+    mediaType === "image"
+      ? Prisma.sql`a."mimeType" ILIKE 'image/%'`
+      : mediaType === "video"
+        ? Prisma.sql`a."mimeType" ILIKE 'video/%'`
+        : mediaType === "audio"
+          ? Prisma.sql`a."mimeType" ILIKE 'audio/%'`
+          : mediaType === "document"
+            ? Prisma.sql`a."mimeType" IS NOT NULL
+                AND a."mimeType" NOT ILIKE 'image/%'
+                AND a."mimeType" NOT ILIKE 'video/%'
+                AND a."mimeType" NOT ILIKE 'audio/%'`
+            : Prisma.sql`a."mimeType" IS NULL`;
+  return Prisma.sql`EXISTS (
+    SELECT 1
+    FROM "MessageAttachment" AS ma
+    JOIN "Attachment" AS a
+      ON a.id = ma."attachmentId" AND a."archiveId" = ma."archiveId"
+    WHERE ma."archiveId" = message."archiveId"
+      AND ma."messageId" = message.id
+      AND ${mimeCondition}
+  )`;
 }
 
 function cursorWhere(

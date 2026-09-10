@@ -5,6 +5,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export type ReadArchiveId = string;
 export type ReadDirection = "forward" | "backward";
 export type ReadSort = "createdAt,id" | "sentAt,id" | "displayName,id" | "searchScore,sentAt,id";
+export type MessageDirection = "sent" | "received" | "unknown";
+export type SearchMediaType = "image" | "video" | "audio" | "document" | "other";
 
 export const DEFAULT_READ_LIMIT = 50;
 export const MAX_READ_LIMIT = 100;
@@ -40,6 +42,7 @@ export interface ReadPage<T> {
 export interface CursorPosition {
   readonly sort: ReadSort;
   readonly values: readonly (string | number)[];
+  readonly filterKey?: string;
 }
 
 interface CursorPayload extends CursorPosition {
@@ -48,6 +51,7 @@ interface CursorPayload extends CursorPosition {
   readonly direction: ReadDirection;
   readonly issuedAt: number;
   readonly expiresAt: number;
+  readonly filterKey?: string;
 }
 
 export class InvalidReadRequestError extends Error {
@@ -104,6 +108,7 @@ export class CursorCodec {
     readonly direction: ReadDirection;
     readonly sort: ReadSort;
     readonly values: readonly (string | number)[];
+    readonly filterKey?: string;
   }): string {
     if (
       !input.archiveId.trim() ||
@@ -121,6 +126,7 @@ export class CursorCodec {
       values: input.values,
       issuedAt,
       expiresAt: issuedAt + this.ttlMilliseconds,
+      ...(input.filterKey === undefined ? {} : { filterKey: input.filterKey }),
     };
     const body = base64url(JSON.stringify(payload));
     const cursor = `${body}.${this.sign(body)}`;
@@ -131,6 +137,7 @@ export class CursorCodec {
   public decode(
     cursor: string,
     archiveId: ReadArchiveId,
+    expectedFilterKey?: string,
   ): CursorPosition & { direction: ReadDirection } {
     if (!cursor || cursor.length > MAX_CURSOR_LENGTH) throw new InvalidCursorError();
     const [body, signature, extra] = cursor.split(".");
@@ -161,7 +168,14 @@ export class CursorCodec {
     )
       throw new InvalidCursorError();
     if (payload.archiveId !== archiveId) throw new CursorScopeError();
-    return { sort: payload.sort, values: payload.values, direction: payload.direction };
+    if (expectedFilterKey !== undefined && payload.filterKey !== expectedFilterKey)
+      throw new InvalidCursorError();
+    return {
+      sort: payload.sort,
+      values: payload.values,
+      direction: payload.direction,
+      ...(payload.filterKey === undefined ? {} : { filterKey: payload.filterKey }),
+    };
   }
 
   private sign(body: string): string {
@@ -274,7 +288,23 @@ export interface TimelineQuery extends PageRequest {
   readonly to?: string;
 }
 export interface SearchQuery extends PageRequest {
-  readonly query: string;
+  /** Full-text terms. Empty terms are allowed when a filter is supplied. */
+  readonly query?: string;
+  readonly conversationId?: string;
+  readonly personId?: string;
+  /** Direction of the message sender; pagination direction remains separate. */
+  readonly senderDirection?: MessageDirection;
+  readonly from?: string;
+  /** Inclusive lower bound and exclusive upper bound, both ISO timestamps. */
+  readonly to?: string;
+  readonly mediaType?: SearchMediaType;
+  /** pg_trgm name matching against the sender and conversation title. */
+  readonly fuzzyName?: string;
+  /** pg_trgm body matching in addition to full-text terms. */
+  readonly fuzzyText?: string;
+  /** Aliases retained for delivery adapters that use shorter filter names. */
+  readonly name?: string;
+  readonly text?: string;
 }
 export interface StatisticsQuery {
   readonly archiveId: ReadArchiveId;
@@ -321,6 +351,14 @@ export interface ReadSearchPersistenceQuery {
   readonly direction: ReadDirection;
   /** [rank, sortable sent-at, message id] from the previous page. */
   readonly after?: readonly (string | number)[];
+  readonly conversationId?: string;
+  readonly personId?: string;
+  readonly senderDirection?: MessageDirection;
+  readonly from?: string;
+  readonly to?: string;
+  readonly mediaType?: SearchMediaType;
+  readonly fuzzyName?: string;
+  readonly fuzzyText?: string;
 }
 export interface ConversationPersistenceRow {
   readonly id: string;
@@ -462,24 +500,59 @@ export class ArchiveReadService {
   }
   public async search(query: SearchQuery): Promise<ReadPage<SearchResultRead>> {
     const request = validatePageRequest(query);
-    if (typeof query.query !== "string")
+    if (query.query !== undefined && typeof query.query !== "string")
       throw new InvalidReadRequestError("query must be a string");
+    const textQuery = query.query?.trim() ?? "";
+    const fuzzyName = query.fuzzyName ?? query.name;
+    const fuzzyText = query.fuzzyText ?? query.text;
+    validateSearchFilters({ ...query, fuzzyName, fuzzyText });
+    const filterKey = searchFilterKey({
+      query: textQuery,
+      conversationId: query.conversationId,
+      personId: query.personId,
+      senderDirection: query.senderDirection,
+      from: query.from,
+      to: query.to,
+      mediaType: query.mediaType,
+      fuzzyName,
+      fuzzyText,
+    });
     const position = request.cursor
-      ? this.cursors.decode(request.cursor, request.archiveId)
+      ? this.cursors.decode(request.cursor, request.archiveId, filterKey)
       : undefined;
     if (position && position.sort !== "searchScore,sentAt,id") throw new InvalidCursorError();
+    if (position && position.direction !== request.direction) throw new InvalidCursorError();
     const after = position ? searchCursorValues(position.values) : undefined;
 
-    // An empty tsquery matches no rows, and skipping the database call also
-    // keeps empty input deterministic across PostgreSQL versions/configuration.
-    if (!query.query.trim()) return { items: [], hasMore: false };
+    // A completely empty search remains a deterministic empty page. Filters
+    // may still be used without text terms (for example media-only search).
+    if (
+      !textQuery &&
+      fuzzyName === undefined &&
+      fuzzyText === undefined &&
+      query.conversationId === undefined &&
+      query.personId === undefined &&
+      query.senderDirection === undefined &&
+      query.from === undefined &&
+      query.to === undefined &&
+      query.mediaType === undefined
+    )
+      return { items: [], hasMore: false };
 
     const rows = await this.persistence.searchMessages({
       archiveId: request.archiveId,
-      query: query.query,
+      query: textQuery,
       limit: request.limit + 1,
       direction: request.direction,
       ...(after ? { after } : {}),
+      ...(query.conversationId ? { conversationId: query.conversationId } : {}),
+      ...(query.personId ? { personId: query.personId } : {}),
+      ...(query.senderDirection ? { senderDirection: query.senderDirection } : {}),
+      ...(query.from ? { from: new Date(query.from).toISOString() } : {}),
+      ...(query.to ? { to: new Date(query.to).toISOString() } : {}),
+      ...(query.mediaType ? { mediaType: query.mediaType } : {}),
+      ...(fuzzyName ? { fuzzyName } : {}),
+      ...(fuzzyText ? { fuzzyText } : {}),
     });
     const items = rows.slice(0, request.limit).map((row) => ({
       id: row.id,
@@ -494,6 +567,7 @@ export class ArchiveReadService {
         ? [rows[items.length - 1].score, rows[items.length - 1].sortSentAt, items.at(-1)!.id]
         : undefined,
       "searchScore,sentAt,id",
+      filterKey,
     );
   }
   public statistics(): Promise<StatisticsRead> {
@@ -506,6 +580,7 @@ export class ArchiveReadService {
     request: ValidatedPageRequest,
     values: readonly (string | number)[] | undefined,
     sort: ReadSort,
+    filterKey?: string,
   ): ReadPage<T> {
     return {
       items,
@@ -517,9 +592,63 @@ export class ArchiveReadService {
               direction: request.direction,
               sort,
               values,
+              ...(filterKey === undefined ? {} : { filterKey }),
             }),
           }
         : {}),
     };
   }
+}
+
+const SEARCH_TERM_MAX_LENGTH = 5000;
+const FUZZY_TERM_MAX_LENGTH = 200;
+
+function validateSearchFilters(
+  input: SearchQuery & { readonly fuzzyName?: string; readonly fuzzyText?: string },
+): void {
+  for (const [name, value, max] of [
+    ["query", input.query, SEARCH_TERM_MAX_LENGTH],
+    ["fuzzyName", input.fuzzyName, FUZZY_TERM_MAX_LENGTH],
+    ["fuzzyText", input.fuzzyText, FUZZY_TERM_MAX_LENGTH],
+  ] as const) {
+    if (value !== undefined && (typeof value !== "string" || value.length > max))
+      throw new InvalidReadRequestError(`${name} is too long`);
+  }
+  for (const [name, value] of [
+    ["conversationId", input.conversationId],
+    ["personId", input.personId],
+  ] as const) {
+    if (value !== undefined && (!value.trim() || value.length > 200))
+      throw new InvalidReadRequestError(`${name} is invalid`);
+  }
+  if (
+    input.senderDirection !== undefined &&
+    input.senderDirection !== "sent" &&
+    input.senderDirection !== "received" &&
+    input.senderDirection !== "unknown"
+  )
+    throw new InvalidReadRequestError("senderDirection is invalid");
+  if (input.mediaType !== undefined && !isSearchMediaType(input.mediaType))
+    throw new InvalidReadRequestError("mediaType is invalid");
+  const from = parseSearchDate(input.from, "from");
+  const to = parseSearchDate(input.to, "to");
+  if (from && to && from > to) throw new InvalidReadRequestError("from must be before to");
+}
+
+function parseSearchDate(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw new InvalidReadRequestError(`${name} is invalid`);
+  return parsed;
+}
+
+const isSearchMediaType = (value: unknown): value is SearchMediaType =>
+  value === "image" ||
+  value === "video" ||
+  value === "audio" ||
+  value === "document" ||
+  value === "other";
+
+function searchFilterKey(input: Record<string, unknown>): string {
+  return JSON.stringify(input, Object.keys(input).sort());
 }
