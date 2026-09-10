@@ -1,10 +1,14 @@
 import type { ReadPorts } from "../../application/reads.js";
 import type { ArchiveHealthRead } from "../../application/health-reads.js";
+import type { ArchiveStatisticsRead } from "../../application/statistics.js";
 import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
 
 export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages" | "search"> & {
   readonly archiveHealth?: (query: { readonly archiveId: string }) => Promise<ArchiveHealthRead>;
+  readonly archiveStatistics?: (query: {
+    readonly archiveId: string;
+  }) => Promise<ArchiveStatisticsRead>;
 };
 
 export interface WebRuntime {

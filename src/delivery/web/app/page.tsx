@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
 import { SearchPanel } from "../components/search-panel";
+import { ArchiveOverview } from "../components/archive-overview";
 
 export default function Home() {
   const [conversationId, setConversationId] = useState<string | undefined>();
@@ -54,11 +55,7 @@ export default function Home() {
           {conversationId ? (
             <MessageTimeline conversationId={conversationId} messageId={messageId} />
           ) : (
-            <section className="welcome-pane" aria-labelledby="welcome-heading">
-              <p className="eyebrow">Your archive</p>
-              <h1 id="welcome-heading">A calm place for your conversations.</h1>
-              <p>Choose a conversation to browse its preserved history.</p>
-            </section>
+            <ArchiveOverview />
           )}
         </div>
       </div>
