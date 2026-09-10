@@ -1,7 +1,10 @@
 import type { ReadPorts } from "../../application/reads.js";
+import type { ArchiveHealthRead } from "../../application/health-reads.js";
 import type { WebAuthBoundary } from "./auth.js";
 
-export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages">;
+export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages"> & {
+  readonly archiveHealth?: (query: { readonly archiveId: string }) => Promise<ArchiveHealthRead>;
+};
 
 export interface WebRuntime {
   readonly auth: WebAuthBoundary;
