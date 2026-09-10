@@ -59,8 +59,9 @@ WORKDIR /app
 COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
 COPY --from=production-dependencies /app/node_modules ./node_modules
 COPY --from=worker-dependencies /opt/worker-python /opt/worker-python
+# `next build src/delivery/web` writes `.next` below that app directory; the
+# preceding copy already includes it at the path consumed by `next start`.
 COPY --from=build /app/src/delivery/web ./src/delivery/web
-COPY --from=build /app/.next ./.next
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY container/entrypoint.sh /usr/local/bin/echohoard
