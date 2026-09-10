@@ -5,6 +5,15 @@ import type {
   PersistenceRecord,
   PersistenceInput,
 } from "../../application/persistence.js";
+import type {
+  ReadConversationPersistenceQuery,
+  ReadMessagePersistenceQuery,
+  ReadPersistencePort,
+  ReadPersonPersistenceQuery,
+  ConversationPersistenceRow,
+  MessagePersistenceRow,
+  PersonPersistenceRow,
+} from "../../application/reads.js";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -70,3 +79,138 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     attachments: scoped(prisma.attachment as unknown as Delegate),
   };
 };
+
+type ReadDelegate = {
+  findMany(args: unknown): Promise<unknown>;
+};
+
+const iso = (value: Date | null | undefined): string | undefined => value?.toISOString();
+
+/** Efficient, archive-scoped read adapter. Each method performs one SQL query
+ * with relation counts, rather than loading relation graphs per result row. */
+export class PrismaReadPersistence implements ReadPersistencePort {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async listConversations(
+    input: ReadConversationPersistenceQuery,
+  ): Promise<readonly ConversationPersistenceRow[]> {
+    const where = {
+      archiveId: input.archiveId,
+      ...(input.search
+        ? {
+            OR: [
+              { title: { contains: input.search, mode: "insensitive" } },
+              { stableKey: { contains: input.search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+      ...cursorWhere(input.after, input.direction, "createdAt"),
+    };
+    const rows = await (this.prisma.conversation as unknown as ReadDelegate).findMany({
+      where,
+      orderBy: [
+        { createdAt: input.direction === "backward" ? "desc" : "asc" },
+        { id: input.direction === "backward" ? "desc" : "asc" },
+      ],
+      take: input.limit,
+      include: {
+        _count: { select: { participants: true } },
+        messages: { select: { sentAt: true }, orderBy: { sentAt: "desc" }, take: 1 },
+      },
+    });
+    return (
+      rows as Array<{
+        id: string;
+        title: string | null;
+        createdAt: Date;
+        _count: { participants: number };
+        messages: Array<{ sentAt: Date | null }>;
+      }>
+    ).map((row) => ({
+      id: row.id,
+      title: row.title ?? undefined,
+      createdAt: row.createdAt.toISOString(),
+      participantCount: row._count.participants,
+      lastMessageAt: iso(row.messages[0]?.sentAt),
+    }));
+  }
+
+  public async listPeople(
+    input: ReadPersonPersistenceQuery,
+  ): Promise<readonly PersonPersistenceRow[]> {
+    const where = {
+      archiveId: input.archiveId,
+      ...(input.search ? { displayName: { contains: input.search, mode: "insensitive" } } : {}),
+      ...cursorWhere(input.after, input.direction, "displayName"),
+    };
+    const rows = await (this.prisma.person as unknown as ReadDelegate).findMany({
+      where,
+      orderBy: [
+        { displayName: input.direction === "backward" ? "desc" : "asc" },
+        { id: input.direction === "backward" ? "desc" : "asc" },
+      ],
+      take: input.limit,
+      include: { _count: { select: { identities: true } } },
+    });
+    return (
+      rows as Array<{ id: string; displayName: string | null; _count: { identities: number } }>
+    ).map((row) => ({
+      id: row.id,
+      displayName: row.displayName ?? undefined,
+      identityCount: row._count.identities,
+    }));
+  }
+
+  public async listMessages(
+    input: ReadMessagePersistenceQuery,
+  ): Promise<readonly MessagePersistenceRow[]> {
+    const rows = await (this.prisma.message as unknown as ReadDelegate).findMany({
+      where: {
+        archiveId: input.archiveId,
+        conversationId: input.conversationId,
+        ...cursorWhere(input.after, input.direction, "sentAt"),
+      },
+      orderBy: [
+        { sentAt: input.direction === "backward" ? "desc" : "asc" },
+        { id: input.direction === "backward" ? "desc" : "asc" },
+      ],
+      take: input.limit,
+      include: { _count: { select: { attachments: true } } },
+    });
+    return (
+      rows as Array<{
+        id: string;
+        conversationId: string;
+        senderId: string | null;
+        sentAt: Date | null;
+        body: string | null;
+        _count: { attachments: number };
+      }>
+    ).map((row) => ({
+      id: row.id,
+      conversationId: row.conversationId,
+      senderPersonId: row.senderId ?? undefined,
+      sentAt: iso(row.sentAt),
+      text: row.body ?? undefined,
+      attachmentCount: row._count.attachments,
+    }));
+  }
+}
+
+function cursorWhere(
+  after: readonly (string | number)[] | undefined,
+  direction: "forward" | "backward",
+  field: "createdAt" | "displayName" | "sentAt",
+): Record<string, unknown> {
+  if (!after) return {};
+  const [value, id] = after;
+  if (typeof id !== "string" || (typeof value !== "string" && typeof value !== "number"))
+    throw new Error("Invalid read cursor position");
+  const op = direction === "backward" ? "lt" : "gt";
+  return {
+    OR: [
+      { [field]: { [op]: field === "displayName" ? value : new Date(String(value)) } },
+      { [field]: value, id: { [op]: id } },
+    ],
+  };
+}

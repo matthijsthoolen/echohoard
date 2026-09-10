@@ -251,3 +251,177 @@ export interface ReadPorts {
   search(query: SearchQuery): Promise<ReadPage<SearchResultRead>>;
   statistics(query: StatisticsQuery): Promise<StatisticsRead>;
 }
+
+/** Persistence-facing read rows. These are deliberately small, scalar DTOs;
+ * Prisma records and relation graphs must not cross into the application. */
+export interface ReadPersistencePort {
+  listConversations(
+    input: ReadConversationPersistenceQuery,
+  ): Promise<readonly ConversationPersistenceRow[]>;
+  listPeople(input: ReadPersonPersistenceQuery): Promise<readonly PersonPersistenceRow[]>;
+  listMessages(input: ReadMessagePersistenceQuery): Promise<readonly MessagePersistenceRow[]>;
+}
+
+export interface ReadConversationPersistenceQuery {
+  readonly archiveId: string;
+  readonly limit: number;
+  readonly direction: ReadDirection;
+  readonly after?: readonly (string | number)[];
+  readonly search?: string;
+}
+export interface ReadPersonPersistenceQuery extends ReadConversationPersistenceQuery {}
+export interface ReadMessagePersistenceQuery extends ReadConversationPersistenceQuery {
+  readonly conversationId: string;
+}
+export interface ConversationPersistenceRow {
+  readonly id: string;
+  readonly title?: string;
+  readonly participantCount: number;
+  readonly lastMessageAt?: string;
+  readonly createdAt: string;
+}
+export interface PersonPersistenceRow {
+  readonly id: string;
+  readonly displayName?: string;
+  readonly identityCount: number;
+}
+export interface MessagePersistenceRow {
+  readonly id: string;
+  readonly conversationId: string;
+  readonly senderPersonId?: string;
+  readonly sentAt?: string;
+  readonly text?: string;
+  readonly attachmentCount: number;
+}
+
+export class ArchiveReadService {
+  public constructor(
+    private readonly persistence: ReadPersistencePort,
+    private readonly cursors: CursorCodec,
+  ) {}
+
+  public async listConversations(
+    query: ConversationListQuery,
+  ): Promise<ReadPage<ConversationRead>> {
+    const request = validatePageRequest(query);
+    const position = request.cursor
+      ? this.cursors.decode(request.cursor, request.archiveId)
+      : undefined;
+    if (position && position.sort !== "createdAt,id") throw new InvalidCursorError();
+    const rows = await this.persistence.listConversations({
+      archiveId: request.archiveId,
+      limit: request.limit + 1,
+      direction: request.direction,
+      ...(position ? { after: position.values } : {}),
+      ...(query.search ? { search: query.search } : {}),
+    });
+    const items = rows.slice(0, request.limit).map((row) => ({
+      id: row.id,
+      title: row.title ?? "",
+      participantCount: row.participantCount,
+      ...(row.lastMessageAt ? { lastMessageAt: row.lastMessageAt } : {}),
+    }));
+    return this.page(
+      items,
+      rows.length > request.limit,
+      request,
+      items.at(-1) ? [rows[items.length - 1].createdAt, items.at(-1)!.id] : undefined,
+      "createdAt,id",
+    );
+  }
+
+  public async listPeople(query: PersonListQuery): Promise<ReadPage<PersonRead>> {
+    const request = validatePageRequest(query);
+    const position = request.cursor
+      ? this.cursors.decode(request.cursor, request.archiveId)
+      : undefined;
+    if (position && position.sort !== "displayName,id") throw new InvalidCursorError();
+    const rows = await this.persistence.listPeople({
+      archiveId: request.archiveId,
+      limit: request.limit + 1,
+      direction: request.direction,
+      ...(position ? { after: position.values } : {}),
+      ...(query.search ? { search: query.search } : {}),
+    });
+    const items = rows.slice(0, request.limit).map((row) => ({
+      id: row.id,
+      displayName: row.displayName ?? "",
+      identityCount: row.identityCount,
+    }));
+    return this.page(
+      items,
+      rows.length > request.limit,
+      request,
+      items.at(-1) ? [rows[items.length - 1].displayName ?? "", items.at(-1)!.id] : undefined,
+      "displayName,id",
+    );
+  }
+
+  public async listMessages(query: MessageWindowQuery): Promise<ReadPage<MessageRead>> {
+    const request = validatePageRequest(query);
+    if (!query.conversationId.trim())
+      throw new InvalidReadRequestError("conversationId is required");
+    const position = request.cursor
+      ? this.cursors.decode(request.cursor, request.archiveId)
+      : undefined;
+    if (position && position.sort !== "sentAt,id") throw new InvalidCursorError();
+    const rows = await this.persistence.listMessages({
+      archiveId: request.archiveId,
+      conversationId: query.conversationId,
+      limit: request.limit + 1,
+      direction: request.direction,
+      ...(position ? { after: position.values } : {}),
+    });
+    const items = rows.slice(0, request.limit).map((row) => ({
+      id: row.id,
+      conversationId: row.conversationId,
+      ...(row.senderPersonId ? { senderPersonId: row.senderPersonId } : {}),
+      sentAt: row.sentAt ?? "",
+      ...(row.text !== undefined ? { text: row.text } : {}),
+      attachmentCount: row.attachmentCount,
+    }));
+    return this.page(
+      items,
+      rows.length > request.limit,
+      request,
+      items.at(-1) ? [rows[items.length - 1].sentAt ?? "", items.at(-1)!.id] : undefined,
+      "sentAt,id",
+    );
+  }
+
+  public listMedia(): Promise<ReadPage<MediaRead>> {
+    throw new Error("Not implemented in EH-06-02");
+  }
+  public listTimeline(): Promise<ReadPage<TimelineRead>> {
+    throw new Error("Not implemented in EH-06-02");
+  }
+  public search(): Promise<ReadPage<SearchResultRead>> {
+    throw new Error("Not implemented in EH-06-02");
+  }
+  public statistics(): Promise<StatisticsRead> {
+    throw new Error("Not implemented in EH-06-02");
+  }
+
+  private page<T extends { readonly id: string }>(
+    items: readonly T[],
+    hasMore: boolean,
+    request: ValidatedPageRequest,
+    values: readonly (string | number)[] | undefined,
+    sort: ReadSort,
+  ): ReadPage<T> {
+    return {
+      items,
+      hasMore,
+      ...(hasMore && values
+        ? {
+            nextCursor: this.cursors.encode({
+              archiveId: request.archiveId,
+              direction: request.direction,
+              sort,
+              values,
+            }),
+          }
+        : {}),
+    };
+  }
+}
