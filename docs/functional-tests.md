@@ -11,6 +11,15 @@ Run it with:
 pnpm test:functional
 ```
 
+The suite includes the synthetic intake lifecycle: stable inbox claim, immutable
+snapshot publication, secret-safe subprocess decryption, duplicate convergence,
+retry/stale-lease recovery, SQLite validation, and plaintext cleanup. Run it
+twice from a clean checkout to verify repeatability:
+
+```sh
+pnpm test:functional && pnpm test:functional
+```
+
 The test database is bound only to `127.0.0.1:55432`, uses synthetic
 credentials, and is never persisted. Run the command repeatedly; each run
 creates and destroys its own database state.

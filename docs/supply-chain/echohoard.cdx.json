@@ -1,0 +1,128 @@
+{
+  "$schema": "http://cyclonedx.org/schema/bom-1.5.schema.json",
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "serialNumber": "urn:uuid:2b5fc7d5-cbe2-5f0b-bb6c-eh1004sbom",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "bom-ref": "pkg:generic/echohoard@0.1.0",
+      "name": "echohoard",
+      "version": "0.1.0",
+      "licenses": [{ "license": { "id": "NOASSERTION" } }],
+      "properties": [
+        {
+          "name": "license-decision",
+          "value": "OPEN_MAINTAINER_DECISION"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "framework",
+      "bom-ref": "pkg:generic/node@22.14.0",
+      "name": "Node.js",
+      "version": "22.14.0",
+      "licenses": [{ "license": { "id": "MIT" } }]
+    },
+    {
+      "type": "framework",
+      "bom-ref": "pkg:generic/python@3.12.8",
+      "name": "Python",
+      "version": "3.12.8",
+      "licenses": [{ "license": { "id": "PSF-2.0" } }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40modelcontextprotocol/sdk@1.30.0",
+      "name": "@modelcontextprotocol/sdk",
+      "version": "1.30.0",
+      "purl": "pkg:npm/%40modelcontextprotocol/sdk@1.30.0",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-xKd8OIzlqNzcqcNumGAa6g+PW2kjD5vrpcKOnfldAUPP3j7lnqMPwlTXQm8gF+UwH72z0lqaRbjr9hqGz0eITA==" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/%40prisma/client@6.16.2",
+      "name": "@prisma/client",
+      "version": "6.16.2",
+      "purl": "pkg:npm/%40prisma/client@6.16.2",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-E00PxBcalMfYO/TWnXobBVUai6eW/g5OsifWQsQDzJYm7yaY+IRLo7ZLsaefi0QkTpxfuhFcQ/w180i6kX3iJw==" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/next@15.5.3",
+      "name": "next",
+      "version": "15.5.3",
+      "purl": "pkg:npm/next@15.5.3",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-r/liNAx16SQj4D+XH/oI1dlpv9tdKJ6cONYPwwcCC46f2NjpaRWY+EKCzULfgQYV6YKXjHBchff2IZBSlZmJNw==" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/react@19.1.1",
+      "name": "react",
+      "version": "19.1.1",
+      "purl": "pkg:npm/react@19.1.1",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-w8nqGImo45dmMIfljjMwOGtbmC/mk4CMYhWIicdSflH91J9TyCyczcPFXJzrZ/ZXcgGRFeP6BU0BEJTw6tZdfQ==" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/react-dom@19.1.1",
+      "name": "react-dom",
+      "version": "19.1.1",
+      "purl": "pkg:npm/react-dom@19.1.1",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-Dlq/5LAZgF0Gaz6yiqZCf6VCcZs1ghAJyrsu84Q/GT0gV+mCxbfmKNoGRKBYMJ8IEdGPqu49YWXD02GCknEDkw==" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:npm/zod@4.1.5",
+      "name": "zod",
+      "version": "4.1.5",
+      "purl": "pkg:npm/zod@4.1.5",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-rcUUZqlLJgBC33IT3PNMgsCq6TzLQEG/Ei/KTCU0PedSWRMAXoOUN+4t/0H+Q8bdnLPdqUYnvboJT0bn/229qg==" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/wa-crypt-tools@0.1.0",
+      "name": "wa-crypt-tools",
+      "version": "0.1.0",
+      "purl": "pkg:pypi/wa-crypt-tools@0.1.0",
+      "licenses": [{ "license": { "id": "GPL-3.0-only" } }],
+      "properties": [{ "name": "sha256", "value": "79dc754afe96be2a9091494b067d99da3a7d6308be6afb1827e7ecd703527910" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/javaobj-py3@0.6.1",
+      "name": "javaobj-py3",
+      "version": "0.6.1",
+      "purl": "pkg:pypi/javaobj-py3@0.6.1",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [{ "name": "sha256", "value": "da97c61cb050bad37cca00523b1a617cc26ed2b698b6322cbc118820a4f52b30" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/pycryptodomex@3.20.0",
+      "name": "pycryptodomex",
+      "version": "3.20.0",
+      "purl": "pkg:pypi/pycryptodomex@3.20.0",
+      "licenses": [{ "license": { "id": "BSD-2-Clause" } }],
+      "properties": [{ "name": "sha256", "value": "bca649483d5ed251d06daf25957f802e44e6bb6df2e8f218ae71968ff8f8edc4" }]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:pypi/protobuf@5.27.3",
+      "name": "protobuf",
+      "version": "5.27.3",
+      "purl": "pkg:pypi/protobuf@5.27.3",
+      "licenses": [{ "license": { "id": "BSD-3-Clause" } }],
+      "properties": [{ "name": "sha256", "value": "a55c48f2a2092d8e213bd143474df33a6ae751b781dd1d1f4d953c128a415b25" }]
+    }
+  ]
+}

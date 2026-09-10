@@ -1,0 +1,58 @@
+name: echohoard
+
+# Generic reference composition. Supply ECHOHOARD_DATABASE_URL and an image
+# reference from the deployment environment; no private host, identity
+# provider, storage path, or credential is encoded here.
+services:
+  web:
+    image: ${ECHOHOARD_IMAGE:-echohoard:local}
+    environment:
+      NODE_ENV: production
+      ECHOHOARD_ROLE: web
+      DATABASE_URL: ${ECHOHOARD_DATABASE_URL:-postgresql://echohoard:replace-me@postgres.example.invalid:5432/echohoard?schema=public}
+    ports:
+      - "${ECHOHOARD_HTTP_PORT:-3000}:3000"
+    secrets:
+      - oidc_client_secret
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  worker:
+    image: ${ECHOHOARD_IMAGE:-echohoard:local}
+    user: "10002:10002"
+    environment:
+      NODE_ENV: production
+      ECHOHOARD_ROLE: worker
+      ECHOHOARD_WORKER_STATUS_FILE: /work/worker.status
+      DATABASE_URL: ${ECHOHOARD_DATABASE_URL:-postgresql://echohoard:replace-me@postgres.example.invalid:5432/echohoard?schema=public}
+    volumes:
+      - echohoard-data:/data
+      - echohoard-work:/work
+    secrets:
+      - worker_key
+    healthcheck:
+      test: ["CMD-SHELL", 'test "$(cat /work/worker.status 2>/dev/null)" = ready']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  echohoard-data:
+  echohoard-work:
+
+secrets:
+  oidc_client_secret:
+    file: ${ECHOHOARD_OIDC_CLIENT_SECRET_FILE:-./container/secrets/oidc-client-secret.example}
+  worker_key:
+    file: ${ECHOHOARD_WORKER_KEY_FILE:-./container/secrets/worker-key.example}

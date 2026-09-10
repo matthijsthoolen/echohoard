@@ -42,3 +42,5 @@ jobs:
         run: pnpm test:browser
       - name: Production build
         run: pnpm build
+      - name: Container build and role smoke
+        run: pnpm test:container

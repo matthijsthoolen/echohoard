@@ -1,0 +1,11 @@
+# wa-crypt-tools 0.1.0 is the last PyPI release with crypt15 support. Every
+# artifact is pinned and hash-verified; this dependency is copied only into
+# the worker-capable image runtime.
+wa-crypt-tools==0.1.0 \
+    --hash=sha256:79dc754afe96be2a9091494b067d99da3a7d6308be6afb1827e7ecd703527910
+javaobj-py3==0.6.1 \
+    --hash=sha256:da97c61cb050bad37cca00523b1a617cc26ed2b698b6322cbc118820a4f52b30
+pycryptodomex==3.20.0 \
+    --hash=sha256:bca649483d5ed251d06daf25957f802e44e6bb6df2e8f218ae71968ff8f8edc4
+protobuf==5.27.3 \
+    --hash=sha256:a55c48f2a2092d8e213bd143474df33a6ae751b781dd1d1f4d953c128a415b25
