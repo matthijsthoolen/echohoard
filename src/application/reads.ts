@@ -155,6 +155,7 @@ export class CursorCodec {
       !Array.isArray(payload.values) ||
       payload.values.length === 0 ||
       !Number.isSafeInteger(payload.issuedAt) ||
+      typeof payload.expiresAt !== "number" ||
       !Number.isSafeInteger(payload.expiresAt) ||
       this.now() >= payload.expiresAt
     )
