@@ -28,6 +28,7 @@
     "benchmark:reads": "tsx scripts/benchmark-reads.ts",
     "test:browser": "node scripts/browser-smoke.mjs",
     "test:viewer": "node scripts/viewer-acceptance.mjs",
+    "test:container": "sh scripts/test-container.sh",
     "profile:viewer-memory": "node scripts/profile-viewer-memory.mjs",
     "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
