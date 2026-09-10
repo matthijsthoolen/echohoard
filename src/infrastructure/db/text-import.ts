@@ -44,6 +44,16 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         if (record.kind === "identity") {
           const personId = record.personKey ? people.get(record.personKey) : undefined;
           if (!personId) continue;
+          const prior = await tx.identity.findUnique({
+            where: {
+              archiveId_kind_value: {
+                archiveId: input.archiveId,
+                kind: record.source.namespace,
+                value: record.source.value,
+              },
+            },
+            select: { provenance: true },
+          });
           const existing = await tx.identity.upsert({
             where: {
               archiveId_kind_value: {
@@ -67,7 +77,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             update: {
               personId,
               displayName: record.displayName,
-              provenance: json({ lastSeenSnapshotId: input.snapshotId }),
+              provenance: json(mergeSnapshotProvenance(prior?.provenance, input.snapshotId)),
             },
           });
           identities.set(record.stableKey, existing.id);
@@ -125,6 +135,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           ? await identityPersonId(input.archiveId, identities.get(record.senderIdentityKey), tx)
           : null;
         const sentAt = record.timestamp ? new Date(record.timestamp) : null;
+        const prior = await tx.message.findUnique({
+          where: {
+            archiveId_stableKey: { archiveId: input.archiveId, stableKey: record.stableKey },
+          },
+          select: { metadata: true },
+        });
         const existing = await tx.message.upsert({
           where: {
             archiveId_stableKey: { archiveId: input.archiveId, stableKey: record.stableKey },
@@ -158,10 +174,10 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             messageType: record.messageKind,
             lastSeenAt: input.observedAt,
             metadata: json({
+              ...(asObject(prior?.metadata) ?? {}),
               direction: record.direction,
               bodyState: record.bodyState,
-              firstSeenSnapshotId: input.snapshotId,
-              lastSeenSnapshotId: input.snapshotId,
+              ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
             }),
           },
         });
@@ -180,6 +196,16 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         if (record.kind === "revision") {
           const messageId = messages.get(record.messageKey);
           if (!messageId) continue;
+          const priorRevision = await tx.messageRevision.findUnique({
+            where: {
+              archiveId_messageId_revisionKey: {
+                archiveId: input.archiveId,
+                messageId,
+                revisionKey: record.stableKey,
+              },
+            },
+            select: { metadata: true },
+          });
           await tx.messageRevision.upsert({
             where: {
               archiveId_messageId_revisionKey: {
@@ -201,7 +227,10 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               firstSeenAt: input.observedAt,
               observedAt: input.observedAt,
             },
-            update: { observedAt: input.observedAt },
+            update: {
+              observedAt: input.observedAt,
+              metadata: json({ ...(asObject(priorRevision?.metadata) ?? {}) }),
+            },
           });
         }
       }
@@ -229,6 +258,22 @@ async function identityPersonId(
     select: { personId: true },
   });
   return identity?.personId ?? null;
+}
+
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function mergeSnapshotProvenance(value: unknown, snapshotId: string): Record<string, string> {
+  const prior = asObject(value);
+  return {
+    ...(typeof prior?.firstSeenSnapshotId === "string"
+      ? { firstSeenSnapshotId: prior.firstSeenSnapshotId }
+      : { firstSeenSnapshotId: snapshotId }),
+    lastSeenSnapshotId: snapshotId,
+  };
 }
 
 function stableUuid(archiveId: string, key: string): string {
