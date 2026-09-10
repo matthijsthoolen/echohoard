@@ -41,6 +41,8 @@ export interface ImportMessageRecord {
   readonly messageKind: string;
   readonly body?: string;
   readonly bodyState: string;
+  /** Bounded, source-neutral rich-message metadata from the adapter. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly replyToKey?: string;
   readonly unsupportedTypeCode?: number;
 }

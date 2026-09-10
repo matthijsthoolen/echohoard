@@ -161,6 +161,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             metadata: json({
               direction: record.direction,
               bodyState: record.bodyState,
+              ...(record.metadata ?? {}),
               ...(record.unsupportedTypeCode === undefined
                 ? {}
                 : { unsupportedTypeCode: record.unsupportedTypeCode }),
@@ -180,6 +181,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               ...(asObject(prior?.metadata) ?? {}),
               direction: record.direction,
               bodyState: record.bodyState,
+              ...(record.metadata ?? {}),
               ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
             }),
           },
