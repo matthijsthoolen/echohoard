@@ -11,10 +11,14 @@ import type {
   ReadPersistencePort,
   ReadPersonPersistenceQuery,
   ReadSearchPersistenceQuery,
+  ReadMediaPersistenceQuery,
+  ReadTimelinePersistenceQuery,
   ConversationPersistenceRow,
   MessagePersistenceRow,
   PersonPersistenceRow,
   SearchPersistenceRow,
+  MediaPersistenceRow,
+  TimelinePersistenceRow,
   SearchMediaType,
 } from "../../application/reads.js";
 import type {
@@ -299,6 +303,26 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       take: input.limit,
       include: {
         _count: { select: { attachments: true } },
+        attachments: {
+          select: {
+            id: true,
+            ordinal: true,
+            role: true,
+            attachment: {
+              select: {
+                id: true,
+                availability: true,
+                mimeType: true,
+                originalName: true,
+                byteSize: true,
+                width: true,
+                height: true,
+                durationMs: true,
+              },
+            },
+          },
+          orderBy: [{ ordinal: "asc" }, { id: "asc" }],
+        },
         replyTo: { select: { id: true, sentAt: true, body: true } },
         revisions: {
           select: { id: true, firstSeenAt: true, body: true },
@@ -320,6 +344,21 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         sentAt: Date | null;
         body: string | null;
         _count: { attachments: number };
+        attachments: Array<{
+          id: string;
+          ordinal: number | null;
+          role: string | null;
+          attachment: {
+            id: string;
+            availability: string;
+            mimeType: string | null;
+            originalName: string | null;
+            byteSize: bigint | null;
+            width: number | null;
+            height: number | null;
+            durationMs: number | null;
+          };
+        }>;
         replyTo: { id: string; sentAt: Date | null; body: string | null } | null;
         revisions: Array<{ id: string; firstSeenAt: Date; body: string | null }>;
         reactions: Array<{ id: string; personId: string; emoji: string }>;
@@ -331,6 +370,21 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       sentAt: iso(row.sentAt),
       text: row.body ?? undefined,
       attachmentCount: row._count.attachments,
+      attachments: row.attachments.map((link) => ({
+        id: link.attachment.id,
+        availability: attachmentAvailability(link.attachment.availability),
+        ...(link.attachment.mimeType ? { mimeType: link.attachment.mimeType } : {}),
+        ...(link.attachment.originalName ? { originalName: link.attachment.originalName } : {}),
+        ...(safeNumber(link.attachment.byteSize) !== undefined
+          ? { byteSize: safeNumber(link.attachment.byteSize) }
+          : {}),
+        ...(link.attachment.width !== null ? { width: link.attachment.width } : {}),
+        ...(link.attachment.height !== null ? { height: link.attachment.height } : {}),
+        ...(link.attachment.durationMs !== null ? { durationMs: link.attachment.durationMs } : {}),
+        ...(link.ordinal !== null ? { ordinal: link.ordinal } : {}),
+        ...(link.role ? { role: link.role } : {}),
+      })),
+      ...(safeMetadata(row.metadata) ? { metadata: safeMetadata(row.metadata) } : {}),
       direction: messageDirection(row.metadata),
       messageType: row.messageType,
       ...(row.replyTo
@@ -352,6 +406,116 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         personId: reaction.personId,
         emoji: reaction.emoji,
       })),
+    }));
+  }
+
+  public async listMedia(
+    input: ReadMediaPersistenceQuery,
+  ): Promise<readonly MediaPersistenceRow[]> {
+    const rows = await (this.prisma.messageAttachment as unknown as ReadDelegate).findMany({
+      where: {
+        archiveId: input.archiveId,
+        ...(input.messageId ? { messageId: input.messageId } : {}),
+        ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}),
+        ...(input.mediaType ? { attachment: mediaTypeWhere(input.mediaType) } : {}),
+        ...cursorWhere(input.after, input.direction, "createdAt"),
+      },
+      orderBy: [
+        { createdAt: input.direction === "backward" ? "desc" : "asc" },
+        { id: input.direction === "backward" ? "desc" : "asc" },
+      ],
+      take: input.limit,
+      include: {
+        attachment: {
+          select: {
+            id: true,
+            mimeType: true,
+            availability: true,
+            byteSize: true,
+            width: true,
+            height: true,
+            durationMs: true,
+          },
+        },
+      },
+    });
+    return (
+      rows as Array<{
+        attachmentId: string;
+        messageId: string;
+        createdAt: Date;
+        attachment: {
+          mimeType: string | null;
+          availability: string;
+          byteSize: bigint | null;
+          width: number | null;
+          height: number | null;
+          durationMs: number | null;
+        };
+      }>
+    ).map((row) => ({
+      id: row.attachmentId,
+      messageId: row.messageId,
+      availability: row.attachment.availability,
+      ...(row.attachment.mimeType ? { mimeType: row.attachment.mimeType } : {}),
+      ...(row.attachment.byteSize !== null
+        ? { byteSize: countValue(row.attachment.byteSize) }
+        : {}),
+      ...(row.attachment.width !== null ? { width: row.attachment.width } : {}),
+      ...(row.attachment.height !== null ? { height: row.attachment.height } : {}),
+      ...(row.attachment.durationMs !== null ? { durationMs: row.attachment.durationMs } : {}),
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  public async listTimeline(
+    input: ReadTimelinePersistenceQuery,
+  ): Promise<readonly TimelinePersistenceRow[]> {
+    const after = input.after;
+    const afterAt = after?.[0];
+    const afterId = after?.[1];
+    const afterPredicate = after
+      ? input.direction === "forward"
+        ? Prisma.sql`AND (events.occurred_at > CAST(${afterAt} AS timestamp)
+            OR (events.occurred_at = CAST(${afterAt} AS timestamp) AND events.id > CAST(${afterId} AS uuid)))`
+        : Prisma.sql`AND (events.occurred_at < CAST(${afterAt} AS timestamp)
+            OR (events.occurred_at = CAST(${afterAt} AS timestamp) AND events.id < CAST(${afterId} AS uuid)))`
+      : Prisma.empty;
+    const datePredicates = [Prisma.sql`events.archive_id = ${input.archiveId}::uuid`];
+    if (input.from)
+      datePredicates.push(Prisma.sql`events.occurred_at >= CAST(${input.from} AS timestamp)`);
+    if (input.to)
+      datePredicates.push(Prisma.sql`events.occurred_at < CAST(${input.to} AS timestamp)`);
+    const where = Prisma.join(datePredicates, " AND ");
+    const ordering =
+      input.direction === "backward"
+        ? Prisma.sql`events.occurred_at DESC, events.id DESC`
+        : Prisma.sql`events.occurred_at ASC, events.id ASC`;
+    const rows = await this.prisma.$queryRaw<
+      Array<{ id: string; kind: "message" | "media"; occurred_at: Date }>
+    >(Prisma.sql`
+      WITH events AS (
+        SELECT m."archiveId" AS archive_id, m.id, 'message'::text AS kind,
+               COALESCE(m."sentAt", m."createdAt") AS occurred_at
+        FROM "Message" m
+        WHERE m."archiveId" = ${input.archiveId}::uuid
+        UNION ALL
+        SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id, 'media'::text AS kind,
+               ma."createdAt" AS occurred_at
+        FROM "MessageAttachment" ma
+        WHERE ma."archiveId" = ${input.archiveId}::uuid
+      )
+      SELECT events.id, events.kind, events.occurred_at
+      FROM events
+      WHERE ${where}
+      ${afterPredicate}
+      ORDER BY ${ordering}
+      LIMIT ${input.limit}
+    `);
+    return rows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      occurredAt: row.occurred_at.toISOString(),
     }));
   }
 }
@@ -770,6 +934,35 @@ function countValue(value: bigint | number): number {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
 }
 
+function safeNumber(value: bigint | number | null): number | undefined {
+  if (value === null) return undefined;
+  if (typeof value === "bigint") {
+    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+    return Number(value);
+  }
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function attachmentAvailability(value: string): "available" | "missing" | "unsafe" | "unresolved" {
+  return value === "available" || value === "unsafe" || value === "unresolved" ? value : "missing";
+}
+
+/** Keep rich metadata useful for presentation while preventing arbitrary JSON
+ * graphs, source paths, or oversized values from crossing the read boundary. */
+function safeMetadata(
+  value: unknown,
+): Readonly<Record<string, string | number | boolean>> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const result: Record<string, string | number | boolean> = {};
+  for (const [key, item] of Object.entries(value).slice(0, 32)) {
+    if (!/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(key)) continue;
+    if (typeof item === "string" && item.length <= 2_000) result[key] = item;
+    else if (typeof item === "boolean") result[key] = item;
+    else if (typeof item === "number" && Number.isFinite(item)) result[key] = item;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function messageDirection(metadata: unknown): "sent" | "received" | "unknown" {
   if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata))
     return "unknown";
@@ -800,6 +993,13 @@ function mediaTypePredicate(mediaType: SearchMediaType): Prisma.Sql {
       AND ma."messageId" = message.id
       AND ${mimeCondition}
   )`;
+}
+
+function mediaTypeWhere(mediaType: SearchMediaType): Record<string, unknown> {
+  if (mediaType === "image" || mediaType === "video" || mediaType === "audio")
+    return { mimeType: { startsWith: `${mediaType}/`, mode: "insensitive" } };
+  if (mediaType === "other") return { mimeType: null };
+  return { mimeType: { not: null } };
 }
 
 function cursorWhere(

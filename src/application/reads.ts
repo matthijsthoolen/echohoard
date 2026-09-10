@@ -4,7 +4,12 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * delivery types, and every query is scoped to exactly one archive. */
 export type ReadArchiveId = string;
 export type ReadDirection = "forward" | "backward";
-export type ReadSort = "createdAt,id" | "sentAt,id" | "displayName,id" | "searchScore,sentAt,id";
+export type ReadSort =
+  | "createdAt,id"
+  | "sentAt,id"
+  | "displayName,id"
+  | "occurredAt,id"
+  | "searchScore,sentAt,id";
 export type MessageDirection = "sent" | "received" | "unknown";
 export type SearchMediaType = "image" | "video" | "audio" | "document" | "other";
 
@@ -187,6 +192,7 @@ const isSort = (value: unknown): value is ReadSort =>
   value === "createdAt,id" ||
   value === "sentAt,id" ||
   value === "displayName,id" ||
+  value === "occurredAt,id" ||
   value === "searchScore,sentAt,id";
 
 const searchCursorValues = (
@@ -225,11 +231,27 @@ export interface MessageRead {
   readonly sentAt: string;
   readonly text?: string;
   readonly attachmentCount: number;
+  /** Attachment IDs are opaque archive-scoped handles for the media route. */
+  readonly attachments?: readonly MessageAttachmentRead[];
   readonly direction: "sent" | "received" | "unknown";
   readonly messageType: string;
+  /** Source metadata is evidence only; delivery treats all values as hostile text. */
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly replyTo?: MessageReplyRead;
   readonly revisions: readonly MessageRevisionRead[];
   readonly reactions: readonly MessageReactionRead[];
+}
+export interface MessageAttachmentRead {
+  readonly id: string;
+  readonly availability: "available" | "missing" | "unsafe" | "unresolved";
+  readonly mimeType?: string;
+  readonly originalName?: string;
+  readonly byteSize?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly durationMs?: number;
+  readonly ordinal?: number;
+  readonly role?: string;
 }
 export interface MessageReplyRead {
   readonly id: string;
@@ -250,6 +272,12 @@ export interface MediaRead {
   readonly id: string;
   readonly messageId: string;
   readonly mediaType: string;
+  readonly availability: "available" | "missing" | "unsafe" | "unresolved";
+  readonly mimeType?: string;
+  readonly byteSize?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly durationMs?: number;
 }
 export interface TimelineRead {
   readonly id: string;
@@ -285,6 +313,8 @@ export interface MessageWindowQuery extends PageRequest {
 }
 export interface MediaListQuery extends PageRequest {
   readonly messageId?: string;
+  readonly attachmentId?: string;
+  readonly mediaType?: SearchMediaType;
 }
 export interface TimelineQuery extends PageRequest {
   readonly from?: string;
@@ -334,6 +364,8 @@ export interface ReadPersistencePort {
   listPeople(input: ReadPersonPersistenceQuery): Promise<readonly PersonPersistenceRow[]>;
   listMessages(input: ReadMessagePersistenceQuery): Promise<readonly MessagePersistenceRow[]>;
   searchMessages(input: ReadSearchPersistenceQuery): Promise<readonly SearchPersistenceRow[]>;
+  listMedia?(input: ReadMediaPersistenceQuery): Promise<readonly MediaPersistenceRow[]>;
+  listTimeline?(input: ReadTimelinePersistenceQuery): Promise<readonly TimelinePersistenceRow[]>;
 }
 
 export interface ReadConversationPersistenceQuery {
@@ -346,6 +378,15 @@ export interface ReadConversationPersistenceQuery {
 export interface ReadPersonPersistenceQuery extends ReadConversationPersistenceQuery {}
 export interface ReadMessagePersistenceQuery extends ReadConversationPersistenceQuery {
   readonly conversationId: string;
+}
+export interface ReadMediaPersistenceQuery extends ReadConversationPersistenceQuery {
+  readonly messageId?: string;
+  readonly attachmentId?: string;
+  readonly mediaType?: SearchMediaType;
+}
+export interface ReadTimelinePersistenceQuery extends ReadConversationPersistenceQuery {
+  readonly from?: string;
+  readonly to?: string;
 }
 export interface ReadSearchPersistenceQuery {
   readonly archiveId: string;
@@ -389,11 +430,29 @@ export interface MessagePersistenceRow {
   readonly sentAt?: string;
   readonly text?: string;
   readonly attachmentCount: number;
+  readonly attachments?: readonly MessageAttachmentRead[];
   readonly direction?: "sent" | "received" | "unknown";
   readonly messageType?: string;
+  readonly metadata?: Readonly<Record<string, unknown>>;
   readonly replyTo?: MessageReplyRead;
   readonly revisions?: readonly MessageRevisionRead[];
   readonly reactions?: readonly MessageReactionRead[];
+}
+export interface MediaPersistenceRow {
+  readonly id: string;
+  readonly messageId: string;
+  readonly mimeType?: string;
+  readonly availability: string;
+  readonly byteSize?: number;
+  readonly width?: number;
+  readonly height?: number;
+  readonly durationMs?: number;
+  readonly createdAt: string;
+}
+export interface TimelinePersistenceRow {
+  readonly id: string;
+  readonly kind: "message" | "media";
+  readonly occurredAt: string;
 }
 
 export class ArchiveReadService {
@@ -481,8 +540,10 @@ export class ArchiveReadService {
       sentAt: row.sentAt ?? "",
       ...(row.text !== undefined ? { text: row.text } : {}),
       attachmentCount: row.attachmentCount,
+      attachments: row.attachments ?? [],
       direction: row.direction ?? "unknown",
       messageType: row.messageType ?? "unsupported",
+      ...(row.metadata ? { metadata: row.metadata } : {}),
       ...(row.replyTo ? { replyTo: row.replyTo } : {}),
       revisions: row.revisions ?? [],
       reactions: row.reactions ?? [],
@@ -496,11 +557,71 @@ export class ArchiveReadService {
     );
   }
 
-  public listMedia(): Promise<ReadPage<MediaRead>> {
-    throw new Error("Not implemented in EH-06-02");
+  public async listMedia(query: MediaListQuery): Promise<ReadPage<MediaRead>> {
+    const request = validatePageRequest(query);
+    const position = request.cursor
+      ? this.cursors.decode(request.cursor, request.archiveId)
+      : undefined;
+    if (position && position.sort !== "createdAt,id") throw new InvalidCursorError();
+    if (!this.persistence.listMedia) throw new Error("Media reads are unavailable");
+    const rows = await this.persistence.listMedia({
+      archiveId: request.archiveId,
+      limit: request.limit + 1,
+      direction: request.direction,
+      ...(position ? { after: position.values } : {}),
+      ...(query.messageId ? { messageId: query.messageId } : {}),
+      ...(query.attachmentId ? { attachmentId: query.attachmentId } : {}),
+      ...(query.mediaType ? { mediaType: query.mediaType } : {}),
+    });
+    const items = rows.slice(0, request.limit).map((row) => ({
+      id: row.id,
+      messageId: row.messageId,
+      mediaType: mediaType(row.mimeType),
+      availability: mediaAvailability(row.availability),
+      ...(row.mimeType ? { mimeType: row.mimeType } : {}),
+      ...(row.byteSize !== undefined ? { byteSize: safeOptionalCount(row.byteSize) } : {}),
+      ...(row.width !== undefined ? { width: safeOptionalCount(row.width) } : {}),
+      ...(row.height !== undefined ? { height: safeOptionalCount(row.height) } : {}),
+      ...(row.durationMs !== undefined ? { durationMs: safeOptionalCount(row.durationMs) } : {}),
+    }));
+    return this.page(
+      items,
+      rows.length > request.limit,
+      request,
+      items.at(-1) ? [rows[items.length - 1].createdAt, items.at(-1)!.id] : undefined,
+      "createdAt,id",
+    );
   }
-  public listTimeline(): Promise<ReadPage<TimelineRead>> {
-    throw new Error("Not implemented in EH-06-02");
+  public async listTimeline(query: TimelineQuery): Promise<ReadPage<TimelineRead>> {
+    const request = validatePageRequest(query);
+    const from = parseReadDate(query.from, "from");
+    const to = parseReadDate(query.to, "to");
+    if (from && to && from > to) throw new InvalidReadRequestError("from must be before to");
+    const position = request.cursor
+      ? this.cursors.decode(request.cursor, request.archiveId)
+      : undefined;
+    if (position && position.sort !== "occurredAt,id") throw new InvalidCursorError();
+    if (!this.persistence.listTimeline) throw new Error("Timeline reads are unavailable");
+    const rows = await this.persistence.listTimeline({
+      archiveId: request.archiveId,
+      limit: request.limit + 1,
+      direction: request.direction,
+      ...(position ? { after: position.values } : {}),
+      ...(from ? { from: new Date(from).toISOString() } : {}),
+      ...(to ? { to: new Date(to).toISOString() } : {}),
+    });
+    const items = rows.slice(0, request.limit).map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      occurredAt: row.occurredAt,
+    }));
+    return this.page(
+      items,
+      rows.length > request.limit,
+      request,
+      items.at(-1) ? [items.at(-1)!.occurredAt, items.at(-1)!.id] : undefined,
+      "occurredAt,id",
+    );
   }
   public async search(query: SearchQuery): Promise<ReadPage<SearchResultRead>> {
     const request = validatePageRequest(query);
@@ -646,6 +767,30 @@ function parseSearchDate(value: string | undefined, name: string): number | unde
   const parsed = Date.parse(value);
   if (!Number.isFinite(parsed)) throw new InvalidReadRequestError(`${name} is invalid`);
   return parsed;
+}
+
+function parseReadDate(value: string | undefined, name: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) throw new InvalidReadRequestError(`${name} is invalid`);
+  return parsed;
+}
+
+function mediaAvailability(value: string): MediaRead["availability"] {
+  if (value === "available" || value === "unsafe" || value === "unresolved") return value;
+  return "missing";
+}
+
+function mediaType(mimeType: string | undefined): string {
+  if (!mimeType) return "other";
+  const category = mimeType.split("/", 1)[0]?.toLowerCase();
+  return category === "image" || category === "video" || category === "audio"
+    ? category
+    : "document";
+}
+
+function safeOptionalCount(value: number): number {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
 const isSearchMediaType = (value: unknown): value is SearchMediaType =>
