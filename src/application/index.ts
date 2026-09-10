@@ -3,4 +3,6 @@ export * from "./persistence.js";
 export * from "./echohoard.js";
 export * from "./intake.js";
 export * from "./text-import.js";
+export * from "./media.js";
+export * from "./reads.js";
 export type ApplicationModule = { domain: DomainModule };
