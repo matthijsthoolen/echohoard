@@ -21,6 +21,21 @@ const row: MessageRead = {
   revisions: [],
   reactions: [],
 };
+const richRow: MessageRead = {
+  ...row,
+  id: "message-rich",
+  messageType: "image",
+  attachmentCount: 1,
+  attachments: [
+    {
+      id: "attachment-1",
+      availability: "available",
+      mimeType: "image/png",
+      originalName: "photo.png",
+    },
+  ],
+  metadata: { caption: "preserved" },
+};
 
 describe("message timeline route", () => {
   it("denies anonymous access without revealing the conversation", async () => {
@@ -88,5 +103,17 @@ describe("message timeline route", () => {
     expect(tooLarge.status).toBe(400);
     expect(invalidDirection.status).toBe(400);
     expect(listMessages).not.toHaveBeenCalled();
+  });
+
+  it("keeps rich media fields in the delivery response", async () => {
+    const listMessages = vi.fn(async () => ({ items: [richRow], hasMore: false }));
+    const route = createMessagesRoute({ getRuntime: () => ({ auth, reads: { listMessages } }) });
+    const response = await route(new Request("http://localhost/api/conversations/c1/messages"), {
+      params: { conversationId: "c1" },
+    });
+    expect(await response.json()).toEqual({
+      items: [richRow],
+      hasMore: false,
+    });
   });
 });

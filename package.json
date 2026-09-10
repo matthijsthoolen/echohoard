@@ -27,6 +27,8 @@
     "generate:corpus": "tsx scripts/generate-reference-corpus.ts",
     "benchmark:reads": "tsx scripts/benchmark-reads.ts",
     "test:browser": "node scripts/browser-smoke.mjs",
+    "test:viewer": "node scripts/viewer-acceptance.mjs",
+    "profile:viewer-memory": "node scripts/profile-viewer-memory.mjs",
     "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
   "dependencies": {

@@ -21,6 +21,7 @@ export default function Home() {
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>
+      <h1 className="sr-only">EchoHoard archive viewer</h1>
       <header className="topbar">
         <a className="wordmark" href="/" aria-label="EchoHoard home">
           EchoHoard

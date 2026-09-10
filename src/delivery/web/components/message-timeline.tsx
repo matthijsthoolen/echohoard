@@ -418,6 +418,7 @@ export function MessageTimeline({
         className="timeline-viewport"
         role="log"
         aria-label="Message history"
+        tabIndex={0}
         onScroll={(event) => {
           const target = event.currentTarget;
           setViewport({ top: target.scrollTop, height: target.clientHeight });
