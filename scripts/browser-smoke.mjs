@@ -57,6 +57,16 @@ const main = async () => {
     ]) {
       if (!html.includes(marker)) throw new Error(`production page missing ${marker}`);
     }
+    const loginResponse = await fetch(`${baseUrl}/auth/login`);
+    if (loginResponse.status !== 200)
+      throw new Error(`login page status was ${loginResponse.status}`);
+    const loginHtml = await loginResponse.text();
+    for (const marker of ["Welcome back", "Continue with Authentik", "/auth/login/start"]) {
+      if (!loginHtml.includes(marker)) throw new Error(`login page missing ${marker}`);
+    }
+    const loginStartResponse = await fetch(`${baseUrl}/auth/login/start`, { redirect: "manual" });
+    if (![302, 503].includes(loginStartResponse.status))
+      throw new Error(`login start returned ${loginStartResponse.status}`);
     const anonymousConversations = await fetch(`${baseUrl}/api/conversations`);
     if (anonymousConversations.status !== 401)
       throw new Error(`anonymous conversation status was ${anonymousConversations.status}`);
