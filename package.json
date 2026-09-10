@@ -29,6 +29,7 @@
     "verify": "pnpm format && pnpm lint && pnpm typecheck && pnpm architecture && pnpm test:unit && pnpm test:browser && pnpm build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@prisma/client": "6.16.2",
     "next": "15.5.3",
     "react": "19.1.1",
