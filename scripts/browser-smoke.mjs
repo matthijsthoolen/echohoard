@@ -24,9 +24,11 @@ server.listen(0, "127.0.0.1", async () => {
     const pageResponse = await fetch(`${baseUrl}/`);
     if (pageResponse.status !== 200) throw new Error(`page status was ${pageResponse.status}`);
     const html = await pageResponse.text();
-    if (!html.includes("<title>EchoHoard</title>") || !html.includes("<h1>EchoHoard</h1>")) throw new Error("synthetic page content mismatch");
+    if (!html.includes("<title>EchoHoard</title>") || !html.includes("<h1>EchoHoard</h1>"))
+      throw new Error("synthetic page content mismatch");
     const healthResponse = await fetch(`${baseUrl}/health`);
-    if (healthResponse.status !== 200) throw new Error(`health status was ${healthResponse.status}`);
+    if (healthResponse.status !== 200)
+      throw new Error(`health status was ${healthResponse.status}`);
     const health = await healthResponse.json();
     if (health.status !== "ok") throw new Error("health response was not ok");
     console.log("Browser harness smoke passed: page and health seam are reachable");

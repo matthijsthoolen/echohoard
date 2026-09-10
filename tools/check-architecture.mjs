@@ -45,7 +45,7 @@ for (const file of await walk(src)) {
   const from = relative(src, file).split(sep)[0];
   for (const specifier of imports(await readFile(file, "utf8"))) {
     const to = destination(join(file, ".."), specifier);
-    if (to && !rules[from]?.includes(to))
+    if (to && to !== from && !rules[from]?.includes(to))
       errors.push(
         `${relative(root, file)} imports ${to}; ${from} may depend only on ${rules[from]?.join(", ") || "nothing"}`,
       );
