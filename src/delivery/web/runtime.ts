@@ -1,7 +1,7 @@
 import type { ReadPorts } from "../../application/reads.js";
 import type { WebAuthBoundary } from "./auth.js";
 
-export type WebReadServices = Pick<ReadPorts, "listConversations">;
+export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages">;
 
 export interface WebRuntime {
   readonly auth: WebAuthBoundary;

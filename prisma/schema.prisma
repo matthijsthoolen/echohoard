@@ -76,6 +76,8 @@ model Snapshot {
   @@unique([archiveId, id])
   @@unique([archiveId, sourceId, sha256])
   @@index([archiveId, sourceId])
+  @@index([archiveId, lifecycle, completedAt])
+  @@index([archiveId, capturedAt])
 }
 
 model ImportJob {
@@ -96,6 +98,7 @@ model ImportJob {
   snapshot    Snapshot? @relation(fields: [snapshotId, archiveId], references: [id, archiveId], onDelete: Restrict)
   @@unique([archiveId, id])
   @@index([archiveId, status])
+  @@index([archiveId, createdAt])
 }
 
 model Person {
@@ -194,6 +197,7 @@ model Message {
   @@unique([archiveId, stableKey])
   @@index([archiveId, conversationId, sentAt])
   @@index([archiveId, senderId])
+  @@index([archiveId, sentAt])
 }
 
 model MessageRevision {

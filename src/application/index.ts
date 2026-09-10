@@ -5,4 +5,5 @@ export * from "./intake.js";
 export * from "./text-import.js";
 export * from "./media.js";
 export * from "./reads.js";
+export * from "./health-reads.js";
 export type ApplicationModule = { domain: DomainModule };

@@ -4,7 +4,11 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  * delivery types, and every query is scoped to exactly one archive. */
 export type ReadArchiveId = string;
 export type ReadDirection = "forward" | "backward";
-export type ReadSort = "createdAt,id" | "sentAt,id" | "displayName,id";
+export type ReadSort =
+  | "createdAt,id"
+  | "sentAt,id"
+  | "displayName,id"
+  | "searchScore,sentAt,id";
 
 export const DEFAULT_READ_LIMIT = 50;
 export const MAX_READ_LIMIT = 100;
@@ -170,7 +174,26 @@ export class CursorCodec {
 }
 
 const isSort = (value: unknown): value is ReadSort =>
-  value === "createdAt,id" || value === "sentAt,id" || value === "displayName,id";
+  value === "createdAt,id" ||
+  value === "sentAt,id" ||
+  value === "displayName,id" ||
+  value === "searchScore,sentAt,id";
+
+const searchCursorValues = (
+  values: readonly (string | number)[],
+): readonly [number, string, string] => {
+  const [score, sortSentAt, id] = values;
+  if (
+    typeof score !== "number" ||
+    !Number.isFinite(score) ||
+    typeof sortSentAt !== "string" ||
+    !sortSentAt ||
+    typeof id !== "string" ||
+    !id
+  )
+    throw new InvalidCursorError();
+  return [score, sortSentAt, id];
+};
 
 const base64url = (value: string): string => Buffer.from(value, "utf8").toString("base64url");
 
@@ -192,6 +215,26 @@ export interface MessageRead {
   readonly sentAt: string;
   readonly text?: string;
   readonly attachmentCount: number;
+  readonly direction: "sent" | "received" | "unknown";
+  readonly messageType: string;
+  readonly replyTo?: MessageReplyRead;
+  readonly revisions: readonly MessageRevisionRead[];
+  readonly reactions: readonly MessageReactionRead[];
+}
+export interface MessageReplyRead {
+  readonly id: string;
+  readonly sentAt?: string;
+  readonly text?: string;
+}
+export interface MessageRevisionRead {
+  readonly id: string;
+  readonly firstSeenAt: string;
+  readonly text?: string;
+}
+export interface MessageReactionRead {
+  readonly id: string;
+  readonly personId: string;
+  readonly emoji: string;
 }
 export interface MediaRead {
   readonly id: string;
@@ -261,6 +304,7 @@ export interface ReadPersistencePort {
   ): Promise<readonly ConversationPersistenceRow[]>;
   listPeople(input: ReadPersonPersistenceQuery): Promise<readonly PersonPersistenceRow[]>;
   listMessages(input: ReadMessagePersistenceQuery): Promise<readonly MessagePersistenceRow[]>;
+  searchMessages(input: ReadSearchPersistenceQuery): Promise<readonly SearchPersistenceRow[]>;
 }
 
 export interface ReadConversationPersistenceQuery {
@@ -274,6 +318,14 @@ export interface ReadPersonPersistenceQuery extends ReadConversationPersistenceQ
 export interface ReadMessagePersistenceQuery extends ReadConversationPersistenceQuery {
   readonly conversationId: string;
 }
+export interface ReadSearchPersistenceQuery {
+  readonly archiveId: string;
+  readonly query: string;
+  readonly limit: number;
+  readonly direction: ReadDirection;
+  /** [rank, sortable sent-at, message id] from the previous page. */
+  readonly after?: readonly (string | number)[];
+}
 export interface ConversationPersistenceRow {
   readonly id: string;
   readonly title?: string;
@@ -286,6 +338,12 @@ export interface PersonPersistenceRow {
   readonly displayName?: string;
   readonly identityCount: number;
 }
+export interface SearchPersistenceRow {
+  readonly id: string;
+  readonly score: number;
+  /** A non-null sortable timestamp; messages without sentAt use a high sentinel. */
+  readonly sortSentAt: string;
+}
 export interface MessagePersistenceRow {
   readonly id: string;
   readonly conversationId: string;
@@ -293,6 +351,11 @@ export interface MessagePersistenceRow {
   readonly sentAt?: string;
   readonly text?: string;
   readonly attachmentCount: number;
+  readonly direction?: "sent" | "received" | "unknown";
+  readonly messageType?: string;
+  readonly replyTo?: MessageReplyRead;
+  readonly revisions?: readonly MessageRevisionRead[];
+  readonly reactions?: readonly MessageReactionRead[];
 }
 
 export class ArchiveReadService {
@@ -380,6 +443,11 @@ export class ArchiveReadService {
       sentAt: row.sentAt ?? "",
       ...(row.text !== undefined ? { text: row.text } : {}),
       attachmentCount: row.attachmentCount,
+      direction: row.direction ?? "unknown",
+      messageType: row.messageType ?? "unsupported",
+      ...(row.replyTo ? { replyTo: row.replyTo } : {}),
+      revisions: row.revisions ?? [],
+      reactions: row.reactions ?? [],
     }));
     return this.page(
       items,
@@ -396,8 +464,41 @@ export class ArchiveReadService {
   public listTimeline(): Promise<ReadPage<TimelineRead>> {
     throw new Error("Not implemented in EH-06-02");
   }
-  public search(): Promise<ReadPage<SearchResultRead>> {
-    throw new Error("Not implemented in EH-06-02");
+  public async search(query: SearchQuery): Promise<ReadPage<SearchResultRead>> {
+    const request = validatePageRequest(query);
+    if (typeof query.query !== "string")
+      throw new InvalidReadRequestError("query must be a string");
+    const position = request.cursor
+      ? this.cursors.decode(request.cursor, request.archiveId)
+      : undefined;
+    if (position && position.sort !== "searchScore,sentAt,id") throw new InvalidCursorError();
+    const after = position ? searchCursorValues(position.values) : undefined;
+
+    // An empty tsquery matches no rows, and skipping the database call also
+    // keeps empty input deterministic across PostgreSQL versions/configuration.
+    if (!query.query.trim()) return { items: [], hasMore: false };
+
+    const rows = await this.persistence.searchMessages({
+      archiveId: request.archiveId,
+      query: query.query,
+      limit: request.limit + 1,
+      direction: request.direction,
+      ...(after ? { after } : {}),
+    });
+    const items = rows.slice(0, request.limit).map((row) => ({
+      id: row.id,
+      kind: "message" as const,
+      score: row.score,
+    }));
+    return this.page(
+      items,
+      rows.length > request.limit,
+      request,
+      items.at(-1)
+        ? [rows[items.length - 1].score, rows[items.length - 1].sortSentAt, items.at(-1)!.id]
+        : undefined,
+      "searchScore,sentAt,id",
+    );
   }
   public statistics(): Promise<StatisticsRead> {
     throw new Error("Not implemented in EH-06-02");
