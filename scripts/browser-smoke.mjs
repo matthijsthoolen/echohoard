@@ -10,8 +10,7 @@ const run = (args) => new Promise((resolve, reject) => {
 });
 let start;
 let output = "";
-const deadline = Date.now() + 15000;
-const waitForApp = async () => { let lastError = ""; while (Date.now() < deadline) { try { if ((await fetch(`${baseUrl}/health`)).ok) return; } catch (error) { lastError = error.message; } await new Promise((resolve) => setTimeout(resolve, 250)); } throw new Error(`production app did not become ready (${lastError})\n${output}`); };
+const waitForApp = async () => { const deadline = Date.now() + 15000; let lastError = ""; while (Date.now() < deadline) { try { if ((await fetch(`${baseUrl}/health`)).ok) return; } catch (error) { lastError = error.message; } await new Promise((resolve) => setTimeout(resolve, 250)); } throw new Error(`production app did not become ready (${lastError})\n${output}`); };
 const main = async () => {
   try {
     const build = await run(["build:web"]); if (build.code !== 0) throw new Error(`production build failed\n${build.output}`);
