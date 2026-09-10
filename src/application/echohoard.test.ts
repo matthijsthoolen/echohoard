@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   InvalidTransitionError,
+  StableBatchClaimer,
   transitionDelivery,
   transitionImportJob,
   transitionSnapshot,
@@ -43,5 +44,37 @@ describe("snapshot intake transitions", () => {
   it("does not expose lease after queueing", () => {
     const j = { id: "j", snapshotId: "s", status: "leased" as const, lease: "l", updatedAt: date };
     expect(transitionImportJob(j, "queued").lease).toBeUndefined();
+  });
+});
+
+describe("stable inbox batch claiming", () => {
+  const file = (size: number) => [{ name: "manifest.json", size, modifiedAt: date }];
+  const clock = { now: () => date, sleep: async () => {} };
+
+  it("does not claim changing deliveries", async () => {
+    let reads = 0;
+    const inbox = {
+      listDeliveries: async () => ["d"],
+      inspect: async () => file(++reads),
+      claim: async () => "/claimed/d",
+    };
+    await expect(
+      new StableBatchClaimer(inbox, clock, { quietPeriodMilliseconds: 1 }).settleAndClaim(
+        "/inbox",
+        "d",
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it("claims only once after identical metadata", async () => {
+    let claims = 0;
+    const inbox = {
+      listDeliveries: async () => ["d"],
+      inspect: async () => file(1),
+      claim: async () => (claims++ === 0 ? "/claimed/d" : null),
+    };
+    const claimer = new StableBatchClaimer(inbox, clock, { quietPeriodMilliseconds: 1 });
+    await expect(claimer.settleAndClaim("/inbox", "d")).resolves.toBe("/claimed/d");
+    await expect(claimer.settleAndClaim("/inbox", "d")).resolves.toBeNull();
   });
 });
