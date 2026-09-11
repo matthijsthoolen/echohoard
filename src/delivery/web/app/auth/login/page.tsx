@@ -1,11 +1,25 @@
+import Image from "next/image";
+
 export default function LoginPage() {
   return (
     <main className="auth-page">
       <div className="auth-card">
+        <Image
+          className="auth-hero-logo"
+          src="/brand/echohoard-large.png"
+          alt="EchoHoard — preserve what matters"
+          width={420}
+          height={420}
+          priority
+        />
         <a className="auth-brand" href="/" aria-label="EchoHoard home">
-          <span className="auth-brand-mark" aria-hidden="true">
-            E
-          </span>
+          <Image
+            className="auth-brand-mark"
+            src="/brand/echohoard-mark.png"
+            alt=""
+            width={36}
+            height={36}
+          />
           <span>EchoHoard</span>
         </a>
 

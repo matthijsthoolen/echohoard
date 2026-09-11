@@ -58,6 +58,16 @@ const main = async () => {
     for (const marker of ["Welcome back", "Continue with Authentik", "/auth/login/start"]) {
       if (!loginHtml.includes(marker)) throw new Error(`login page missing ${marker}`);
     }
+    for (const asset of [
+      "/brand/echohoard-large.png",
+      "/brand/echohoard-wordmark.png",
+      "/brand/echohoard-mark.png",
+      "/icon.png",
+    ]) {
+      const assetResponse = await fetch(`${baseUrl}${asset}`);
+      if (assetResponse.status !== 200)
+        throw new Error(`brand asset ${asset} status was ${assetResponse.status}`);
+    }
     const loginStartResponse = await fetch(`${baseUrl}/auth/login/start`, { redirect: "manual" });
     if (![302, 503].includes(loginStartResponse.status))
       throw new Error(`login start returned ${loginStartResponse.status}`);

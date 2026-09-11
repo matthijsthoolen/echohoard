@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
 import { SearchPanel } from "../components/search-panel";
@@ -25,7 +26,14 @@ export default function ArchiveShell() {
       <h1 className="sr-only">EchoHoard archive viewer</h1>
       <header className="topbar">
         <a className="wordmark" href="/" aria-label="EchoHoard home">
-          EchoHoard
+          <Image
+            className="wordmark-image"
+            src="/brand/echohoard-wordmark.png"
+            alt="EchoHoard"
+            width={180}
+            height={60}
+            priority
+          />
         </a>
         <p className="privacy-note">Private archive</p>
       </header>
