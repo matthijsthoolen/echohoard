@@ -13,13 +13,6 @@ export default function LoginPage() {
           priority
         />
         <a className="auth-brand" href="/" aria-label="EchoHoard home">
-          <Image
-            className="auth-brand-mark"
-            src="/brand/echohoard-mark.png"
-            alt=""
-            width={36}
-            height={36}
-          />
           <span>EchoHoard</span>
         </a>
 
