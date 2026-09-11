@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { readFileSync } from "node:fs";
-import { OidcAuth, SessionStore } from "../../application/auth";
+import { OidcAuth } from "../../application/auth";
 import { ArchiveHealthService } from "../../application/health-reads";
 import { ArchiveReadService, CursorCodec } from "../../application/reads";
 import { ArchiveStatisticsService } from "../../application/statistics";
@@ -12,6 +12,7 @@ import {
 } from "../../infrastructure/db/prisma-persistence";
 import { PrismaMediaDelivery } from "../../infrastructure/db/media-delivery";
 import { HttpOidcProvider, PrismaPrincipalDirectory } from "../../infrastructure/auth/oidc";
+import { PrismaSessionStore } from "../../infrastructure/auth/sessions";
 import { WebAuthBoundary } from "./auth";
 import type { WebRuntime } from "./runtime";
 
@@ -44,7 +45,7 @@ function createProductionWebRuntime(): WebRuntime {
           settings.OIDC_REDIRECT_URI,
         ),
         new PrismaPrincipalDirectory(prisma, settings.OIDC_ISSUER, settings.OIDC_ARCHIVE_ID),
-        new SessionStore(),
+        new PrismaSessionStore(prisma),
       ),
       "/",
     ),

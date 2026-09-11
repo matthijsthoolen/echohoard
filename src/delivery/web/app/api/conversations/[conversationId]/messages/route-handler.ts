@@ -28,7 +28,7 @@ export function createMessagesRoute({ getRuntime }: MessageRouteDependencies) {
   return async function GET(request: Request, context: MessageRouteContext): Promise<Response> {
     const runtime = getRuntime();
     if (!runtime) return unauthorized();
-    const principal = runtime.auth.principalForRequest(request);
+    const principal = await runtime.auth.principalForRequest(request);
     if (!principal) return unauthorized();
 
     const { conversationId } = await context.params;

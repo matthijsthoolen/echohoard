@@ -33,26 +33,11 @@ export interface PrincipalDirectory {
   }): Promise<readonly PendingIdentity[]>;
 }
 
-export class SessionStore {
-  private readonly sessions = new Map<string, { principal: ArchivePrincipal; expiresAt: number }>();
-  constructor(private readonly ttlSeconds = 3600) {}
-  create(principal: ArchivePrincipal): string {
-    const token = crypto.randomUUID();
-    this.sessions.set(token, { principal, expiresAt: Date.now() + this.ttlSeconds * 1000 });
-    return token;
-  }
-  get(token: string | undefined): ArchivePrincipal | null {
-    if (!token) return null;
-    const session = this.sessions.get(token);
-    if (!session || session.expiresAt <= Date.now()) {
-      this.sessions.delete(token);
-      return null;
-    }
-    return session.principal;
-  }
-  revoke(token: string | undefined): void {
-    if (token) this.sessions.delete(token);
-  }
+export interface SessionStore {
+  create(principal: ArchivePrincipal): Promise<string>;
+  get(token: string | undefined): Promise<ArchivePrincipal | null>;
+  revoke(token: string | undefined): Promise<void>;
+  cleanupExpired(limit: number): Promise<number>;
 }
 
 export class OidcAuth {
@@ -83,7 +68,9 @@ export class OidcAuth {
     )
       return null;
     const principal = await this.directory.findBySubject(claims.iss, claims.sub);
-    return principal ? this.sessions.create(principal) : null;
+    if (!principal) return null;
+    await this.sessions.cleanupExpired(100);
+    return this.sessions.create(principal);
   }
   async approveIdentity(
     principal: ArchivePrincipal,
@@ -107,21 +94,24 @@ export class OidcAuth {
       approverSubject: principal.subject,
     });
   }
-  validate(session: string | undefined, archiveId?: string): ArchivePrincipal | null {
-    const principal = this.sessions.get(session);
+  async validate(
+    session: string | undefined,
+    archiveId?: string,
+  ): Promise<ArchivePrincipal | null> {
+    const principal = await this.sessions.get(session);
     return principal && (!archiveId || principal.archiveId === archiveId) ? principal : null;
   }
-  logout(session: string | undefined): void {
-    this.sessions.revoke(session);
+  async logout(session: string | undefined): Promise<void> {
+    await this.sessions.revoke(session);
   }
 }
 
-export const requireArchivePrincipal = (
+export const requireArchivePrincipal = async (
   auth: OidcAuth,
   session: string | undefined,
   archiveId: string,
-): ArchivePrincipal => {
-  const principal = auth.validate(session, archiveId);
+): Promise<ArchivePrincipal> => {
+  const principal = await auth.validate(session, archiveId);
   if (!principal) throw new Error("archive access denied");
   return principal;
 };

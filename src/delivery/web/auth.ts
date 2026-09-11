@@ -78,26 +78,26 @@ export class WebAuthBoundary {
     });
   }
 
-  logout(request: Request): AuthResponse {
-    this.auth.logout(readCookie(request, SESSION_COOKIE));
+  async logout(request: Request): Promise<AuthResponse> {
+    await this.auth.logout(readCookie(request, SESSION_COOKIE));
     return new Response(null, {
       status: 302,
       headers: { Location: "/", "Set-Cookie": clearCookie(SESSION_COOKIE) },
     });
   }
 
-  principal(request: Request, archiveId: string): ArchivePrincipal | null {
+  async principal(request: Request, archiveId: string): Promise<ArchivePrincipal | null> {
     return this.auth.validate(readCookie(request, SESSION_COOKIE), archiveId);
   }
 
   /** Resolve the session principal before selecting any archive-scoped read.
    * Callers must use the returned archiveId rather than trusting request input. */
-  principalForRequest(request: Request): ArchivePrincipal | null {
+  async principalForRequest(request: Request): Promise<ArchivePrincipal | null> {
     return this.auth.validate(readCookie(request, SESSION_COOKIE));
   }
 
   async approveIdentity(request: Request, issuer: string, subject: string): Promise<AuthResponse> {
-    const principal = this.principalForRequest(request);
+    const principal = await this.principalForRequest(request);
     if (!principal || principal.role !== "admin")
       return Response.json({ error: "Administrator approval required" }, { status: 403 });
     const approved = await this.auth.approveIdentity(principal, issuer, subject);
@@ -107,7 +107,7 @@ export class WebAuthBoundary {
   }
 
   async pendingIdentities(request: Request): Promise<AuthResponse> {
-    const principal = this.principalForRequest(request);
+    const principal = await this.principalForRequest(request);
     if (!principal || principal.role !== "admin")
       return Response.json({ error: "Administrator approval required" }, { status: 403 });
     const identities = await this.auth.listPendingIdentities(principal);

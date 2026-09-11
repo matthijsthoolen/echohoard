@@ -1,8 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { OidcAuth, SessionStore, type OidcProvider } from "../../application/auth.js";
+import {
+  OidcAuth,
+  type ArchivePrincipal,
+  type OidcProvider,
+  type SessionStore,
+} from "../../application/auth.js";
 import { WebAuthBoundary, SESSION_COOKIE, STATE_COOKIE, NONCE_COOKIE } from "./auth.js";
 
 const principal = { userId: "u1", archiveId: "a1", subject: "owner", issuer: "https://issuer" };
+class MemorySessionStore implements SessionStore {
+  private readonly values = new Map<string, ArchivePrincipal>();
+  async create(value: ArchivePrincipal): Promise<string> {
+    const token = crypto.randomUUID();
+    this.values.set(token, value);
+    return token;
+  }
+  async get(token: string | undefined): Promise<ArchivePrincipal | null> {
+    return token ? (this.values.get(token) ?? null) : null;
+  }
+  async revoke(token: string | undefined): Promise<void> {
+    if (token) this.values.delete(token);
+  }
+  async cleanupExpired(): Promise<number> {
+    return 0;
+  }
+}
 function setup(claims?: Record<string, unknown>) {
   let seenState = "";
   let seenNonce = "";
@@ -21,7 +43,7 @@ function setup(claims?: Record<string, unknown>) {
       findBySubject: async (issuer, subject) =>
         issuer === principal.issuer && subject === principal.subject ? principal : null,
     },
-    new SessionStore(),
+    new MemorySessionStore(),
   );
   return {
     web: new WebAuthBoundary(auth, "/"),
@@ -51,7 +73,10 @@ describe("OIDC web boundary", () => {
     expect(callback.status).toBe(302);
     const session = cookie(callback, SESSION_COOKIE);
     expect(
-      app.web.principal(new Request("http://localhost", { headers: { cookie: session } }), "a1"),
+      await app.web.principal(
+        new Request("http://localhost", { headers: { cookie: session } }),
+        "a1",
+      ),
     ).toEqual(principal);
   });
   it("denies state, nonce, unknown subjects and cross-archive access", async () => {
@@ -71,8 +96,8 @@ describe("OIDC web boundary", () => {
       }),
     );
     expect(badNonce.status).toBe(403);
-    expect(app.web.principal(new Request("http://localhost"), "a1")).toBeNull();
-    expect(app.web.principal(new Request("http://localhost"), "a2")).toBeNull();
+    await expect(app.web.principal(new Request("http://localhost"), "a1")).resolves.toBeNull();
+    await expect(app.web.principal(new Request("http://localhost"), "a2")).resolves.toBeNull();
   });
   it("expires and logs out sessions", async () => {
     const app = setup();
@@ -86,9 +111,9 @@ describe("OIDC web boundary", () => {
     );
     const session = cookie(callback, SESSION_COOKIE);
     const request = new Request("http://localhost", { headers: { cookie: session } });
-    expect(app.web.principal(request, "a1")).not.toBeNull();
-    const logout = app.web.logout(request);
+    await expect(app.web.principal(request, "a1")).resolves.not.toBeNull();
+    const logout = await app.web.logout(request);
     expect(logout.status).toBe(302);
-    expect(app.web.principal(request, "a1")).toBeNull();
+    await expect(app.web.principal(request, "a1")).resolves.toBeNull();
   });
 });

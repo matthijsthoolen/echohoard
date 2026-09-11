@@ -37,6 +37,7 @@ model Archive {
   attachments        Attachment[]
   messageAttachments MessageAttachment[]
   admittedIdentities ArchiveIdentity[]
+  authSessions        AuthSession[]
 
   @@unique([id, userId])
   @@unique([userId, name])
@@ -56,6 +57,24 @@ model ArchiveIdentity {
 
   @@unique([archiveId, issuer, subject])
   @@index([archiveId, role])
+}
+
+model AuthSession {
+  id         String   @id @default(uuid()) @db.Uuid
+  tokenHash  String   @unique @db.VarChar(64)
+  userId     String   @db.Uuid
+  archiveId  String   @db.Uuid
+  issuer     String
+  subject    String
+  role       String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  archive    Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, revokedAt])
+  @@index([archiveId, expiresAt])
 }
 
 model Source {

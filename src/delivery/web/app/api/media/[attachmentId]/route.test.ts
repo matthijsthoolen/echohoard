@@ -38,7 +38,7 @@ function routeFor(attachment: MediaDeliveryAttachment | null, archiveId = princi
   );
   const route = createMediaRoute({
     getRuntime: () => ({
-      auth: { principalForRequest: () => principal },
+      auth: { principalForRequest: async () => principal },
       media: { find },
     }),
   });

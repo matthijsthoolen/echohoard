@@ -58,7 +58,7 @@ export function createMediaRoute({ getRuntime }: MediaRouteDependencies) {
   return async function GET(request: Request, context: MediaRouteContext): Promise<Response> {
     const runtime = getRuntime();
     if (!runtime) return unauthorized();
-    const principal = runtime.auth.principalForRequest(request);
+    const principal = await runtime.auth.principalForRequest(request);
     if (!principal) return unauthorized();
 
     const { attachmentId } = await context.params;

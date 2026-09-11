@@ -10,7 +10,7 @@ const principal: ArchivePrincipal = {
   subject: "owner",
 };
 
-const auth = { principalForRequest: () => principal };
+const auth = { principalForRequest: async () => principal };
 
 describe("conversation route", () => {
   it("denies requests without a configured runtime or principal", async () => {
@@ -20,7 +20,7 @@ describe("conversation route", () => {
     const denied = createConversationsRoute({
       getRuntime: () =>
         ({
-          auth: { principalForRequest: () => null },
+          auth: { principalForRequest: async () => null },
           reads: { listConversations: vi.fn() },
         }) as never,
     });

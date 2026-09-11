@@ -29,11 +29,11 @@ export function createCallbackRoute({ getRuntime }: AuthRouteDependencies) {
 }
 
 export function createLogoutRoute({ getRuntime }: AuthRouteDependencies) {
-  return function GET(request: Request): Response {
+  return async function GET(request: Request): Promise<Response> {
     const runtime = getRuntime();
     if (!runtime) return unavailable();
     try {
-      return runtime.auth.logout(request);
+      return await runtime.auth.logout(request);
     } catch {
       return unavailable();
     }

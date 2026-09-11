@@ -18,7 +18,7 @@ export function createHealthRoute({ getRuntime }: HealthRouteDependencies) {
   return async function GET(request: Request): Promise<Response> {
     const runtime = getRuntime();
     if (!runtime) return unauthorized();
-    const principal = runtime.auth.principalForRequest(request);
+    const principal = await runtime.auth.principalForRequest(request);
     if (!principal) return unauthorized();
     if (!runtime.reads.archiveHealth) return unavailable();
     try {

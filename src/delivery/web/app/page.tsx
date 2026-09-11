@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 export default async function Home() {
   const runtime = getWebRuntime();
   const cookieHeader = (await cookies()).toString();
-  const principal = runtime?.auth.principalForRequest(
+  const principal = await runtime?.auth.principalForRequest(
     new Request("http://echohoard.local/", {
       headers: { cookie: cookieHeader },
     }),

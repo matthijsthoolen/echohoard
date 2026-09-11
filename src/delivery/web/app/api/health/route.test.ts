@@ -34,7 +34,7 @@ describe("archive health route", () => {
     const route = createHealthRoute({ getRuntime: () => undefined });
     expect((await route(new Request("http://localhost/api/health"))).status).toBe(401);
     const denied = createHealthRoute({
-      getRuntime: () => ({ auth: { principalForRequest: () => null }, reads: {} }),
+      getRuntime: () => ({ auth: { principalForRequest: async () => null }, reads: {} }),
     });
     expect((await denied(new Request("http://localhost/api/health"))).status).toBe(401);
   });
@@ -43,7 +43,7 @@ describe("archive health route", () => {
     const archiveHealth = vi.fn(async () => health);
     const route = createHealthRoute({
       getRuntime: () => ({
-        auth: { principalForRequest: () => principal },
+        auth: { principalForRequest: async () => principal },
         reads: { archiveHealth },
       }),
     });
@@ -59,7 +59,7 @@ describe("archive health route", () => {
   it("sanitizes service failures and reports an unwired service separately", async () => {
     const failed = createHealthRoute({
       getRuntime: () => ({
-        auth: { principalForRequest: () => principal },
+        auth: { principalForRequest: async () => principal },
         reads: {
           archiveHealth: vi.fn(async () => {
             throw new Error("secret /path message");
@@ -71,7 +71,7 @@ describe("archive health route", () => {
       error: "Archive health unavailable",
     });
     const unwired = createHealthRoute({
-      getRuntime: () => ({ auth: { principalForRequest: () => principal }, reads: {} }),
+      getRuntime: () => ({ auth: { principalForRequest: async () => principal }, reads: {} }),
     });
     expect((await unwired(new Request("http://localhost/api/health"))).status).toBe(503);
   });

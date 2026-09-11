@@ -9,7 +9,7 @@ const principal: ArchivePrincipal = {
   issuer: "https://issuer.example",
   subject: "owner",
 };
-const auth = { principalForRequest: () => principal };
+const auth = { principalForRequest: async () => principal };
 const results: readonly SearchResultRead[] = [
   { id: "message-1", kind: "message", score: 0.9, conversationId: "chat-1", sentAt: "2026-01-01" },
 ];
@@ -19,7 +19,10 @@ describe("search route", () => {
     const route = createSearchRoute({ getRuntime: () => undefined });
     expect((await route(new Request("http://localhost/api/search?q=secret"))).status).toBe(401);
     const denied = createSearchRoute({
-      getRuntime: () => ({ auth: { principalForRequest: () => null }, reads: { search: vi.fn() } }),
+      getRuntime: () => ({
+        auth: { principalForRequest: async () => null },
+        reads: { search: vi.fn() },
+      }),
     });
     expect((await denied(new Request("http://localhost/api/search"))).status).toBe(401);
   });
