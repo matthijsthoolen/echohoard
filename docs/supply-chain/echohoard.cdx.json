@@ -53,6 +53,15 @@
       "properties": [{ "name": "pnpm-integrity", "value": "sha512-E00PxBcalMfYO/TWnXobBVUai6eW/g5OsifWQsQDzJYm7yaY+IRLo7ZLsaefi0QkTpxfuhFcQ/w180i6kX3iJw==" }]
     },
     {
+      "type": "application",
+      "bom-ref": "pkg:npm/prisma@6.16.2",
+      "name": "prisma",
+      "version": "6.16.2",
+      "purl": "pkg:npm/prisma@6.16.2",
+      "licenses": [{ "license": { "id": "Apache-2.0" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-aRvldGE5UUJTtVmFiH3WfNFNiqFlAtePUxcI0UEGlnXCX7DqhiMT5TRYwncHFeA/Reca5W6ToXXyCMTeFPdSXA==" }]
+    },
+    {
       "type": "library",
       "bom-ref": "pkg:npm/next@15.5.3",
       "name": "next",
