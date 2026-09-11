@@ -6,7 +6,7 @@ import type {
   OidcClaims,
   OidcProvider,
   PrincipalDirectory,
-} from "../../application/auth.js";
+} from "../../application/auth";
 
 export async function readSecretFile(path: string): Promise<string> {
   const value = (await readFile(path, "utf8")).trim();

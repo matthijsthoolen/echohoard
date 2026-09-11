@@ -1,19 +1,19 @@
 import { PrismaClient } from "@prisma/client";
 import { readFileSync } from "node:fs";
-import { OidcAuth, SessionStore } from "../../application/auth.js";
-import { ArchiveHealthService } from "../../application/health-reads.js";
-import { ArchiveReadService, CursorCodec } from "../../application/reads.js";
-import { ArchiveStatisticsService } from "../../application/statistics.js";
-import { parseEnv } from "../../config/env.js";
+import { OidcAuth, SessionStore } from "../../application/auth";
+import { ArchiveHealthService } from "../../application/health-reads";
+import { ArchiveReadService, CursorCodec } from "../../application/reads";
+import { ArchiveStatisticsService } from "../../application/statistics";
+import { parseEnv } from "../../config/env";
 import {
   PrismaHealthReadPersistence,
   PrismaReadPersistence,
   PrismaStatisticsPersistence,
-} from "../../infrastructure/db/prisma-persistence.js";
-import { PrismaMediaDelivery } from "../../infrastructure/db/media-delivery.js";
-import { HttpOidcProvider, PrismaPrincipalDirectory } from "../../infrastructure/auth/oidc.js";
-import { WebAuthBoundary } from "./auth.js";
-import type { WebRuntime } from "./runtime.js";
+} from "../../infrastructure/db/prisma-persistence";
+import { PrismaMediaDelivery } from "../../infrastructure/db/media-delivery";
+import { HttpOidcProvider, PrismaPrincipalDirectory } from "../../infrastructure/auth/oidc";
+import { WebAuthBoundary } from "./auth";
+import type { WebRuntime } from "./runtime";
 
 let activeProductionRuntime: WebRuntime | undefined;
 export function productionWebRuntime(): WebRuntime {

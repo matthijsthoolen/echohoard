@@ -3,7 +3,7 @@ import type { ArchiveHealthRead } from "../../application/health-reads.js";
 import type { ArchiveStatisticsRead } from "../../application/statistics.js";
 import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
-import { productionWebRuntime } from "./composition.js";
+import { productionWebRuntime } from "./composition";
 
 export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages" | "search"> & {
   readonly archiveHealth?: (query: { readonly archiveId: string }) => Promise<ArchiveHealthRead>;

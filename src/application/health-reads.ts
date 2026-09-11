@@ -6,7 +6,7 @@ import {
   type HealthThresholds,
   type HealthState,
   type FreshnessState,
-} from "../domain/health.js";
+} from "../domain/health";
 
 /** The largest job history exposed by a health response. Health is a bounded
  * read and must not become an unbounded import-log endpoint. */

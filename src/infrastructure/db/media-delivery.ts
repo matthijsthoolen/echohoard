@@ -3,10 +3,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { PrismaClient } from "@prisma/client";
-import type {
-  MediaDeliveryAttachment,
-  MediaDeliveryPort,
-} from "../../application/media-delivery.js";
+import type { MediaDeliveryAttachment, MediaDeliveryPort } from "../../application/media-delivery";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 
