@@ -3,8 +3,14 @@ export type ArchivePrincipal = {
   archiveId: string;
   subject: string;
   issuer: string;
+  role?: "admin" | "member";
 };
 export type OidcClaims = { iss?: unknown; sub?: unknown; exp?: unknown; nonce?: unknown };
+export type PendingIdentity = Readonly<{
+  issuer: string;
+  subject: string;
+  createdAt: string;
+}>;
 
 export interface OidcProvider {
   authorizationUrl(state: string, nonce?: string, codeChallenge?: string): string;
@@ -13,6 +19,18 @@ export interface OidcProvider {
 
 export interface PrincipalDirectory {
   findBySubject(issuer: string, subject: string): Promise<ArchivePrincipal | null>;
+  approveIdentity?(input: {
+    archiveId: string;
+    approverIssuer: string;
+    approverSubject: string;
+    issuer: string;
+    subject: string;
+  }): Promise<boolean>;
+  listPendingIdentities?(input: {
+    archiveId: string;
+    approverIssuer: string;
+    approverSubject: string;
+  }): Promise<readonly PendingIdentity[]>;
 }
 
 export class SessionStore {
@@ -51,7 +69,12 @@ export class OidcAuth {
     expectedNonce?: string,
     codeVerifier?: string,
   ): Promise<string | null> {
-    const claims = await this.provider.exchange(code, expectedNonce, codeVerifier);
+    let claims: OidcClaims;
+    try {
+      claims = await this.provider.exchange(code, expectedNonce, codeVerifier);
+    } catch {
+      return null;
+    }
     if (
       typeof claims.iss !== "string" ||
       typeof claims.sub !== "string" ||
@@ -61,6 +84,28 @@ export class OidcAuth {
       return null;
     const principal = await this.directory.findBySubject(claims.iss, claims.sub);
     return principal ? this.sessions.create(principal) : null;
+  }
+  async approveIdentity(
+    principal: ArchivePrincipal,
+    issuer: string,
+    subject: string,
+  ): Promise<boolean> {
+    if (principal.role !== "admin" || !this.directory.approveIdentity) return false;
+    return this.directory.approveIdentity({
+      archiveId: principal.archiveId,
+      approverIssuer: principal.issuer,
+      approverSubject: principal.subject,
+      issuer,
+      subject,
+    });
+  }
+  async listPendingIdentities(principal: ArchivePrincipal): Promise<readonly PendingIdentity[]> {
+    if (principal.role !== "admin" || !this.directory.listPendingIdentities) return [];
+    return this.directory.listPendingIdentities({
+      archiveId: principal.archiveId,
+      approverIssuer: principal.issuer,
+      approverSubject: principal.subject,
+    });
   }
   validate(session: string | undefined, archiveId?: string): ArchivePrincipal | null {
     const principal = this.sessions.get(session);

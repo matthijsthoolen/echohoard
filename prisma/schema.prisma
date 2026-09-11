@@ -36,10 +36,26 @@ model Archive {
   reactions          Reaction[]
   attachments        Attachment[]
   messageAttachments MessageAttachment[]
+  admittedIdentities ArchiveIdentity[]
 
   @@unique([id, userId])
   @@unique([userId, name])
   @@index([userId])
+}
+
+model ArchiveIdentity {
+  id         String   @id @default(uuid()) @db.Uuid
+  archiveId  String   @db.Uuid
+  issuer     String
+  subject    String
+  role       String   @default("pending")
+  approvedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  archive    Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@unique([archiveId, issuer, subject])
+  @@index([archiveId, role])
 }
 
 model Source {

@@ -36,4 +36,57 @@ describe("OIDC archive principal", () => {
     good.auth.logout(token!);
     expect(good.auth.validate(token!)).toBeNull();
   });
+
+  it("fails closed when the verified-code exchange fails", async () => {
+    const { auth } = setup(async () => {
+      throw new Error("provider details must not escape");
+    });
+    expect(await auth.callback("code")).toBeNull();
+  });
+
+  it("allows only an admitted administrator to approve an identity", async () => {
+    let approval: Record<string, string> | undefined;
+    const sessions = new SessionStore();
+    const auth = new OidcAuth(
+      provider,
+      {
+        findBySubject: async () => ({
+          userId: "u1",
+          archiveId: "a1",
+          issuer: "https://fake",
+          subject: "admitted",
+          role: "admin",
+        }),
+        approveIdentity: async (input) => {
+          approval = input;
+          return true;
+        },
+      },
+      sessions,
+    );
+    const admin = (await auth.callback("code"))!;
+    expect(
+      await auth.approveIdentity(sessions.get(admin)!, "https://fake", "pending-subject"),
+    ).toBe(true);
+    expect(approval).toMatchObject({
+      archiveId: "a1",
+      approverIssuer: "https://fake",
+      approverSubject: "admitted",
+      issuer: "https://fake",
+      subject: "pending-subject",
+    });
+    expect(
+      await auth.approveIdentity(
+        {
+          userId: "u1",
+          archiveId: "a1",
+          issuer: "https://fake",
+          subject: "member",
+          role: "member",
+        },
+        "https://fake",
+        "other",
+      ),
+    ).toBe(false);
+  });
 });

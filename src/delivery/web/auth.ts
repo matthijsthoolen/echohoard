@@ -95,6 +95,24 @@ export class WebAuthBoundary {
   principalForRequest(request: Request): ArchivePrincipal | null {
     return this.auth.validate(readCookie(request, SESSION_COOKIE));
   }
+
+  async approveIdentity(request: Request, issuer: string, subject: string): Promise<AuthResponse> {
+    const principal = this.principalForRequest(request);
+    if (!principal || principal.role !== "admin")
+      return Response.json({ error: "Administrator approval required" }, { status: 403 });
+    const approved = await this.auth.approveIdentity(principal, issuer, subject);
+    return approved
+      ? Response.json({ approved: true }, { headers: { "Cache-Control": "no-store" } })
+      : Response.json({ error: "Identity approval denied" }, { status: 403 });
+  }
+
+  async pendingIdentities(request: Request): Promise<AuthResponse> {
+    const principal = this.principalForRequest(request);
+    if (!principal || principal.role !== "admin")
+      return Response.json({ error: "Administrator approval required" }, { status: 403 });
+    const identities = await this.auth.listPendingIdentities(principal);
+    return Response.json({ identities }, { headers: { "Cache-Control": "no-store" } });
+  }
 }
 
 export { NONCE_COOKIE, SESSION_COOKIE, STATE_COOKIE, VERIFIER_COOKIE };

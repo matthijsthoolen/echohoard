@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type {
   ArchivePrincipal,
   OidcClaims,
   OidcProvider,
+  PendingIdentity,
   PrincipalDirectory,
 } from "../../application/auth";
 
@@ -87,16 +88,131 @@ export class PrismaPrincipalDirectory implements PrincipalDirectory {
   public constructor(
     private readonly prisma: PrismaClient,
     private readonly configuredIssuer: string,
-    private readonly configuredSubject: string,
     private readonly configuredArchiveId: string,
   ) {}
   public async findBySubject(issuer: string, subject: string): Promise<ArchivePrincipal | null> {
-    if (issuer !== this.configuredIssuer || subject !== this.configuredSubject) return null;
-    const archive = await this.prisma.archive.findUnique({
-      where: { id: this.configuredArchiveId },
-      select: { id: true, userId: true },
+    if (issuer !== this.configuredIssuer || !subject) return null;
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockAdmission(tx);
+      const archive = await tx.archive.findUnique({
+        where: { id: this.configuredArchiveId },
+        select: { id: true, userId: true },
+      });
+      if (!archive) return null;
+      const existing = await tx.archiveIdentity.findUnique({
+        where: {
+          archiveId_issuer_subject: {
+            archiveId: archive.id,
+            issuer,
+            subject,
+          },
+        },
+        select: { role: true },
+      });
+      if (existing) {
+        return existing.role === "admin" || existing.role === "member"
+          ? principal(archive, issuer, subject, existing.role)
+          : null;
+      }
+      const admin = await tx.archiveIdentity.findFirst({
+        where: { archiveId: archive.id, role: "admin" },
+        select: { id: true },
+      });
+      const role = admin ? "pending" : "admin";
+      await tx.archiveIdentity.create({
+        data: { archiveId: archive.id, issuer, subject, role },
+      });
+      return role === "admin" ? principal(archive, issuer, subject, role) : null;
     });
-    if (!archive) return null;
-    return { userId: archive.userId, archiveId: archive.id, issuer, subject };
   }
+
+  public async approveIdentity(input: {
+    archiveId: string;
+    approverIssuer: string;
+    approverSubject: string;
+    issuer: string;
+    subject: string;
+  }): Promise<boolean> {
+    if (
+      input.archiveId !== this.configuredArchiveId ||
+      input.approverIssuer !== this.configuredIssuer ||
+      input.issuer !== this.configuredIssuer ||
+      !input.approverSubject ||
+      !input.subject
+    )
+      return false;
+    return this.prisma.$transaction(async (tx) => {
+      await this.lockAdmission(tx);
+      const approver = await tx.archiveIdentity.findUnique({
+        where: {
+          archiveId_issuer_subject: {
+            archiveId: input.archiveId,
+            issuer: input.approverIssuer,
+            subject: input.approverSubject,
+          },
+        },
+        select: { role: true },
+      });
+      if (approver?.role !== "admin") return false;
+      const target = await tx.archiveIdentity.updateMany({
+        where: {
+          archiveId: input.archiveId,
+          issuer: input.issuer,
+          subject: input.subject,
+          role: "pending",
+        },
+        data: { role: "member", approvedAt: new Date() },
+      });
+      return target.count === 1;
+    });
+  }
+
+  public async listPendingIdentities(input: {
+    archiveId: string;
+    approverIssuer: string;
+    approverSubject: string;
+  }): Promise<readonly PendingIdentity[]> {
+    if (
+      input.archiveId !== this.configuredArchiveId ||
+      input.approverIssuer !== this.configuredIssuer ||
+      !input.approverSubject
+    )
+      return [];
+    const approver = await this.prisma.archiveIdentity.findUnique({
+      where: {
+        archiveId_issuer_subject: {
+          archiveId: input.archiveId,
+          issuer: input.approverIssuer,
+          subject: input.approverSubject,
+        },
+      },
+      select: { role: true },
+    });
+    if (approver?.role !== "admin") return [];
+    const pending = await this.prisma.archiveIdentity.findMany({
+      where: { archiveId: input.archiveId, role: "pending" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { issuer: true, subject: true, createdAt: true },
+    });
+    return pending.map((identity) => ({
+      issuer: identity.issuer,
+      subject: identity.subject,
+      createdAt: identity.createdAt.toISOString(),
+    }));
+  }
+
+  private async lockAdmission(tx: Prisma.TransactionClient): Promise<void> {
+    await tx.$executeRaw(
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.configuredArchiveId}, 0))`,
+    );
+  }
+}
+
+function principal(
+  archive: { readonly id: string; readonly userId: string },
+  issuer: string,
+  subject: string,
+  role: "admin" | "member",
+): ArchivePrincipal {
+  return { userId: archive.userId, archiveId: archive.id, issuer, subject, role };
 }
