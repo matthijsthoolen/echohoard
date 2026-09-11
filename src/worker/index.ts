@@ -2,6 +2,7 @@ import { env } from "../config/env.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { installSignalHandlers, WorkerLifecycle } from "./lifecycle.js";
+import { createProductionWorker } from "./composition.js";
 
 if (env.ECHOHOARD_ROLE !== "worker") throw new Error("ECHOHOARD_ROLE must be worker");
 
@@ -11,12 +12,18 @@ const writeStatus = async (status: "ready" | "draining" | "stopped"): Promise<vo
   await writeFile(statusFile, `${status}\n`, { mode: 0o600 });
 };
 
+const production = createProductionWorker(env, undefined, (message) => {
+  console.error(`EchoHoard ${message}`);
+});
+
 const lifecycle = new WorkerLifecycle({
-  onStart: () => writeStatus("ready"),
+  onStart: async () => {
+    await production.worker.start();
+    await writeStatus("ready");
+  },
   onDrain: async () => {
     await writeStatus("draining");
-    // The queue runner is intentionally not force-killed here. Its database
-    // lease heartbeat stops with the process and the next worker requeues it.
+    await production.worker.stop();
     await writeStatus("stopped");
   },
 });
@@ -25,15 +32,11 @@ async function main(): Promise<void> {
   installSignalHandlers(lifecycle);
   await lifecycle.start();
   console.log("EchoHoard worker ready");
-  // The composition root is a long-lived service. Keep the event loop alive
-  // until a termination signal reaches the lifecycle handlers; without this
-  // await, a worker with no queue work exits immediately after startup.
-  // A pending Promise alone does not keep Node's event loop alive, so use a
-  // low-frequency handle for the idle queue runner. Signal handlers call
-  // process.exit after draining and terminate this handle with the process.
-  setInterval(() => undefined, 60_000);
 }
 
 main().catch(() => {
+  // Do not include the caught error: subprocess diagnostics can contain keys,
+  // decrypted content, source paths, or other hostile archive data.
+  console.error("EchoHoard worker failed");
   process.exitCode = 1;
 });

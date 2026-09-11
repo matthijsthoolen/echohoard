@@ -45,9 +45,11 @@ for (const file of await walk(src)) {
   const from = relative(src, file).split(sep)[0];
   for (const specifier of imports(await readFile(file, "utf8"))) {
     const to = destination(join(file, ".."), specifier);
-    // The web composition root is the one intentional assembly point where
-    // delivery combines infrastructure adapters with application services.
-    const compositionRoot = from === "delivery" && file.endsWith(`${sep}composition.ts`);
+    // Composition roots are intentional assembly points where a role combines
+    // infrastructure adapters with application services. Runtime modules
+    // remain constrained to the dependency direction above.
+    const compositionRoot =
+      ["delivery", "worker"].includes(from) && file.endsWith(`${sep}composition.ts`);
     if (
       to &&
       to !== from &&

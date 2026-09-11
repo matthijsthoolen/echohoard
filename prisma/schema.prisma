@@ -95,6 +95,10 @@ model ImportJob {
   adapterVersion String?
   outcome        Json?
   errorClass     String?
+  retryable      Boolean?
+  leaseId        String?
+  leaseOwner     String?
+  leaseExpiresAt DateTime?
   startedAt      DateTime?
   finishedAt     DateTime?
   createdAt      DateTime  @default(now())
@@ -105,6 +109,7 @@ model ImportJob {
 
   @@unique([archiveId, id])
   @@index([archiveId, status])
+  @@index([status, leaseExpiresAt])
   @@index([archiveId, createdAt])
 }
 
