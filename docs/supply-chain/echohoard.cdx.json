@@ -90,6 +90,15 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:npm/jose@6.2.12",
+      "name": "jose",
+      "version": "6.2.12",
+      "purl": "pkg:npm/jose@6.2.12",
+      "licenses": [{ "license": { "id": "MIT" } }],
+      "properties": [{ "name": "pnpm-integrity", "value": "sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==" }]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:pypi/wa-crypt-tools@0.1.0",
       "name": "wa-crypt-tools",
       "version": "0.1.0",
