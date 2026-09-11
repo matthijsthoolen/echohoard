@@ -1,6 +1,6 @@
 {
   "name": "echohoard",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "packageManager": "pnpm@9.15.5",
   "engines": {
