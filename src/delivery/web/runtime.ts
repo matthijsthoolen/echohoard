@@ -3,6 +3,7 @@ import type { ArchiveHealthRead } from "../../application/health-reads.js";
 import type { ArchiveStatisticsRead } from "../../application/statistics.js";
 import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
+import { productionWebRuntime } from "./composition.js";
 
 export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages" | "search"> & {
   readonly archiveHealth?: (query: { readonly archiveId: string }) => Promise<ArchiveHealthRead>;
@@ -29,5 +30,12 @@ export function configureWebRuntime(runtime: WebRuntime): void {
 }
 
 export function getWebRuntime(): WebRuntime | undefined {
+  if (!activeRuntime) {
+    try {
+      configureWebRuntime(productionWebRuntime());
+    } catch {
+      return undefined;
+    }
+  }
   return activeRuntime;
 }
