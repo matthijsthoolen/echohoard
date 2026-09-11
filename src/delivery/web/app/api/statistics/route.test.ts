@@ -29,7 +29,7 @@ describe("archive statistics route", () => {
     expect(
       (
         await createStatisticsRoute({
-          getRuntime: () => ({ auth: { principalForRequest: () => principal }, reads: {} }),
+          getRuntime: () => ({ auth: { principalForRequest: async () => principal }, reads: {} }),
         })(new Request("http://x"))
       ).status,
     ).toBe(503);
@@ -39,7 +39,7 @@ describe("archive statistics route", () => {
     const archiveStatistics = vi.fn(async () => statistics);
     const response = await createStatisticsRoute({
       getRuntime: () => ({
-        auth: { principalForRequest: () => principal },
+        auth: { principalForRequest: async () => principal },
         reads: { archiveStatistics },
       }),
     })(new Request("http://x/api/statistics?archiveId=other"));
@@ -52,7 +52,7 @@ describe("archive statistics route", () => {
   it("redacts service failures", async () => {
     const response = await createStatisticsRoute({
       getRuntime: () => ({
-        auth: { principalForRequest: () => principal },
+        auth: { principalForRequest: async () => principal },
         reads: {
           archiveStatistics: vi.fn(async () => {
             throw new Error("secret /path and message body");

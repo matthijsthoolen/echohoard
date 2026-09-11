@@ -9,7 +9,7 @@ const principal: ArchivePrincipal = {
   issuer: "https://issuer.example",
   subject: "owner",
 };
-const auth = { principalForRequest: () => principal };
+const auth = { principalForRequest: async () => principal };
 const row: MessageRead = {
   id: "message-1",
   conversationId: "conversation-1",
@@ -41,7 +41,7 @@ describe("message timeline route", () => {
   it("denies anonymous access without revealing the conversation", async () => {
     const route = createMessagesRoute({
       getRuntime: () => ({
-        auth: { principalForRequest: () => null },
+        auth: { principalForRequest: async () => null },
         reads: { listMessages: vi.fn() },
       }),
     });

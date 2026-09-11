@@ -4,7 +4,7 @@ import type {
   PersistencePorts,
   PersistenceRecord,
   PersistenceInput,
-} from "../../application/persistence.js";
+} from "../../application/persistence";
 import type {
   ReadConversationPersistenceQuery,
   ReadMessagePersistenceQuery,
@@ -20,14 +20,14 @@ import type {
   MediaPersistenceRow,
   TimelinePersistenceRow,
   SearchMediaType,
-} from "../../application/reads.js";
+} from "../../application/reads";
 import type {
   HealthJobPersistenceRow,
   HealthPersistenceEvidence,
   HealthReadPersistencePort,
   HealthSnapshotPersistenceRow,
-} from "../../application/health-reads.js";
-import { MAX_ACTIVITY_BUCKETS } from "../../application/statistics.js";
+} from "../../application/health-reads";
+import { MAX_ACTIVITY_BUCKETS } from "../../application/statistics";
 import type {
   StatisticsBucket,
   StatisticsMediaAvailability,
@@ -35,7 +35,7 @@ import type {
   StatisticsPersistenceInput,
   StatisticsPersistencePort,
   StatisticsPersistenceResult,
-} from "../../application/statistics.js";
+} from "../../application/statistics";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -937,7 +937,7 @@ function countValue(value: bigint | number): number {
 function safeNumber(value: bigint | number | null): number | undefined {
   if (value === null) return undefined;
   if (typeof value === "bigint") {
-    if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
+    if (value < BigInt(0) || value > BigInt(Number.MAX_SAFE_INTEGER)) return undefined;
     return Number(value);
   }
   return Number.isSafeInteger(value) && value >= 0 ? value : undefined;

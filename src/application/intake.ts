@@ -17,6 +17,8 @@ export type JobFailureClass =
 
 export interface JobStorePort {
   get(jobId: ImportJobId): Promise<ImportJob | null>;
+  /** Return a bounded batch of jobs which may be attempted by this worker. */
+  listEligible?(limit: number): Promise<readonly ImportJobId[]>;
   markLeased(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void>;
   markDecrypting(jobId: ImportJobId, updatedAt: Date): Promise<void>;
   markCompleted(jobId: ImportJobId, updatedAt: Date): Promise<void>;
@@ -75,16 +77,17 @@ export class DecryptJobRunner {
 
   public async run(jobId: ImportJobId): Promise<boolean> {
     const job = await this.jobs.get(jobId);
-    if (!job || (job.status !== "queued" && job.status !== "failed")) return false;
+    if (!job || (job.status !== "queued" && (job.status !== "failed" || job.retryable === false)))
+      return false;
     const expiresAt = this.expiry();
     const lease = await this.leases.acquire(jobId, this.options.owner, expiresAt);
     if (!lease) return false;
-    await this.jobs.markLeased(jobId, lease, this.clock.now());
     let workPath = "";
     const heartbeat = setInterval(() => {
       void this.leases.renew(lease, this.expiry());
     }, this.options.heartbeatMilliseconds);
     try {
+      await this.jobs.markLeased(jobId, lease, this.clock.now());
       const prepared = await this.work.prepare(jobId);
       workPath = prepared.path;
       await this.jobs.markDecrypting(jobId, this.clock.now());

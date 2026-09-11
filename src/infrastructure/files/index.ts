@@ -8,7 +8,8 @@ import type {
   SnapshotManifest,
   SnapshotStorePort,
 } from "../../application/echohoard.js";
-import type { ImportJobId, JobWorkPort } from "../../application/intake.js";
+import type { ImportJobId } from "../../application/echohoard.js";
+import type { JobWorkPort } from "../../application/intake.js";
 
 /** Disposable plaintext workspace. Job ids are treated as opaque path
  * components and rejected unless they are safe UUID-like identifiers. */

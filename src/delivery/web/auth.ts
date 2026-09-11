@@ -1,7 +1,9 @@
 import { OidcAuth, type ArchivePrincipal } from "../../application/auth.js";
+import { createHash } from "node:crypto";
 
 const STATE_COOKIE = "echohoard_oidc_state";
 const NONCE_COOKIE = "echohoard_oidc_nonce";
+const VERIFIER_COOKIE = "echohoard_oidc_verifier";
 const SESSION_COOKIE = "echohoard_session";
 const cookieOptions = "Path=/; HttpOnly; SameSite=Lax; Secure";
 
@@ -9,6 +11,17 @@ export type AuthResponse = Response;
 
 function randomToken(): string {
   return crypto.randomUUID();
+}
+
+function pkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomToken() + randomToken();
+  const challenge = createHash("sha256")
+    .update(verifier)
+    .digest("base64")
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/u, "");
+  return { verifier, challenge };
 }
 
 function readCookie(request: Request, name: string): string | undefined {
@@ -33,12 +46,13 @@ export class WebAuthBoundary {
   login(): AuthResponse {
     const state = randomToken();
     const nonce = randomToken();
-    const location = this.auth.login(state, nonce);
+    const pkce = pkcePair();
+    const location = this.auth.login(state, nonce, pkce.challenge);
     return new Response(null, {
       status: 302,
       headers: {
         Location: location,
-        "Set-Cookie": `${STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions}; Max-Age=600, ${NONCE_COOKIE}=${encodeURIComponent(nonce)}; ${cookieOptions}; Max-Age=600`,
+        "Set-Cookie": `${STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions}; Max-Age=600, ${NONCE_COOKIE}=${encodeURIComponent(nonce)}; ${cookieOptions}; Max-Age=600, ${VERIFIER_COOKIE}=${encodeURIComponent(pkce.verifier)}; ${cookieOptions}; Max-Age=600`,
       },
     });
   }
@@ -49,37 +63,56 @@ export class WebAuthBoundary {
     const expectedState = readCookie(request, STATE_COOKIE);
     const code = url.searchParams.get("code");
     const nonce = readCookie(request, NONCE_COOKIE);
+    const verifier = readCookie(request, VERIFIER_COOKIE);
     if (!state || !expectedState || state !== expectedState || !code || !nonce) {
       return new Response("invalid oidc callback", { status: 400 });
     }
-    const session = await this.auth.callback(code, nonce);
+    const session = await this.auth.callback(code, nonce, verifier);
     if (!session) return new Response("access denied", { status: 403 });
     return new Response(null, {
       status: 302,
       headers: {
         Location: this.callbackUrl,
-        "Set-Cookie": `${SESSION_COOKIE}=${encodeURIComponent(session)}; ${cookieOptions}; Max-Age=3600, ${clearCookie(STATE_COOKIE)}, ${clearCookie(NONCE_COOKIE)}`,
+        "Set-Cookie": `${SESSION_COOKIE}=${encodeURIComponent(session)}; ${cookieOptions}; Max-Age=3600, ${clearCookie(STATE_COOKIE)}, ${clearCookie(NONCE_COOKIE)}, ${clearCookie(VERIFIER_COOKIE)}`,
       },
     });
   }
 
-  logout(request: Request): AuthResponse {
-    this.auth.logout(readCookie(request, SESSION_COOKIE));
+  async logout(request: Request): Promise<AuthResponse> {
+    await this.auth.logout(readCookie(request, SESSION_COOKIE));
     return new Response(null, {
       status: 302,
       headers: { Location: "/", "Set-Cookie": clearCookie(SESSION_COOKIE) },
     });
   }
 
-  principal(request: Request, archiveId: string): ArchivePrincipal | null {
+  async principal(request: Request, archiveId: string): Promise<ArchivePrincipal | null> {
     return this.auth.validate(readCookie(request, SESSION_COOKIE), archiveId);
   }
 
   /** Resolve the session principal before selecting any archive-scoped read.
    * Callers must use the returned archiveId rather than trusting request input. */
-  principalForRequest(request: Request): ArchivePrincipal | null {
+  async principalForRequest(request: Request): Promise<ArchivePrincipal | null> {
     return this.auth.validate(readCookie(request, SESSION_COOKIE));
+  }
+
+  async approveIdentity(request: Request, issuer: string, subject: string): Promise<AuthResponse> {
+    const principal = await this.principalForRequest(request);
+    if (!principal || principal.role !== "admin")
+      return Response.json({ error: "Administrator approval required" }, { status: 403 });
+    const approved = await this.auth.approveIdentity(principal, issuer, subject);
+    return approved
+      ? Response.json({ approved: true }, { headers: { "Cache-Control": "no-store" } })
+      : Response.json({ error: "Identity approval denied" }, { status: 403 });
+  }
+
+  async pendingIdentities(request: Request): Promise<AuthResponse> {
+    const principal = await this.principalForRequest(request);
+    if (!principal || principal.role !== "admin")
+      return Response.json({ error: "Administrator approval required" }, { status: 403 });
+    const identities = await this.auth.listPendingIdentities(principal);
+    return Response.json({ identities }, { headers: { "Cache-Control": "no-store" } });
   }
 }
 
-export { NONCE_COOKIE, SESSION_COOKIE, STATE_COOKIE };
+export { NONCE_COOKIE, SESSION_COOKIE, STATE_COOKIE, VERIFIER_COOKIE };

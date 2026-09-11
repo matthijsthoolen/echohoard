@@ -34,12 +34,14 @@ services:
       NODE_ENV: production
       ECHOHOARD_ROLE: worker
       ECHOHOARD_WORKER_STATUS_FILE: /work/worker.status
+      ECHOHOARD_WORKER_KEY_FILE: /run/echohoard/secrets/worker.key
       DATABASE_URL: ${ECHOHOARD_DATABASE_URL:-postgresql://echohoard:replace-me@postgres.example.invalid:5432/echohoard?schema=public}
     volumes:
       - echohoard-data:/data
       - echohoard-work:/work
     secrets:
-      - worker_key
+      - source: worker_key
+        target: /run/echohoard/secrets/worker.key
     healthcheck:
       test: ["CMD-SHELL", 'test "$(cat /work/worker.status 2>/dev/null)" = ready']
       interval: 10s

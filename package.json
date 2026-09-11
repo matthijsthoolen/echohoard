@@ -1,6 +1,6 @@
 {
   "name": "echohoard",
-  "version": "0.1.1",
+  "version": "0.1.6",
   "private": true,
   "packageManager": "pnpm@9.15.5",
   "engines": {
@@ -39,6 +39,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "@prisma/client": "6.16.2",
+    "jose": "6.2.12",
     "next": "15.5.3",
     "react": "19.1.1",
     "react-dom": "19.1.1",

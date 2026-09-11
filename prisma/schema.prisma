@@ -36,10 +36,45 @@ model Archive {
   reactions          Reaction[]
   attachments        Attachment[]
   messageAttachments MessageAttachment[]
+  admittedIdentities ArchiveIdentity[]
+  authSessions        AuthSession[]
 
   @@unique([id, userId])
   @@unique([userId, name])
   @@index([userId])
+}
+
+model ArchiveIdentity {
+  id         String   @id @default(uuid()) @db.Uuid
+  archiveId  String   @db.Uuid
+  issuer     String
+  subject    String
+  role       String   @default("pending")
+  approvedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  archive    Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@unique([archiveId, issuer, subject])
+  @@index([archiveId, role])
+}
+
+model AuthSession {
+  id         String   @id @default(uuid()) @db.Uuid
+  tokenHash  String   @unique @db.VarChar(64)
+  userId     String   @db.Uuid
+  archiveId  String   @db.Uuid
+  issuer     String
+  subject    String
+  role       String?
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  archive    Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt, revokedAt])
+  @@index([archiveId, expiresAt])
 }
 
 model Source {
@@ -95,6 +130,10 @@ model ImportJob {
   adapterVersion String?
   outcome        Json?
   errorClass     String?
+  retryable      Boolean?
+  leaseId        String?
+  leaseOwner     String?
+  leaseExpiresAt DateTime?
   startedAt      DateTime?
   finishedAt     DateTime?
   createdAt      DateTime  @default(now())
@@ -105,6 +144,7 @@ model ImportJob {
 
   @@unique([archiveId, id])
   @@index([archiveId, status])
+  @@index([status, leaseExpiresAt])
   @@index([archiveId, createdAt])
 }
 

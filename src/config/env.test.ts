@@ -30,10 +30,12 @@ describe("environment configuration", () => {
   });
 
   it("does not copy unrelated process variables into the runtime config", () => {
-    expect(parseEnv({ UNRELATED: "ignored" })).toEqual({
+    const parsed = parseEnv({ UNRELATED: "ignored" });
+    expect(parsed).toMatchObject({
       NODE_ENV: "development",
       ECHOHOARD_ROLE: "web",
     });
+    expect("UNRELATED" in parsed).toBe(false);
   });
 
   it("rejects malformed OIDC URLs and empty identifiers", () => {

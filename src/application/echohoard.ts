@@ -38,9 +38,12 @@ export interface Snapshot {
 
 export interface ImportJob {
   readonly id: ImportJobId;
-  readonly snapshotId: SnapshotId;
+  readonly snapshotId?: SnapshotId;
   readonly status: ImportJobStatus;
   readonly lease?: LeaseId;
+  /** Whether a failed job may be retried. Undefined is retained for
+   * compatibility with jobs created before retry metadata was persisted. */
+  readonly retryable?: boolean;
   readonly updatedAt: Date;
 }
 

@@ -46,17 +46,31 @@ const main = async () => {
       output += chunk;
     });
     await waitForApp();
-    const pageResponse = await fetch(`${baseUrl}/`);
-    if (pageResponse.status !== 200) throw new Error(`page status was ${pageResponse.status}`);
-    const html = await pageResponse.text();
-    for (const marker of [
-      "EchoHoard",
-      'aria-label="Primary navigation"',
-      'href="#main-content"',
-      "Loading conversations",
-    ]) {
-      if (!html.includes(marker)) throw new Error(`production page missing ${marker}`);
+    const pageResponse = await fetch(`${baseUrl}/`, { redirect: "manual" });
+    if (pageResponse.status !== 307)
+      throw new Error(`anonymous page status was ${pageResponse.status}`);
+    if (pageResponse.headers.get("location") !== "/auth/login")
+      throw new Error(`anonymous page location was ${pageResponse.headers.get("location")}`);
+    const loginResponse = await fetch(`${baseUrl}/auth/login`);
+    if (loginResponse.status !== 200)
+      throw new Error(`login page status was ${loginResponse.status}`);
+    const loginHtml = await loginResponse.text();
+    for (const marker of ["Welcome back", "Continue with Authentik", "/auth/login/start"]) {
+      if (!loginHtml.includes(marker)) throw new Error(`login page missing ${marker}`);
     }
+    for (const asset of [
+      "/brand/echohoard-large.png",
+      "/brand/echohoard-wordmark.png",
+      "/brand/echohoard-mark.png",
+      "/icon.png",
+    ]) {
+      const assetResponse = await fetch(`${baseUrl}${asset}`);
+      if (assetResponse.status !== 200)
+        throw new Error(`brand asset ${asset} status was ${assetResponse.status}`);
+    }
+    const loginStartResponse = await fetch(`${baseUrl}/auth/login/start`, { redirect: "manual" });
+    if (![302, 503].includes(loginStartResponse.status))
+      throw new Error(`login start returned ${loginStartResponse.status}`);
     const anonymousConversations = await fetch(`${baseUrl}/api/conversations`);
     if (anonymousConversations.status !== 401)
       throw new Error(`anonymous conversation status was ${anonymousConversations.status}`);
