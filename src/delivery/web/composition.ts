@@ -27,7 +27,8 @@ function createProductionWebRuntime(): WebRuntime {
     !settings.OIDC_CLIENT_ID ||
     !settings.OIDC_REDIRECT_URI ||
     !settings.OIDC_SUBJECT ||
-    !settings.OIDC_CLIENT_SECRET_FILE
+    !settings.OIDC_CLIENT_SECRET_FILE ||
+    !settings.OIDC_ARCHIVE_ID
   )
     throw new Error("OIDC web configuration is incomplete");
   const secret = readFileSync(settings.OIDC_CLIENT_SECRET_FILE, "utf8").trim();
@@ -43,7 +44,12 @@ function createProductionWebRuntime(): WebRuntime {
           secret,
           settings.OIDC_REDIRECT_URI,
         ),
-        new PrismaPrincipalDirectory(prisma, settings.OIDC_ISSUER, settings.OIDC_SUBJECT),
+        new PrismaPrincipalDirectory(
+          prisma,
+          settings.OIDC_ISSUER,
+          settings.OIDC_SUBJECT,
+          settings.OIDC_ARCHIVE_ID,
+        ),
         new SessionStore(),
       ),
       "/",

@@ -7,6 +7,7 @@ const schema = z.object({
   OIDC_CLIENT_ID: z.string().min(1).optional(),
   OIDC_REDIRECT_URI: z.string().url().optional(),
   OIDC_SUBJECT: z.string().min(1).optional(),
+  OIDC_ARCHIVE_ID: z.string().uuid().optional(),
   OIDC_CLIENT_SECRET_FILE: z.string().min(1).optional(),
 });
 
@@ -27,6 +28,7 @@ export function parseEnv(input: NodeJS.ProcessEnv = process.env): EchohoardEnv {
     OIDC_CLIENT_ID: input.OIDC_CLIENT_ID ?? input.ECHOHOARD_OIDC_CLIENT_ID,
     OIDC_REDIRECT_URI: input.OIDC_REDIRECT_URI ?? input.ECHOHOARD_OIDC_REDIRECT_URI,
     OIDC_SUBJECT: input.OIDC_SUBJECT ?? input.ECHOHOARD_OIDC_SUBJECT,
+    OIDC_ARCHIVE_ID: input.OIDC_ARCHIVE_ID ?? input.ECHOHOARD_OIDC_ARCHIVE_ID,
     OIDC_CLIENT_SECRET_FILE:
       input.OIDC_CLIENT_SECRET_FILE ?? input.ECHOHOARD_OIDC_CLIENT_SECRET_FILE,
   });

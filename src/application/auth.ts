@@ -7,8 +7,8 @@ export type ArchivePrincipal = {
 export type OidcClaims = { iss?: unknown; sub?: unknown; exp?: unknown; nonce?: unknown };
 
 export interface OidcProvider {
-  authorizationUrl(state: string, nonce?: string): string;
-  exchange(code: string, nonce?: string): Promise<OidcClaims>;
+  authorizationUrl(state: string, nonce?: string, codeChallenge?: string): string;
+  exchange(code: string, nonce?: string, codeVerifier?: string): Promise<OidcClaims>;
 }
 
 export interface PrincipalDirectory {
@@ -43,11 +43,15 @@ export class OidcAuth {
     private readonly directory: PrincipalDirectory,
     private readonly sessions: SessionStore,
   ) {}
-  login(state: string, nonce?: string): string {
-    return this.provider.authorizationUrl(state, nonce);
+  login(state: string, nonce?: string, codeChallenge?: string): string {
+    return this.provider.authorizationUrl(state, nonce, codeChallenge);
   }
-  async callback(code: string, expectedNonce?: string): Promise<string | null> {
-    const claims = await this.provider.exchange(code);
+  async callback(
+    code: string,
+    expectedNonce?: string,
+    codeVerifier?: string,
+  ): Promise<string | null> {
+    const claims = await this.provider.exchange(code, expectedNonce, codeVerifier);
     if (
       typeof claims.iss !== "string" ||
       typeof claims.sub !== "string" ||
