@@ -179,4 +179,20 @@ Create a short ADR before changing any of these:
 - coverage thresholds;
 - introduction of another persistent service.
 
+## Planned V1.1 and V2 extension boundary
+
+EH-13 separates immutable observations from materialized archive state before real-data acceptance:
+
+```text
+owned WhatsApp account
+  +-- backup source -> snapshot -> import job --+
+  +-- live sidecar -> durable event receipt ----+--> typed observations
+                                                   -> materialized messages/media
+source conversation ------------------------------> unified presentation conversation
+```
+
+`wacli` is a planned replaceable sidecar, not a domain, UI, search, or MCP dependency. It may authenticate and follow-sync through fixed operations, but EchoHoard consumes only an allowlisted signed event contract. The application never exposes general `wacli` or WhatsApp mutation commands.
+
+Import exclusion changes observation eligibility and rematerializes derived state; it never deletes a Source, Snapshot, ImportJob, or observation. WhatsApp revoke/delete state, owner soft-delete state, UI privacy, and MCP disclosure are independent policies. The owner-only purge CLI can reach only live normalized rows, derived transcripts, and unreferenced EchoHoard CAS bytes; immutable snapshot and external backup paths remain outside its runtime namespace.
+
 An ADR records context, decision, consequences, migration, and verification. It is not required for ordinary implementation choices inside the established boundaries.

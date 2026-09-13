@@ -7,7 +7,8 @@ Verified 2026-09-09. Re-check versions, licenses, and interfaces when implementi
 | [ElDavoo/wa-crypt-tools](https://github.com/ElDavoo/wa-crypt-tools) | Pinned crypt12/14/15 decryption dependency; V1 requires crypt15 | Invoke through a bounded Python adapter. GPL-3.0 license and redistributed-image obligations must be honored. Do not copy cryptography into TypeScript. |
 | [B16f00t/whapa](https://github.com/B16f00t/whapa) | Schema research, message-type catalogue, and validation oracle | Do not make its reports/CSV the archive contract. Do not copy code until the exact file license is reviewed. Compare synthetic fixture counts and behaviors. |
 | [pedroschott/whatmcp](https://github.com/pedroschott/whatmcp) | Design reference for durable archive identity, idempotency, bounded retrieval, conversation windows, and MCP safety | V1 may adopt concepts, not source. Semantic windows are deferred. Re-check license before copying any implementation. |
-| [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) | Reference for linked-device ingestion and the MCP prompt-injection risk | No runtime dependency in V1. Live ingestion and all write/send tools are deferred. MIT-licensed code still requires attribution if reused later. |
+| [openclaw/wacli](https://github.com/openclaw/wacli) | Preferred V2 linked-device sidecar baseline; continuous sync, named accounts, signed webhooks, deletion metadata, and media recovery | Pin and wrap behind an EchoHoard event adapter. Never expose its send/edit/delete/react/chat-management/general CLI surface or query its SQLite schema from EchoHoard. MIT license. |
+| [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) | Reference for linked-device ingestion and the MCP prompt-injection risk | Do not use as the EchoHoard runtime: it mixes ingestion, storage, MCP, and sending that EchoHoard owns separately. MIT-licensed code still requires attribution if reused. |
 | [imbue-ai/datalib](https://github.com/imbue-ai/datalib) | Reference for source-adapter boundaries and non-root crypt15 acquisition | No runtime dependency required. WhatsApp is EchoHoard source adapter 1, not its permanent domain boundary. Re-check license before copying. |
 | [Immich](https://github.com/immich-app/immich) | Future read-only media correlation target | Never share physical ownership or query its database. Use supported APIs and hashes only in a later feature. |
 
@@ -33,7 +34,7 @@ Before adding or changing a WhatsApp schema adapter:
 ## Concepts deliberately deferred
 
 - WhatMCP-style conversation windows and hybrid semantic search;
-- `whatsmeow` live history and current-day buffering;
+- direct `whatsmeow` integration; V2 first uses a replaceable pinned `wacli` sidecar;
 - Datalib-style additional personal-data providers;
 - Whapa merge/carving/report generation;
 - Immich correlation and deep links.

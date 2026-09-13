@@ -4,18 +4,20 @@
 
 Before implementation, read these files in order:
 
-1. `docs/FEATURE.md`
+1. `docs/FEATURE.md`, plus `docs/V2_FEATURE.md` for an `EHV2-*` assignment
 2. `docs/ARCHITECTURE.md`
 3. `docs/TASK_GRAPH.md`
-4. the assigned `docs/tasks/EH-*.md`
-5. `docs/UPSTREAM.md` when touching WhatsApp formats, decryption, media, or MCP
+4. the owning feature contract in `docs/tasks/EH-*.md`
+5. the assigned leaf story in `docs/stories/EH-*.md`
+6. `docs/UPSTREAM.md` when touching WhatsApp formats, decryption, media, or MCP
 
-The task files are written for fresh-context agents. Do not rely on the planning conversation or use phrases such as "as discussed" in code or documentation.
+Only leaf stories are implementation assignments. The feature files are tracking contracts and must not be implemented as one work package. Story contracts are written for fresh-context agents; do not rely on the planning conversation or use phrases such as "as discussed" in code or documentation.
 
 ## Scope discipline
 
-- Implement only the assigned task and its declared prerequisites.
-- Do not pull deferred AI, live WhatsApp, OCR, transcription, export, restore-to-phone, or Immich integration into V1.
+- Implement only the assigned leaf story and its declared prerequisites.
+- Stop and split or escalate if the assigned story still requires an unstated product or architecture decision; do not silently widen it to the whole owning feature.
+- Do not pull live WhatsApp, transcription, recovery UI, or other V2 behavior into a V1/EH task unless its explicit assignment is EH-13. Do not pull OCR, export, restore-to-phone, or Immich integration into either initiative without a new accepted contract.
 - Prefer small vertical slices. Do not create new services, queues, stores, or frameworks without an accepted ADR.
 - If a WhatsApp schema is unknown, fail the archive processing visibly and preserve the source; never guess silently.
 
@@ -47,7 +49,7 @@ The task files are written for fresh-context agents. Do not rely on the planning
 
 ## Git
 
-- Commit finished work as one logical unit using Conventional Commits.
+- Commit each finished leaf story as one logical unit using Conventional Commits.
 - Do not bundle unrelated changes.
 - Push to the configured upstream unless the task explicitly says otherwise.
 - Never commit secrets or personal archive data.

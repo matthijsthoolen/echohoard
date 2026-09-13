@@ -145,6 +145,10 @@ As the owner of a large personal WhatsApp history, I want EchoHoard to preserve 
 
 The grilling budget was intentionally exhausted. One non-blocking publication decision remains: choose the public repository license before inviting outside contributions. `GPL-3.0-only` is the recommended default because the distributed image invokes the GPL-3.0 `wa-crypt-tools` component and the project is a self-hosted archive, but the application can retain a different compatible license if the subprocess/package boundary and redistribution obligations are documented.
 
+## V1.1 compatibility prerequisite
+
+Before EH-12 imports the owner's real archive, EH-13 must add explicit owned WhatsApp accounts, source-versus-unified conversation identity, typed per-import observations, reversible import exclusion/rematerialization, and append-preserving source-deletion tombstones. This changes the persistence foundation without adding the deferred V2 interfaces. The complete V2 product contract is in [`docs/V2_FEATURE.md`](V2_FEATURE.md).
+
 ## Repositories
 
 - `/home/matthijs/projects/echohoard` — public reusable application, tests, container image, and generic deployment contract.
