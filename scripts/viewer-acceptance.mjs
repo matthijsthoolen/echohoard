@@ -7,6 +7,12 @@ const targets = [
   { name: "desktop", width: 1440, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ];
+const loginMarkers = ['class="auth-page"', "Welcome back", "Continue with Authentik"];
+const dashboardMarkers = [
+  'aria-label="Primary navigation"',
+  'aria-label="Conversation navigation"',
+  'id="main-content"',
+];
 
 const run = (args) =>
   new Promise((resolve, reject) => {
@@ -78,8 +84,36 @@ function runAccessibilityAudit(html, target) {
   }
 }
 
-async function fetchPage(path, headers = {}) {
-  const response = await fetch(`${baseUrl}${path}`, { headers });
+function isLoginPage(html) {
+  return loginMarkers.every((marker) => html.includes(marker));
+}
+
+function isDashboardPage(html) {
+  return dashboardMarkers.every((marker) => html.includes(marker));
+}
+
+function runLoginAccessibilityAudit(html, target) {
+  assert(isLoginPage(html), `${target.name}: expected Authentik login page`);
+  assert(
+    (html.match(/<main\b/gu) ?? []).length === 1,
+    `${target.name}: login page expected one main landmark`,
+  );
+  assert(
+    [...html.matchAll(/<h([1-6])\b/gu)].map((match) => Number(match[1]))[0] === 1,
+    `${target.name}: login page must start with an h1`,
+  );
+  assert(html.includes('href="/auth/login/start"'), `${target.name}: login action is missing`);
+  assert(!isDashboardPage(html), `${target.name}: login page matched dashboard markers`);
+}
+
+function runDashboardAccessibilityAudit(html, target) {
+  assert(!isLoginPage(html), `${target.name}: login HTML was mistaken for the dashboard`);
+  assert(isDashboardPage(html), `${target.name}: authenticated response was not the dashboard`);
+  runAccessibilityAudit(html, target);
+}
+
+async function fetchPage(path, headers = {}, options = {}) {
+  const response = await fetch(`${baseUrl}${path}`, { ...options, headers });
   return { response, body: await response.text() };
 }
 
@@ -96,14 +130,74 @@ async function waitForApp() {
   throw new Error("viewer production app did not become ready");
 }
 
+async function runAnonymousWorkflow() {
+  const redirect = await fetchPage("/", { Accept: "text/html" }, { redirect: "manual" });
+  assert(redirect.response.status === 307, `anonymous home returned ${redirect.response.status}`);
+  assert(
+    redirect.response.headers.get("location") === "/auth/login",
+    `anonymous home location was ${redirect.response.headers.get("location")}`,
+  );
+
+  for (const target of targets) {
+    const login = await fetchPage("/auth/login", {
+      Accept: "text/html",
+      "X-EchoHoard-Test-Viewport": `${target.width}x${target.height}`,
+    });
+    assert(
+      login.response.status === 200,
+      `${target.name}: login page returned ${login.response.status}`,
+    );
+    runLoginAccessibilityAudit(login.body, target);
+  }
+
+  for (const path of [
+    "/api/conversations",
+    "/api/search?q=synthetic",
+    "/api/media/synthetic-attachment",
+  ]) {
+    const { response } = await fetchPage(path);
+    assert(response.status === 401, `anonymous ${path} returned ${response.status}`);
+  }
+  console.log("Anonymous workflow: redirect, login page, and API denial passed");
+}
+
 async function runAuthenticatedWorkflow() {
-  const cookie = process.env.ECHOHOARD_VIEWER_SESSION_COOKIE;
+  const cookie = process.env.ECHOHOARD_VIEWER_SESSION_COOKIE?.trim();
   if (!cookie) {
     console.log(
-      "Authenticated workflow: skipped (set ECHOHOARD_VIEWER_SESSION_COOKIE for live acceptance)",
+      "Authenticated workflow: skipped (no controlled ECHOHOARD_VIEWER_SESSION_COOKIE supplied; anonymous mode only)",
     );
     return;
   }
+
+  const dashboard = await fetchPage(
+    "/",
+    { Cookie: cookie, Accept: "text/html" },
+    { redirect: "manual" },
+  );
+  assert(
+    dashboard.response.status === 200,
+    `controlled session was not accepted; dashboard returned ${dashboard.response.status}`,
+  );
+  runDashboardAccessibilityAudit(dashboard.body, { name: "authenticated dashboard" });
+
+  for (const target of targets) {
+    const page = await fetchPage(
+      "/",
+      {
+        Cookie: cookie,
+        Accept: "text/html",
+        "X-EchoHoard-Test-Viewport": `${target.width}x${target.height}`,
+      },
+      { redirect: "manual" },
+    );
+    assert(
+      page.response.status === 200,
+      `${target.name}: authenticated home returned ${page.response.status}`,
+    );
+    runDashboardAccessibilityAudit(page.body, target);
+  }
+
   const headers = { Cookie: cookie, Accept: "application/json" };
   const conversations = await fetchPage("/api/conversations?limit=50", headers);
   assert(
@@ -152,15 +246,8 @@ try {
     });
     await waitForApp();
   }
-  for (const target of targets) {
-    const { response, body } = await fetchPage("/", {
-      Accept: "text/html",
-      "X-EchoHoard-Test-Viewport": `${target.width}x${target.height}`,
-    });
-    assert(response.status === 200, `${target.name}: home page returned ${response.status}`);
-    runAccessibilityAudit(body, target);
-  }
-  const pageSource = await fetchPage("/");
+  await runAnonymousWorkflow();
+  const pageSource = await fetchPage("/auth/login");
   const stylesheets = [
     ...pageSource.body.matchAll(/<link[^>]+rel=["']stylesheet["'][^>]+href=["']([^"']+)["']/giu),
   ].map((match) => match[1]);
@@ -178,14 +265,6 @@ try {
     "responsive stylesheet missing mobile media query",
   );
   assert(css.includes(".mobile-nav"), "responsive stylesheet missing .mobile-nav");
-  for (const path of [
-    "/api/conversations",
-    "/api/search?q=synthetic",
-    "/api/media/synthetic-attachment",
-  ]) {
-    const { response } = await fetchPage(path);
-    assert(response.status === 401, `anonymous ${path} returned ${response.status}`);
-  }
   await runAuthenticatedWorkflow();
   console.log(
     "Viewer acceptance seam passed: accessibility, target-width shell, and auth boundaries",
