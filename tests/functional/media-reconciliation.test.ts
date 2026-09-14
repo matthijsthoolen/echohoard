@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ImportAttachmentRecord, ImportRecord } from "../../src/application/text-import.js";
 import { PrismaTextSnapshotImporter } from "../../src/infrastructure/db/text-import.js";
 import { LocalMediaCasStore } from "../../src/infrastructure/files/media-cas.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -23,6 +24,7 @@ describe("PostgreSQL media availability reconciliation", () => {
     const archiveId = randomUUID();
     await prisma.user.create({ data: { id: userId } });
     await prisma.archive.create({ data: { id: archiveId, userId, name: archiveId } });
+    const ownedAccountId = await createFixtureOwnedAccount(prisma, archiveId);
     const conversationId = randomUUID();
     const messageIds = [randomUUID(), randomUUID()];
     await prisma.conversation.create({
@@ -47,6 +49,7 @@ describe("PostgreSQL media availability reconciliation", () => {
       data: {
         id: sourceId,
         archiveId,
+        ownedAccountId,
         kind: "whatsapp",
         stableKey: "android",
         sha256: "a".repeat(64),
@@ -56,9 +59,11 @@ describe("PostgreSQL media availability reconciliation", () => {
       [firstSnapshotId, firstJobId, "b".repeat(64)],
       [secondSnapshotId, secondJobId, "c".repeat(64)],
     ] as const) {
-      await prisma.snapshot.create({ data: { id: snapshotId, archiveId, sourceId, sha256 } });
+      await prisma.snapshot.create({
+        data: { id: snapshotId, archiveId, ownedAccountId, sourceId, sha256 },
+      });
       await prisma.importJob.create({
-        data: { id: jobId, archiveId, sourceId, snapshotId, status: "queued" },
+        data: { id: jobId, archiveId, ownedAccountId, sourceId, snapshotId, status: "queued" },
       });
     }
 
@@ -182,6 +187,7 @@ describe("PostgreSQL media availability reconciliation", () => {
       const sourceId = randomUUID();
       const snapshotId = randomUUID();
       const jobId = randomUUID();
+      const ownedAccountId = await createFixtureOwnedAccount(prisma, archiveId);
       await prisma.conversation.create({
         data: { id: conversationId, archiveId, kind: "direct", stableKey: "chat" },
       });
@@ -198,16 +204,23 @@ describe("PostgreSQL media availability reconciliation", () => {
         data: {
           id: sourceId,
           archiveId,
+          ownedAccountId,
           kind: "whatsapp",
           stableKey: "source",
           sha256: `${index}`.repeat(64),
         },
       });
       await prisma.snapshot.create({
-        data: { id: snapshotId, archiveId, sourceId, sha256: `${index + 1}`.repeat(64) },
+        data: {
+          id: snapshotId,
+          archiveId,
+          ownedAccountId,
+          sourceId,
+          sha256: `${index + 1}`.repeat(64),
+        },
       });
       await prisma.importJob.create({
-        data: { id: jobId, archiveId, sourceId, snapshotId, status: "queued" },
+        data: { id: jobId, archiveId, ownedAccountId, sourceId, snapshotId, status: "queued" },
       });
       await importer.import({
         archiveId,

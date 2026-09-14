@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPrismaPersistence } from "../../src/infrastructure/db/prisma-persistence.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -16,8 +17,10 @@ describe("archive-scoped persistence ports", () => {
     await ports.users.create(userId, { id: userId });
     await ports.archives.create(archiveIds[0], { id: archiveIds[0], userId, name: "one" });
     await ports.archives.create(archiveIds[1], { id: archiveIds[1], userId, name: "two" });
+    const accountId = await createFixtureOwnedAccount(prisma, archiveIds[0]);
     await ports.sources.create(archiveIds[0], {
       id: randomUUID(),
+      ownedAccountId: accountId,
       kind: "whatsapp",
       stableKey: "backup",
       sha256: "a".repeat(64),
@@ -39,5 +42,10 @@ describe("archive-scoped persistence ports", () => {
 
   it("exposes every modeled aggregate through an archive-scoped port", () => {
     for (const port of Object.values(ports)) expect(port.list).toBeTypeOf("function");
+  });
+
+  it("exposes owned accounts through an archive-scoped port", async () => {
+    expect(await ports.ownedAccounts.list(archiveIds[0])).toHaveLength(1);
+    expect(await ports.ownedAccounts.list(archiveIds[1])).toHaveLength(0);
   });
 });

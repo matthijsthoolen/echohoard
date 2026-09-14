@@ -58,6 +58,13 @@ describe("PostgreSQL private MCP read traversal", () => {
         { id: otherArchiveId, userId, name: "mcp-two" },
       ],
     });
+    await prisma.ownedAccount.create({
+      data: {
+        archiveId,
+        accountKey: "synthetic-mcp-account-key",
+        displayLabel: "synthetic-mcp-account-label",
+      },
+    });
     await prisma.person.createMany({
       data: [
         { id: personOneId, archiveId, displayName: "Alex" },
@@ -182,6 +189,8 @@ describe("PostgreSQL private MCP read traversal", () => {
     expect(auditRecords.every((record) => record.status === "ok")).toBe(true);
     expect(JSON.stringify(auditRecords)).not.toContain("hostile source text");
     expect(JSON.stringify(auditRecords)).not.toContain("synthetic-mcp-token");
+    expect(JSON.stringify(calls)).not.toContain("synthetic-mcp-account-key");
+    expect(JSON.stringify(calls)).not.toContain("synthetic-mcp-account-label");
 
     const extra = await call("tools/call", {
       name: "read_everything",

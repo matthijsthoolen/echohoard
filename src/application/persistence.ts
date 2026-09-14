@@ -12,6 +12,7 @@ export interface ArchiveScopedPort<T extends PersistenceRecord = PersistenceReco
 
 export interface UserPort extends ArchiveScopedPort {}
 export interface ArchivePort extends ArchiveScopedPort {}
+export interface OwnedAccountPort extends ArchiveScopedPort {}
 export interface SourcePort extends ArchiveScopedPort {}
 export interface SnapshotPort extends ArchiveScopedPort {}
 export interface ImportJobPort extends ArchiveScopedPort {}
@@ -27,6 +28,7 @@ export interface MessageAttachmentPort extends ArchiveScopedPort {}
 export interface PersistencePorts {
   users: UserPort;
   archives: ArchivePort;
+  ownedAccounts: OwnedAccountPort;
   sources: SourcePort;
   snapshots: SnapshotPort;
   importJobs: ImportJobPort;

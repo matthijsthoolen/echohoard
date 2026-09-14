@@ -13,6 +13,7 @@ import { createMediaRoute } from "../../src/delivery/web/app/api/media/[attachme
 import { PrismaMediaDelivery } from "../../src/infrastructure/db/media-delivery.js";
 import { PrismaTextSnapshotImporter } from "../../src/infrastructure/db/text-import.js";
 import { LocalMediaCasStore } from "../../src/infrastructure/files/media-cas.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -72,10 +73,12 @@ describe("composed rich-message and media acceptance", () => {
     await prisma.$connect();
     await prisma.user.create({ data: { id: userId } });
     await prisma.archive.create({ data: { id: archiveId, userId, name: "Synthetic rich media" } });
+    const ownedAccountId = await createFixtureOwnedAccount(prisma, archiveId);
     await prisma.source.create({
       data: {
         id: sourceId,
         archiveId,
+        ownedAccountId,
         kind: "whatsapp",
         stableKey: "synthetic-android",
         sha256: "a".repeat(64),
@@ -83,14 +86,28 @@ describe("composed rich-message and media acceptance", () => {
     });
     await prisma.snapshot.createMany({
       data: [
-        { id: firstSnapshotId, archiveId, sourceId, sha256: "b".repeat(64) },
-        { id: secondSnapshotId, archiveId, sourceId, sha256: "c".repeat(64) },
+        { id: firstSnapshotId, archiveId, ownedAccountId, sourceId, sha256: "b".repeat(64) },
+        { id: secondSnapshotId, archiveId, ownedAccountId, sourceId, sha256: "c".repeat(64) },
       ],
     });
     await prisma.importJob.createMany({
       data: [
-        { id: firstJobId, archiveId, sourceId, snapshotId: firstSnapshotId, status: "queued" },
-        { id: secondJobId, archiveId, sourceId, snapshotId: secondSnapshotId, status: "queued" },
+        {
+          id: firstJobId,
+          archiveId,
+          ownedAccountId,
+          sourceId,
+          snapshotId: firstSnapshotId,
+          status: "queued",
+        },
+        {
+          id: secondJobId,
+          archiveId,
+          ownedAccountId,
+          sourceId,
+          snapshotId: secondSnapshotId,
+          status: "queued",
+        },
       ],
     });
     workRoot = await mkdtemp(join(tmpdir(), "echohoard-rich-media-functional-"));
