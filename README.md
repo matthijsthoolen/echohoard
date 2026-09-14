@@ -6,15 +6,17 @@ The code is intended to be public. Every deployment, secret, backup, and item of
 
 ## Status
 
-Planning is complete. Implementation has not started.
+V1 implementation and private deployment work are in progress. Remaining V1 acceptance, the required V1.1 compatibility foundation, and V2 are represented by the validated leaf-story graph below; a completed plan is not evidence that those leaves are implemented.
 
 - [Feature contract](docs/FEATURE.md)
+- [V2 initiative contract](docs/V2_FEATURE.md)
 - [Architecture and quality rules](docs/ARCHITECTURE.md)
-- [Validated task graph](docs/TASK_GRAPH.md)
+- [Design system and UX contracts](docs/DESIGN_SYSTEM.md)
+- [Validated initiative, feature, and story graph](docs/TASK_GRAPH.md)
 - [Upstream references](docs/UPSTREAM.md)
 - [Plane publication record](docs/PLANE.md)
 
-Implementation starts with [EH-01](docs/tasks/EH-01.md), which creates the application framework and its mandatory quality gates before product features are added.
+Implementation is assigned only through leaf stories. V1 uses `EH-xx-yy`; the required pre-real-data V1.1 foundation uses `EH-13-yy`; V2 uses `EHV2-xx-yy`. Feature/workstream records are trackers, not assignments to implement in one pass.
 
 ## Product boundary
 
@@ -35,4 +37,4 @@ This repository will contain the reusable public application, tests, container i
 
 ## Contributing
 
-Read [AGENTS.md](AGENTS.md) before changing the project. Work from one task contract in `docs/tasks/` and preserve its acceptance evidence.
+Read [AGENTS.md](AGENTS.md) before changing the project. Work from one leaf-story contract in `docs/stories/` and preserve its acceptance evidence.
