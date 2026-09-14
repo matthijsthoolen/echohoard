@@ -4,6 +4,7 @@ import type {
   PersistencePorts,
   PersistenceRecord,
   PersistenceInput,
+  ObservationPort,
 } from "../../application/persistence";
 import type {
   ReadConversationPersistenceQuery,
@@ -51,7 +52,7 @@ const asRecord = (value: unknown): PersistenceRecord => {
 
 class PrismaArchiveScopedAdapter implements ArchiveScopedPort {
   public constructor(
-    private readonly delegate: Delegate,
+    protected readonly delegate: Delegate,
     private readonly archiveField: string,
     private readonly createField: string | null = archiveField,
   ) {}
@@ -83,9 +84,35 @@ class PrismaArchiveScopedAdapter implements ArchiveScopedPort {
   }
 }
 
+class PrismaObservationAdapter extends PrismaArchiveScopedAdapter implements ObservationPort {
+  public constructor(
+    delegate: Delegate,
+    private readonly entityField: string,
+  ) {
+    super(delegate, "archiveId");
+  }
+
+  public async listForEntity(
+    archiveId: string,
+    entityId: string,
+    limit: number,
+  ): Promise<readonly PersistenceRecord[]> {
+    const boundedLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
+    const value = await this.delegate.findMany({
+      where: { archiveId, [this.entityField]: entityId },
+      orderBy: [{ observedAt: "asc" }, { observationKey: "asc" }],
+      take: boundedLimit,
+    } as never);
+    if (!Array.isArray(value)) throw new Error("Persistence adapter returned a non-list");
+    return value.map(asRecord);
+  }
+}
+
 export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts => {
   const scoped = (delegate: Delegate, field = "archiveId", createField: string | null = field) =>
     new PrismaArchiveScopedAdapter(delegate, field, createField);
+  const observations = (delegate: Delegate, entityField: string) =>
+    new PrismaObservationAdapter(delegate, entityField);
   return {
     users: scoped(prisma.user as unknown as Delegate, "id"),
     archives: scoped(prisma.archive as unknown as Delegate, "id", null),
@@ -103,6 +130,26 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     reactions: scoped(prisma.reaction as unknown as Delegate),
     attachments: scoped(prisma.attachment as unknown as Delegate),
     messageAttachments: scoped(prisma.messageAttachment as unknown as Delegate),
+    conversationObservations: observations(
+      prisma.conversationObservation as unknown as Delegate,
+      "sourceConversationId",
+    ),
+    messageObservations: observations(
+      prisma.messageObservation as unknown as Delegate,
+      "messageId",
+    ),
+    revisionObservations: observations(
+      prisma.revisionObservation as unknown as Delegate,
+      "revisionId",
+    ),
+    reactionObservations: observations(
+      prisma.reactionObservation as unknown as Delegate,
+      "reactionId",
+    ),
+    attachmentReferenceObservations: observations(
+      prisma.attachmentReferenceObservation as unknown as Delegate,
+      "messageAttachmentId",
+    ),
   };
 };
 

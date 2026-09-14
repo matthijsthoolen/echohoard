@@ -27,6 +27,15 @@ export interface ReactionPort extends ArchiveScopedPort {}
 export interface AttachmentPort extends ArchiveScopedPort {}
 export interface MessageAttachmentPort extends ArchiveScopedPort {}
 
+export interface ObservationPort extends ArchiveScopedPort {
+  /** Return a bounded provenance page for one typed normalized entity. */
+  listForEntity(
+    archiveId: ArchiveId,
+    entityId: string,
+    limit: number,
+  ): Promise<readonly PersistenceRecord[]>;
+}
+
 export interface PersistencePorts {
   users: UserPort;
   archives: ArchivePort;
@@ -44,4 +53,9 @@ export interface PersistencePorts {
   reactions: ReactionPort;
   attachments: AttachmentPort;
   messageAttachments: MessageAttachmentPort;
+  conversationObservations: ObservationPort;
+  messageObservations: ObservationPort;
+  revisionObservations: ObservationPort;
+  reactionObservations: ObservationPort;
+  attachmentReferenceObservations: ObservationPort;
 }
