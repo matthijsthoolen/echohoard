@@ -85,6 +85,7 @@ describe("PostgreSQL private MCP read traversal", () => {
         id: messageId,
         archiveId,
         conversationId,
+        sourceConversationId: null,
         senderId: personOneId,
         stableKey: "mcp-message",
         messageType: "text",

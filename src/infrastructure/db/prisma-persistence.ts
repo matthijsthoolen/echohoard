@@ -96,6 +96,8 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     people: scoped(prisma.person as unknown as Delegate),
     identities: scoped(prisma.identity as unknown as Delegate),
     conversations: scoped(prisma.conversation as unknown as Delegate),
+    unifiedConversations: scoped(prisma.conversation as unknown as Delegate),
+    sourceConversations: scoped(prisma.sourceConversation as unknown as Delegate),
     messages: scoped(prisma.message as unknown as Delegate),
     revisions: scoped(prisma.messageRevision as unknown as Delegate),
     reactions: scoped(prisma.reaction as unknown as Delegate),

@@ -96,6 +96,9 @@ export interface ImportAttachmentRecord {
 
 export interface TextSnapshotImportInput {
   readonly archiveId: string;
+  /** Opaque receiving account. V1 callers may omit this only when the archive
+   * has exactly one account; multi-account imports must identify it. */
+  readonly ownedAccountId?: string;
   readonly snapshotId: string;
   readonly importJobId: string;
   readonly observedAt: Date;

@@ -19,6 +19,8 @@ export interface ImportJobPort extends ArchiveScopedPort {}
 export interface PersonPort extends ArchiveScopedPort {}
 export interface IdentityPort extends ArchiveScopedPort {}
 export interface ConversationPort extends ArchiveScopedPort {}
+export interface UnifiedConversationPort extends ArchiveScopedPort {}
+export interface SourceConversationPort extends ArchiveScopedPort {}
 export interface MessagePort extends ArchiveScopedPort {}
 export interface RevisionPort extends ArchiveScopedPort {}
 export interface ReactionPort extends ArchiveScopedPort {}
@@ -35,6 +37,8 @@ export interface PersistencePorts {
   people: PersonPort;
   identities: IdentityPort;
   conversations: ConversationPort;
+  unifiedConversations: UnifiedConversationPort;
+  sourceConversations: SourceConversationPort;
   messages: MessagePort;
   revisions: RevisionPort;
   reactions: ReactionPort;
