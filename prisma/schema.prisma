@@ -18,27 +18,28 @@ model User {
 }
 
 model Archive {
-  id                 String                    @id @default(uuid()) @db.Uuid
-  userId             String                    @db.Uuid
-  name               String
-  createdAt          DateTime                  @default(now())
-  updatedAt          DateTime                  @updatedAt
-  user               User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sources            Source[]
-  snapshots          Snapshot[]
-  importJobs         ImportJob[]
-  ownedAccounts      OwnedAccount[]
-  people             Person[]
-  identities         Identity[]
-  conversations      Conversation[]
-  participants       ConversationParticipant[]
-  messages           Message[]
-  revisions          MessageRevision[]
-  reactions          Reaction[]
-  attachments        Attachment[]
-  messageAttachments MessageAttachment[]
-  admittedIdentities ArchiveIdentity[]
-  authSessions       AuthSession[]
+  id                  String                    @id @default(uuid()) @db.Uuid
+  userId              String                    @db.Uuid
+  name                String
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  user                User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sources             Source[]
+  snapshots           Snapshot[]
+  importJobs          ImportJob[]
+  ownedAccounts       OwnedAccount[]
+  people              Person[]
+  identities          Identity[]
+  conversations       Conversation[]
+  sourceConversations SourceConversation[]
+  participants        ConversationParticipant[]
+  messages            Message[]
+  revisions           MessageRevision[]
+  reactions           Reaction[]
+  attachments         Attachment[]
+  messageAttachments  MessageAttachment[]
+  admittedIdentities  ArchiveIdentity[]
+  authSessions        AuthSession[]
 
   @@unique([id, userId])
   @@unique([userId, name])
@@ -79,16 +80,17 @@ model AuthSession {
 }
 
 model OwnedAccount {
-  id           String      @id @default(uuid()) @db.Uuid
-  archiveId    String      @db.Uuid
-  accountKey   String
-  displayLabel String?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  archive      Archive     @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  sources      Source[]
-  snapshots    Snapshot[]
-  importJobs   ImportJob[]
+  id                  String               @id @default(uuid()) @db.Uuid
+  archiveId           String               @db.Uuid
+  accountKey          String
+  displayLabel        String?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  archive             Archive              @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  sources             Source[]
+  snapshots           Snapshot[]
+  importJobs          ImportJob[]
+  sourceConversations SourceConversation[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, accountKey])
@@ -209,69 +211,100 @@ model Identity {
 }
 
 model Conversation {
-  id           String                    @id @default(uuid()) @db.Uuid
-  archiveId    String                    @db.Uuid
-  kind         String
-  stableKey    String
-  title        String?
-  createdAt    DateTime                  @default(now())
-  updatedAt    DateTime                  @updatedAt
-  archive      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  participants ConversationParticipant[]
-  messages     Message[]
+  id                  String                    @id @default(uuid()) @db.Uuid
+  archiveId           String                    @db.Uuid
+  kind                String
+  stableKey           String
+  title               String?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  archive             Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  participants        ConversationParticipant[]
+  messages            Message[]
+  sourceConversations SourceConversation[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
   @@index([archiveId, kind])
 }
 
+/// Account-specific immutable chat identity. Conversation is the existing
+/// unified presentation aggregate and retains its V1 stable identifier.
+model SourceConversation {
+  id                    String                    @id @default(uuid()) @db.Uuid
+  archiveId             String                    @db.Uuid
+  ownedAccountId        String                    @db.Uuid
+  unifiedConversationId String                    @db.Uuid
+  sourceNamespace       String
+  sourceConversationKey String
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  archive               Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  ownedAccount          OwnedAccount              @relation(fields: [ownedAccountId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  unifiedConversation   Conversation              @relation(fields: [unifiedConversationId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  participants          ConversationParticipant[]
+  messages              Message[]
+
+  @@unique([archiveId, id])
+  @@unique([archiveId, ownedAccountId, sourceNamespace, sourceConversationKey])
+  @@unique([archiveId, id, unifiedConversationId])
+  @@unique([id, unifiedConversationId, archiveId])
+  @@index([archiveId, ownedAccountId])
+}
+
 model ConversationParticipant {
-  id             String       @id @default(uuid()) @db.Uuid
-  archiveId      String       @db.Uuid
-  conversationId String       @db.Uuid
-  personId       String       @db.Uuid
-  role           String?
-  joinedAt       DateTime?
-  leftAt         DateTime?
-  createdAt      DateTime     @default(now())
-  updatedAt      DateTime     @updatedAt
-  archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  conversation   Conversation @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  person         Person       @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  id                   String              @id @default(uuid()) @db.Uuid
+  archiveId            String              @db.Uuid
+  conversationId       String              @db.Uuid
+  sourceConversationId String?             @db.Uuid
+  personId             String              @db.Uuid
+  role                 String?
+  joinedAt             DateTime?
+  leftAt               DateTime?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  archive              Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation         Conversation        @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  sourceConversation   SourceConversation? @relation(fields: [sourceConversationId, conversationId, archiveId], references: [id, unifiedConversationId, archiveId], onDelete: Cascade)
+  person               Person              @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Cascade)
 
   @@unique([archiveId, id])
   @@unique([archiveId, conversationId, personId])
+  @@unique([archiveId, sourceConversationId, personId])
   @@index([archiveId, personId])
 }
 
 model Message {
-  id             String              @id @default(uuid()) @db.Uuid
-  archiveId      String              @db.Uuid
-  conversationId String              @db.Uuid
-  senderId       String?             @db.Uuid
-  replyToId      String?             @db.Uuid
-  stableKey      String
-  sourceType     String?
-  sourceKey      String?
-  messageType    String
-  body           String?
-  metadata       Json?
-  sentAt         DateTime?
-  firstSeenAt    DateTime            @default(now())
-  lastSeenAt     DateTime            @default(now())
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
-  archive        Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  conversation   Conversation        @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  sender         Person?             @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
-  replyTo        Message?            @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
-  replies        Message[]           @relation("MessageReplies")
-  revisions      MessageRevision[]
-  reactions      Reaction[]
-  attachments    MessageAttachment[]
+  id                   String              @id @default(uuid()) @db.Uuid
+  archiveId            String              @db.Uuid
+  conversationId       String              @db.Uuid
+  sourceConversationId String?             @db.Uuid
+  senderId             String?             @db.Uuid
+  replyToId            String?             @db.Uuid
+  stableKey            String
+  sourceType           String?
+  sourceKey            String?
+  messageType          String
+  body                 String?
+  metadata             Json?
+  sentAt               DateTime?
+  firstSeenAt          DateTime            @default(now())
+  lastSeenAt           DateTime            @default(now())
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  archive              Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation         Conversation        @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  sourceConversation   SourceConversation? @relation(fields: [sourceConversationId, conversationId, archiveId], references: [id, unifiedConversationId, archiveId], onDelete: Restrict)
+  sender               Person?             @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  replyTo              Message?            @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
+  replies              Message[]           @relation("MessageReplies")
+  revisions            MessageRevision[]
+  reactions            Reaction[]
+  attachments          MessageAttachment[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, conversationId, id])
+  @@unique([archiveId, sourceConversationId, id])
   @@unique([archiveId, stableKey])
   @@index([archiveId, conversationId, sentAt])
   @@index([archiveId, senderId])

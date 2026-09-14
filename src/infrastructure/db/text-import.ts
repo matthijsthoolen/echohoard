@@ -23,7 +23,17 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
       const people = new Map<string, string>();
       const identities = new Map<string, string>();
       const conversations = new Map<string, string>();
+      const sourceConversations = new Map<string, string>();
       const messages = new Map<string, string>();
+      const accounts = await tx.ownedAccount.findMany({
+        where: { archiveId: input.archiveId },
+        select: { id: true },
+        orderBy: { id: "asc" },
+      });
+      const ownedAccountId =
+        input.ownedAccountId ?? (accounts.length === 1 ? accounts[0].id : undefined);
+      if (!ownedAccountId || !accounts.some((account) => account.id === ownedAccountId))
+        throw new Error("Text snapshot import requires an account in the archive scope");
       for (const record of input.records) {
         if (record.kind === "person") {
           const existing = await tx.person.upsert({
@@ -100,17 +110,41 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             update: { kind: record.conversationKind, title: record.title },
           });
           conversations.set(record.stableKey, existing.id);
+          const sourceConversation = await tx.sourceConversation.upsert({
+            where: {
+              archiveId_ownedAccountId_sourceNamespace_sourceConversationKey: {
+                archiveId: input.archiveId,
+                ownedAccountId,
+                sourceNamespace: "normalized-import",
+                sourceConversationKey: record.stableKey,
+              },
+            },
+            create: {
+              id: stableUuid(
+                input.archiveId,
+                `${ownedAccountId}:source-conversation:${record.stableKey}`,
+              ),
+              archiveId: input.archiveId,
+              ownedAccountId,
+              unifiedConversationId: existing.id,
+              sourceNamespace: "normalized-import",
+              sourceConversationKey: record.stableKey,
+            },
+            update: { unifiedConversationId: existing.id },
+          });
+          sourceConversations.set(record.stableKey, sourceConversation.id);
         }
       }
       for (const record of input.records) {
         if (record.kind === "participant") {
           const conversationId = conversations.get(record.conversationKey);
+          const sourceConversationId = sourceConversations.get(record.conversationKey);
           const personId = await identityPersonId(
             input.archiveId,
             identities.get(record.identityKey),
             tx,
           );
-          if (!conversationId || !personId) continue;
+          if (!conversationId || !sourceConversationId || !personId) continue;
           await tx.conversationParticipant.upsert({
             where: {
               archiveId_conversationId_personId: {
@@ -123,6 +157,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               id: uuid(),
               archiveId: input.archiveId,
               conversationId,
+              sourceConversationId,
               personId,
               role: record.role,
             },
@@ -133,7 +168,8 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
       for (const record of input.records) {
         if (record.kind !== "message") continue;
         const conversationId = conversations.get(record.conversationKey);
-        if (!conversationId) continue;
+        const sourceConversationId = sourceConversations.get(record.conversationKey);
+        if (!conversationId || !sourceConversationId) continue;
         const senderId = record.senderIdentityKey
           ? await identityPersonId(input.archiveId, identities.get(record.senderIdentityKey), tx)
           : null;
@@ -152,6 +188,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             id: stableUuid(input.archiveId, record.stableKey),
             archiveId: input.archiveId,
             conversationId,
+            sourceConversationId,
             senderId,
             stableKey: record.stableKey,
             sourceType: record.source.namespace,

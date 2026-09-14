@@ -87,6 +87,7 @@ describe("PostgreSQL archive health reads", () => {
         id: messageId,
         archiveId: archiveOneId,
         conversationId,
+        sourceConversationId: null,
         senderId: personId,
         stableKey: "health-message",
         messageType: "unsupported",
