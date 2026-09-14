@@ -21,7 +21,7 @@ const nodeFixture = async (body: string) => {
   const root = await mkdtemp(join(tmpdir(), "echohoard-wa-command-"));
   roots.push(root);
   const command = join(root, "command.cjs");
-  await writeFile(command, `#!/usr/bin/env node\n${body}`);
+  await writeFile(command, `#!${process.execPath}\n${body}`);
   await chmod(command, 0o755);
   return command;
 };
@@ -57,7 +57,7 @@ describe("decryptCrypt15", () => {
   it("classifies a nonzero command and redacts its output", async () => {
     const f = await fixture();
     const command = await nodeFixture(
-      "process.stderr.write('bad sentinel-key key\\n'); process.exit(7);",
+      "require('node:fs').writeSync(2, 'bad sentinel-key key\\n'); process.exit(7);",
     );
     await expect(
       decryptCrypt15(f.encrypted, f.output, f.secret, { executable: command, timeoutMs: 1000 }),
