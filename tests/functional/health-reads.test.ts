@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ArchiveHealthService } from "../../src/application/health-reads.js";
 import { PrismaHealthReadPersistence } from "../../src/infrastructure/db/prisma-persistence.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -33,10 +34,12 @@ describe("PostgreSQL archive health reads", () => {
         { id: archiveTwoId, userId, name: "health-two" },
       ],
     });
+    const ownedAccountId = await createFixtureOwnedAccount(prisma, archiveOneId);
     await prisma.source.create({
       data: {
         id: sourceId,
         archiveId: archiveOneId,
+        ownedAccountId,
         kind: "whatsapp",
         stableKey: "health-source",
         sha256: "a".repeat(64),
@@ -46,6 +49,7 @@ describe("PostgreSQL archive health reads", () => {
       data: {
         id: snapshotId,
         archiveId: archiveOneId,
+        ownedAccountId,
         sourceId,
         sha256: "b".repeat(64),
         lifecycle: "completed",
@@ -57,6 +61,7 @@ describe("PostgreSQL archive health reads", () => {
       data: {
         id: jobId,
         archiveId: archiveOneId,
+        ownedAccountId,
         sourceId,
         snapshotId,
         status: "completed",

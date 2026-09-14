@@ -10,6 +10,7 @@ import {
   PrismaImportJobLeases,
 } from "../../src/infrastructure/db/worker-persistence.js";
 import { LocalJobWork } from "../../src/infrastructure/files/index.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -30,10 +31,12 @@ describe("PostgreSQL worker job composition", () => {
     workRoot = await mkdtemp(join(tmpdir(), "echohoard-worker-"));
     await prisma.user.create({ data: { id: userId } });
     await prisma.archive.create({ data: { id: archiveId, userId, name: "worker fixture" } });
+    const ownedAccountId = await createFixtureOwnedAccount(prisma, archiveId);
     await prisma.source.create({
       data: {
         id: sourceId,
         archiveId,
+        ownedAccountId,
         kind: "whatsapp",
         stableKey: "worker-fixture",
         sha256: "a".repeat(64),
@@ -43,6 +46,7 @@ describe("PostgreSQL worker job composition", () => {
       data: {
         id: snapshotId,
         archiveId,
+        ownedAccountId,
         sourceId,
         sha256: "b".repeat(64),
         lifecycle: "ready",
@@ -50,9 +54,9 @@ describe("PostgreSQL worker job composition", () => {
     });
     await prisma.importJob.createMany({
       data: [
-        { id: jobId, archiveId, sourceId, snapshotId, status: "queued" },
-        { id: staleJobId, archiveId, sourceId, snapshotId, status: "leased" },
-        { id: failedJobId, archiveId, sourceId, snapshotId, status: "queued" },
+        { id: jobId, archiveId, ownedAccountId, sourceId, snapshotId, status: "queued" },
+        { id: staleJobId, archiveId, ownedAccountId, sourceId, snapshotId, status: "leased" },
+        { id: failedJobId, archiveId, ownedAccountId, sourceId, snapshotId, status: "queued" },
       ],
     });
     await prisma.importJob.update({

@@ -89,6 +89,7 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
   return {
     users: scoped(prisma.user as unknown as Delegate, "id"),
     archives: scoped(prisma.archive as unknown as Delegate, "id", null),
+    ownedAccounts: scoped(prisma.ownedAccount as unknown as Delegate),
     sources: scoped(prisma.source as unknown as Delegate),
     snapshots: scoped(prisma.snapshot as unknown as Delegate),
     importJobs: scoped(prisma.importJob as unknown as Delegate),

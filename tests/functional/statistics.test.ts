@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ArchiveStatisticsService } from "../../src/application/statistics.js";
 import { PrismaStatisticsPersistence } from "../../src/infrastructure/db/prisma-persistence.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -41,11 +42,14 @@ describe("PostgreSQL archive statistics", () => {
         { id: emptyArchiveId, userId, name: "statistics-empty" },
       ],
     });
+    const accountOneId = await createFixtureOwnedAccount(prisma, archiveOneId);
+    const accountTwoId = await createFixtureOwnedAccount(prisma, archiveTwoId);
     await prisma.source.createMany({
       data: [
         {
           id: sourceOneId,
           archiveId: archiveOneId,
+          ownedAccountId: accountOneId,
           kind: "whatsapp",
           stableKey: "statistics-source-one",
           sha256: "1".repeat(64),
@@ -53,6 +57,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: sourceTwoId,
           archiveId: archiveTwoId,
+          ownedAccountId: accountTwoId,
           kind: "whatsapp",
           stableKey: "statistics-source-two",
           sha256: "2".repeat(64),
@@ -64,6 +69,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: finalizedSnapshotId,
           archiveId: archiveOneId,
+          ownedAccountId: accountOneId,
           sourceId: sourceOneId,
           sha256: "3".repeat(64),
           lifecycle: "completed",
@@ -73,6 +79,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: pendingSnapshotId,
           archiveId: archiveOneId,
+          ownedAccountId: accountOneId,
           sourceId: sourceOneId,
           sha256: "4".repeat(64),
           lifecycle: "ready",
@@ -81,6 +88,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: finalizedOtherSnapshotId,
           archiveId: archiveTwoId,
+          ownedAccountId: accountTwoId,
           sourceId: sourceTwoId,
           sha256: "5".repeat(64),
           lifecycle: "completed",
@@ -94,6 +102,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: finalizedJobId,
           archiveId: archiveOneId,
+          ownedAccountId: accountOneId,
           sourceId: sourceOneId,
           snapshotId: finalizedSnapshotId,
           status: "completed",
@@ -102,6 +111,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: pendingJobId,
           archiveId: archiveOneId,
+          ownedAccountId: accountOneId,
           sourceId: sourceOneId,
           snapshotId: pendingSnapshotId,
           status: "queued",
@@ -109,6 +119,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: finalizedOtherJobId,
           archiveId: archiveTwoId,
+          ownedAccountId: accountTwoId,
           sourceId: sourceTwoId,
           snapshotId: finalizedOtherSnapshotId,
           status: "completed",

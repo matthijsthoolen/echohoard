@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaTextSnapshotImporter } from "../../src/infrastructure/db/text-import.js";
 import type { ImportRecord } from "../../src/application/text-import.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -103,19 +104,27 @@ async function createArchive() {
   const archiveId = randomUUID();
   await prisma.user.create({ data: { id: userId } });
   await prisma.archive.create({ data: { id: archiveId, userId, name: archiveId } });
+  const ownedAccountId = await createFixtureOwnedAccount(prisma, archiveId);
   const snapshots = new Map<SnapshotName, { id: string; jobId: string }>();
   for (const name of ["a", "b", "c"] as const) {
     const sourceId = randomUUID();
     const snapshotId = randomUUID();
     const jobId = randomUUID();
     await prisma.source.create({
-      data: { id: sourceId, archiveId, kind: "whatsapp", stableKey: name, sha256: name.repeat(64) },
+      data: {
+        id: sourceId,
+        archiveId,
+        ownedAccountId,
+        kind: "whatsapp",
+        stableKey: name,
+        sha256: name.repeat(64),
+      },
     });
     await prisma.snapshot.create({
-      data: { id: snapshotId, archiveId, sourceId, sha256: name.repeat(64) },
+      data: { id: snapshotId, archiveId, ownedAccountId, sourceId, sha256: name.repeat(64) },
     });
     await prisma.importJob.create({
-      data: { id: jobId, archiveId, sourceId, snapshotId, status: "queued" },
+      data: { id: jobId, archiveId, ownedAccountId, sourceId, snapshotId, status: "queued" },
     });
     snapshots.set(name, { id: snapshotId, jobId });
   }

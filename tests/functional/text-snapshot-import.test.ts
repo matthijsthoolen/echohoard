@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaTextSnapshotImporter } from "../../src/infrastructure/db/text-import.js";
 import type { ImportRecord } from "../../src/application/text-import.js";
+import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -58,20 +59,22 @@ const records: readonly ImportRecord[] = [
 
 async function seedArchive(archiveId: string, sourceId: string, snapshotId: string, jobId: string) {
   await prisma.archive.create({ data: { id: archiveId, userId, name: archiveId } });
+  const ownedAccountId = await createFixtureOwnedAccount(prisma, archiveId);
   await prisma.source.create({
     data: {
       id: sourceId,
       archiveId,
+      ownedAccountId,
       kind: "whatsapp",
       stableKey: "android",
       sha256: "a".repeat(64),
     },
   });
   await prisma.snapshot.create({
-    data: { id: snapshotId, archiveId, sourceId, sha256: "b".repeat(64) },
+    data: { id: snapshotId, archiveId, ownedAccountId, sourceId, sha256: "b".repeat(64) },
   });
   await prisma.importJob.create({
-    data: { id: jobId, archiveId, sourceId, snapshotId, status: "queued" },
+    data: { id: jobId, archiveId, ownedAccountId, sourceId, snapshotId, status: "queued" },
   });
 }
 
@@ -127,6 +130,9 @@ describe("transactional normalized text snapshot import", () => {
   it("rolls back rows when finalization fails, allowing a clean retry", async () => {
     const missingSnapshot = randomUUID();
     const missingJob = randomUUID();
+    const accountTwo = await prisma.ownedAccount.findFirstOrThrow({
+      where: { archiveId: archiveTwoId },
+    });
     await expect(
       importer.import({
         archiveId: archiveTwoId,
@@ -141,6 +147,7 @@ describe("transactional normalized text snapshot import", () => {
       data: {
         id: missingSnapshot,
         archiveId: archiveTwoId,
+        ownedAccountId: accountTwo.id,
         sourceId: sourceTwoId,
         sha256: "c".repeat(64),
       },
@@ -149,6 +156,7 @@ describe("transactional normalized text snapshot import", () => {
       data: {
         id: missingJob,
         archiveId: archiveTwoId,
+        ownedAccountId: accountTwo.id,
         sourceId: sourceTwoId,
         snapshotId: missingSnapshot,
         status: "queued",
