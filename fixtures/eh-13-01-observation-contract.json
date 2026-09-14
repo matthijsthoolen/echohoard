@@ -1,0 +1,257 @@
+{
+  "contractVersion": "eh-13-01-observation-materialization.v1",
+  "identityKeys": {
+    "ownedAccount": ["archiveId", "accountKey"],
+    "sourceInput": ["archiveId", "accountKey", "sourceKind", "sourceKey"],
+    "sourceConversation": ["archiveId", "accountKey", "sourceNamespace", "sourceConversationKey"],
+    "logicalEntity": [
+      "archiveId",
+      "accountKey",
+      "sourceNamespace",
+      "sourceConversationKey",
+      "entityKind",
+      "sourceEntityKey"
+    ],
+    "observation": [
+      "archiveId",
+      "accountKey",
+      "sourceKind",
+      "sourceKey",
+      "sourceNamespace",
+      "sourceConversationKey",
+      "sourceConversationIdentityKey",
+      "entityKind",
+      "sourceEntityKey",
+      "logicalEntityKey",
+      "importId",
+      "observationKey",
+      "observedAt",
+      "valueDigest",
+      "observationKind",
+      "eligibility"
+    ],
+    "unifiedConversation": ["archiveId", "unifiedConversationKey"]
+  },
+  "entityKinds": ["conversation", "message", "revision", "reaction", "attachment-reference"],
+  "observationKinds": ["value", "source-deletion-tombstone"],
+  "authoritativeFields": [
+    "archiveId",
+    "accountKey",
+    "sourceKind",
+    "sourceKey",
+    "sourceConversationIdentityKey",
+    "importId",
+    "observationKey",
+    "observedAt",
+    "valueDigest",
+    "observationKind",
+    "eligibility",
+    "eligibilityAudit",
+    "ownerSoftDeleteAudit"
+  ],
+  "derivedFields": [
+    "logicalEntityKey",
+    "selectedValue",
+    "selectedObservationKey",
+    "firstSeenAt",
+    "lastSeenAt",
+    "sourceDeleted",
+    "provenanceState",
+    "contributingImportKeys",
+    "materializationRun"
+  ],
+  "auditFields": [
+    "eligibilityChangedBy",
+    "eligibilityChangedAt",
+    "eligibilityReason",
+    "idempotencyKey",
+    "materializationRunId",
+    "materializationPolicyVersion",
+    "materializationInputDigest",
+    "selectedObservationKeyByField",
+    "sourceDeletionEventKey",
+    "ownerSoftDeleteActor",
+    "ownerSoftDeleteAt",
+    "ownerSoftDeleteReason"
+  ],
+  "precedence": [
+    "eligible observations only",
+    "usable value beats missing, damaged, or unavailable placeholder",
+    "backup-confirmed beats live-only for the same logical field",
+    "later observedAt wins within the same confirmation class",
+    "lexicographically greater observationKey breaks an observedAt tie",
+    "source deletion status is evaluated independently from content selection"
+  ],
+  "examples": {
+    "liveBackupOverlap": {
+      "observations": [
+        {
+          "archiveId": "archive-synthetic-001",
+          "accountKey": "account-synthetic-a",
+          "sourceKind": "live",
+          "sourceKey": "live-input-a",
+          "sourceNamespace": "synthetic-whatsapp",
+          "sourceConversationKey": "chat-001",
+          "sourceConversationIdentityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-001",
+          "entityKind": "message",
+          "sourceEntityKey": "message-001",
+          "logicalEntityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-001/message/message-001",
+          "importId": "import-live-001",
+          "observationKey": "observation-live-001",
+          "observedAt": "2026-01-01T10:00:00Z",
+          "valueDigest": "sha256:synthetic-message-001",
+          "observationKind": "value",
+          "eligibility": "eligible"
+        },
+        {
+          "archiveId": "archive-synthetic-001",
+          "accountKey": "account-synthetic-a",
+          "sourceKind": "backup",
+          "sourceKey": "backup-input-a-001",
+          "sourceNamespace": "synthetic-whatsapp",
+          "sourceConversationKey": "chat-001",
+          "sourceConversationIdentityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-001",
+          "entityKind": "message",
+          "sourceEntityKey": "message-001",
+          "logicalEntityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-001/message/message-001",
+          "importId": "import-backup-001",
+          "observationKey": "observation-backup-001",
+          "observedAt": "2026-01-02T10:00:00Z",
+          "valueDigest": "sha256:synthetic-message-001",
+          "observationKind": "value",
+          "eligibility": "eligible"
+        }
+      ],
+      "expected": {
+        "logicalEntityCount": 1,
+        "observationCount": 2,
+        "sourceConversationCount": 1,
+        "contributingImportCount": 2,
+        "provenanceState": "backup-confirmed"
+      }
+    },
+    "accountIsolation": {
+      "observations": [
+        {
+          "archiveId": "archive-synthetic-001",
+          "accountKey": "account-synthetic-a",
+          "sourceKind": "backup",
+          "sourceKey": "backup-input-a-002",
+          "sourceNamespace": "synthetic-whatsapp",
+          "sourceConversationKey": "chat-same-local-key",
+          "sourceConversationIdentityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-same-local-key",
+          "entityKind": "message",
+          "sourceEntityKey": "message-same-local-key",
+          "logicalEntityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-same-local-key/message/message-same-local-key",
+          "importId": "import-account-a-001",
+          "observationKey": "observation-account-a-001",
+          "observedAt": "2026-01-03T10:00:00Z",
+          "valueDigest": "sha256:synthetic-account-a",
+          "observationKind": "value",
+          "eligibility": "eligible"
+        },
+        {
+          "archiveId": "archive-synthetic-001",
+          "accountKey": "account-synthetic-b",
+          "sourceKind": "backup",
+          "sourceKey": "backup-input-b-001",
+          "sourceNamespace": "synthetic-whatsapp",
+          "sourceConversationKey": "chat-same-local-key",
+          "sourceConversationIdentityKey": "archive-synthetic-001/account-synthetic-b/synthetic-whatsapp/chat-same-local-key",
+          "entityKind": "message",
+          "sourceEntityKey": "message-same-local-key",
+          "logicalEntityKey": "archive-synthetic-001/account-synthetic-b/synthetic-whatsapp/chat-same-local-key/message/message-same-local-key",
+          "importId": "import-account-b-001",
+          "observationKey": "observation-account-b-001",
+          "observedAt": "2026-01-03T10:00:00Z",
+          "valueDigest": "sha256:synthetic-account-b",
+          "observationKind": "value",
+          "eligibility": "eligible"
+        }
+      ],
+      "expected": {
+        "logicalEntityCount": 2,
+        "sourceConversationCount": 2,
+        "sameLocalKeysRemainDistinct": true
+      }
+    },
+    "exclusionAndTombstone": {
+      "observations": [
+        {
+          "archiveId": "archive-synthetic-001",
+          "accountKey": "account-synthetic-a",
+          "sourceKind": "backup",
+          "sourceKey": "backup-input-a-corrupt",
+          "sourceNamespace": "synthetic-whatsapp",
+          "sourceConversationKey": "chat-002",
+          "sourceConversationIdentityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-002",
+          "entityKind": "message",
+          "sourceEntityKey": "message-002",
+          "logicalEntityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-002/message/message-002",
+          "importId": "import-corrupt-001",
+          "observationKey": "observation-corrupt-001",
+          "observedAt": "2026-01-04T10:00:00Z",
+          "valueDigest": "sha256:synthetic-corrupt-value",
+          "observationKind": "value",
+          "eligibility": "excluded"
+        },
+        {
+          "archiveId": "archive-synthetic-001",
+          "accountKey": "account-synthetic-a",
+          "sourceKind": "backup",
+          "sourceKey": "backup-input-a-valid",
+          "sourceNamespace": "synthetic-whatsapp",
+          "sourceConversationKey": "chat-002",
+          "sourceConversationIdentityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-002",
+          "entityKind": "message",
+          "sourceEntityKey": "message-002",
+          "logicalEntityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-002/message/message-002",
+          "importId": "import-valid-001",
+          "observationKey": "observation-valid-001",
+          "observedAt": "2026-01-05T10:00:00Z",
+          "valueDigest": "sha256:synthetic-valid-value",
+          "observationKind": "value",
+          "eligibility": "eligible"
+        },
+        {
+          "archiveId": "archive-synthetic-001",
+          "accountKey": "account-synthetic-a",
+          "sourceKind": "live",
+          "sourceKey": "live-input-a",
+          "sourceNamespace": "synthetic-whatsapp",
+          "sourceConversationKey": "chat-002",
+          "sourceConversationIdentityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-002",
+          "entityKind": "message",
+          "sourceEntityKey": "message-002",
+          "logicalEntityKey": "archive-synthetic-001/account-synthetic-a/synthetic-whatsapp/chat-002/message/message-002",
+          "importId": "import-live-delete-001",
+          "observationKey": "observation-revoke-001",
+          "observedAt": "2026-01-06T10:00:00Z",
+          "valueDigest": "sha256:synthetic-revoke-event",
+          "observationKind": "source-deletion-tombstone",
+          "eligibility": "eligible"
+        }
+      ],
+      "controls": {
+        "exclusion": {
+          "importId": "import-corrupt-001",
+          "reason": "synthetic-corrupt-input",
+          "actor": "synthetic-owner",
+          "changedAt": "2026-01-07T10:00:00Z",
+          "idempotencyKey": "exclude-corrupt-001"
+        },
+        "reEnable": {
+          "importId": "import-corrupt-001",
+          "idempotencyKey": "reenable-corrupt-001"
+        }
+      },
+      "expected": {
+        "excludedImportEvidenceRetained": true,
+        "validContentRemainsAfterExclusion": true,
+        "sourceDeletionRetainsContent": true,
+        "ownerSoftDeleteUnaffected": true,
+        "reEnableRestoresDeterministicInputSet": true
+      }
+    }
+  }
+}
