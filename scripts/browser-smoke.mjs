@@ -58,11 +58,28 @@ const main = async () => {
     for (const marker of ["Welcome back", "Continue with Authentik", "/auth/login/start"]) {
       if (!loginHtml.includes(marker)) throw new Error(`login page missing ${marker}`);
     }
+    const deniedPage = await fetch(`${baseUrl}/error?kind=access-denied`);
+    if (deniedPage.status !== 200)
+      throw new Error(`designed denial status was ${deniedPage.status}`);
+    const deniedHtml = await deniedPage.text();
+    for (const marker of ["You shall not pass!", "Access denied", "403-access-denied"]) {
+      if (!deniedHtml.includes(marker)) throw new Error(`denial page missing ${marker}`);
+    }
+    const notFoundPage = await fetch(`${baseUrl}/a-path-that-does-not-exist`);
+    if (notFoundPage.status !== 404) throw new Error(`not-found status was ${notFoundPage.status}`);
+    const notFoundHtml = await notFoundPage.text();
+    for (const marker of ["That archive page is missing", "404-not-found"]) {
+      if (!notFoundHtml.includes(marker)) throw new Error(`not-found page missing ${marker}`);
+    }
     for (const asset of [
       "/brand/echohoard-large.png",
       "/brand/echohoard-wordmark.png",
       "/brand/echohoard-mark.png",
       "/icon.png",
+      "/brand/errors/403-access-denied.png",
+      "/brand/errors/404-not-found.png",
+      "/brand/errors/500-unexpected-failure.png",
+      "/brand/errors/unknown-fallback.png",
     ]) {
       const assetResponse = await fetch(`${baseUrl}${asset}`);
       if (assetResponse.status !== 200)

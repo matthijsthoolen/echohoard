@@ -90,12 +90,16 @@ describe("OIDC web boundary", () => {
       }),
     );
     expect(badState.status).toBe(400);
+    expect(badState.headers.get("content-type")).toContain("text/html");
+    await expect(badState.text()).resolves.toContain("That request needs another look");
     const badNonce = await app.web.callback(
       new Request(`http://localhost/auth/callback?code=c&state=${app.state}`, {
         headers: { cookie: `${state}; ${nonce}` },
       }),
     );
     expect(badNonce.status).toBe(403);
+    expect(badNonce.headers.get("cache-control")).toBe("no-store");
+    await expect(badNonce.text()).resolves.toContain("You shall not pass!");
     await expect(app.web.principal(new Request("http://localhost"), "a1")).resolves.toBeNull();
     await expect(app.web.principal(new Request("http://localhost"), "a2")).resolves.toBeNull();
   });

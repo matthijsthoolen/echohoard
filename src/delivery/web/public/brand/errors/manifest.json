@@ -1,0 +1,77 @@
+{
+  "generatedAt": "2026-09-15",
+  "generator": "built-in image generation tool",
+  "canonicalReference": {
+    "repository": "OnzeSkills",
+    "commit": "98ab90a",
+    "path": "skills/saphira-brand-images/assets/reference/saphira-master.png",
+    "role": "identity reference for face, crest, wings, proportions, palette, and demeanor"
+  },
+  "constraints": [
+    "HTML owns all required copy; no words, numbers, logos, or watermarks in the raster.",
+    "Preserve the canonical Saphira identity and blue/cyan/violet palette.",
+    "Keep scenes original and do not imitate a named franchise or mascot."
+  ],
+  "assets": [
+    {
+      "kind": "bad-request",
+      "status": 400,
+      "file": "400-bad-request.png",
+      "scene": "Saphira examines a damaged archive scroll."
+    },
+    {
+      "kind": "authentication-required",
+      "status": 401,
+      "file": "401-authentication-required.png",
+      "scene": "Saphira stands beside a closed luminous archive portal."
+    },
+    {
+      "kind": "access-denied",
+      "status": 403,
+      "file": "403-access-denied.png",
+      "scene": "Saphira guards an archive threshold with one wing raised."
+    },
+    {
+      "kind": "not-found",
+      "status": 404,
+      "file": "404-not-found.png",
+      "scene": "Saphira searches empty archive shelves with a lantern and map."
+    },
+    {
+      "kind": "request-timeout",
+      "status": 408,
+      "file": "408-request-timeout.png",
+      "scene": "Saphira protects a stalled hourglass and frozen archive lights."
+    },
+    {
+      "kind": "conflict",
+      "status": 409,
+      "file": "409-conflict.png",
+      "scene": "Saphira separates colliding duplicate archive records."
+    },
+    {
+      "kind": "rate-limited",
+      "status": 429,
+      "file": "429-rate-limited.png",
+      "scene": "Saphira calms an overload of message sparks."
+    },
+    {
+      "kind": "unexpected-failure",
+      "status": 500,
+      "file": "500-unexpected-failure.png",
+      "scene": "Saphira repairs tangled luminous archive machinery."
+    },
+    {
+      "kind": "service-unavailable",
+      "status": 503,
+      "file": "503-service-unavailable.png",
+      "scene": "Saphira maintains a temporarily closed archive gate."
+    },
+    {
+      "kind": "unknown",
+      "status": null,
+      "file": "unknown-fallback.png",
+      "scene": "Saphira holds a flickering question-mark crystal."
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import { OidcAuth, type ArchivePrincipal } from "../../application/auth.js";
 import { createHash } from "node:crypto";
+import { renderErrorDocument } from "./error-document";
 
 const STATE_COOKIE = "echohoard_oidc_state";
 const NONCE_COOKIE = "echohoard_oidc_nonce";
@@ -65,10 +66,10 @@ export class WebAuthBoundary {
     const nonce = readCookie(request, NONCE_COOKIE);
     const verifier = readCookie(request, VERIFIER_COOKIE);
     if (!state || !expectedState || state !== expectedState || !code || !nonce) {
-      return new Response("invalid oidc callback", { status: 400 });
+      return browserError("bad-request", 400);
     }
     const session = await this.auth.callback(code, nonce, verifier);
-    if (!session) return new Response("access denied", { status: 403 });
+    if (!session) return browserError("access-denied", 403);
     return new Response(null, {
       status: 302,
       headers: {
@@ -113,6 +114,16 @@ export class WebAuthBoundary {
     const identities = await this.auth.listPendingIdentities(principal);
     return Response.json({ identities }, { headers: { "Cache-Control": "no-store" } });
   }
+}
+
+function browserError(kind: "access-denied" | "bad-request", status: number): Response {
+  return new Response(renderErrorDocument(kind), {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "text/html; charset=utf-8",
+    },
+  });
 }
 
 export { NONCE_COOKIE, SESSION_COOKIE, STATE_COOKIE, VERIFIER_COOKIE };

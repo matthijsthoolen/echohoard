@@ -1,4 +1,5 @@
 import type { WebRuntime } from "../../runtime";
+import { renderErrorDocument } from "../../error-document";
 
 export interface AuthRouteDependencies {
   readonly getRuntime: () => Pick<WebRuntime, "auth"> | undefined;
@@ -41,11 +42,11 @@ export function createLogoutRoute({ getRuntime }: AuthRouteDependencies) {
 }
 
 function unavailable(): Response {
-  return new Response("Authentication is temporarily unavailable.", {
+  return new Response(renderErrorDocument("service-unavailable"), {
     status: 503,
     headers: {
       "Cache-Control": "no-store",
-      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Type": "text/html; charset=utf-8",
     },
   });
 }
