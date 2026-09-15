@@ -271,6 +271,10 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     reactions: scoped(prisma.reaction as unknown as Delegate),
     attachments: scoped(prisma.attachment as unknown as Delegate),
     messageAttachments: scoped(prisma.messageAttachment as unknown as Delegate),
+    transcripts: scoped(prisma.transcript as unknown as Delegate),
+    transcriptionRequests: scoped(prisma.transcriptionRequest as unknown as Delegate),
+    transcriptionRuns: scoped(prisma.transcriptionRun as unknown as Delegate),
+    transcriptVersions: scoped(prisma.transcriptVersion as unknown as Delegate),
     conversationObservations: observations(
       prisma.conversationObservation as unknown as Delegate,
       "sourceConversationId",

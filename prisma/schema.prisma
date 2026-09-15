@@ -47,6 +47,10 @@ model Archive {
   reactionObservations            ReactionObservation[]
   attachmentReferenceObservations AttachmentReferenceObservation[]
   ownerDeletionAudits             OwnerDeletionAudit[]
+  transcripts                     Transcript[]
+  transcriptionRequests           TranscriptionRequest[]
+  transcriptionRuns               TranscriptionRun[]
+  transcriptVersions              TranscriptVersion[]
   admittedIdentities              ArchiveIdentity[]
   authSessions                    AuthSession[]
   privacyAudits                   ConversationPrivacyAudit[]
@@ -512,6 +516,7 @@ model Attachment {
   updatedAt            DateTime            @updatedAt
   archive              Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   messageLinks         MessageAttachment[]
+  transcripts          Transcript[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
@@ -567,6 +572,99 @@ model MessageAttachment {
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, attachmentId])
   @@index([archiveId, messageId])
+}
+
+/// A transcription subject. The media digest is captured independently from
+/// the attachment row so a changed digest makes old versions inapplicable,
+/// while preserving their immutable history.
+model Transcript {
+  id                 String                 @id @default(uuid()) @db.Uuid
+  archiveId          String                 @db.Uuid
+  attachmentId       String                 @db.Uuid
+  sourceMediaSha256  String                 @db.VarChar(64)
+  currentMediaSha256 String                 @db.VarChar(64)
+  language           String?
+  selectedModel      String?
+  status             String                 @default("pending")
+  errorClass         String?
+  manualAuthority    Boolean                @default(false)
+  createdAt          DateTime               @default(now())
+  updatedAt          DateTime               @updatedAt
+  archive            Archive                @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  attachment         Attachment             @relation(fields: [attachmentId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  requests           TranscriptionRequest[]
+  runs               TranscriptionRun[]
+  versions           TranscriptVersion[]
+
+  @@unique([archiveId, id])
+  @@unique([archiveId, attachmentId])
+  @@index([archiveId, status])
+}
+
+model TranscriptionRequest {
+  id            String             @id @default(uuid()) @db.Uuid
+  archiveId     String             @db.Uuid
+  transcriptId  String             @db.Uuid
+  language      String?
+  selectedModel String
+  status        String             @default("requested")
+  errorClass    String?
+  requestedAt   DateTime           @default(now())
+  completedAt   DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  archive       Archive            @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  transcript    Transcript         @relation(fields: [transcriptId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  runs          TranscriptionRun[]
+
+  @@unique([archiveId, id])
+  @@index([archiveId, transcriptId, requestedAt])
+}
+
+model TranscriptionRun {
+  id            String               @id @default(uuid()) @db.Uuid
+  archiveId     String               @db.Uuid
+  transcriptId  String               @db.Uuid
+  requestId     String               @db.Uuid
+  mediaSha256   String               @db.VarChar(64)
+  language      String?
+  selectedModel String
+  status        String               @default("pending")
+  errorClass    String?
+  startedAt     DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  archive       Archive              @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  transcript    Transcript           @relation(fields: [transcriptId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  request       TranscriptionRequest @relation(fields: [requestId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  versions      TranscriptVersion[]
+
+  @@unique([archiveId, id])
+  @@index([archiveId, transcriptId, createdAt])
+  @@index([archiveId, status])
+}
+
+model TranscriptVersion {
+  id            String            @id @default(uuid()) @db.Uuid
+  archiveId     String            @db.Uuid
+  transcriptId  String            @db.Uuid
+  runId         String?           @db.Uuid
+  mediaSha256   String            @db.VarChar(64)
+  language      String?
+  selectedModel String?
+  text          String
+  isManual      Boolean           @default(false)
+  editorId      String?
+  editedAt      DateTime?
+  isActive      Boolean           @default(false)
+  createdAt     DateTime          @default(now())
+  archive       Archive           @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  transcript    Transcript        @relation(fields: [transcriptId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  run           TranscriptionRun? @relation(fields: [runId, archiveId], references: [id, archiveId], onDelete: Restrict)
+
+  @@unique([archiveId, id])
+  @@index([archiveId, transcriptId, createdAt])
 }
 
 /// Typed immutable import evidence. Each table has a concrete target relation;
