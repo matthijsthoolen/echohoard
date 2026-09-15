@@ -226,11 +226,15 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           sourceConversationId,
           record.stableKey,
         );
+        const deletion = record.sourceDeletion;
+        const deletionObservedAt = deletion?.observedAt
+          ? new Date(deletion.observedAt)
+          : input.observedAt;
         const prior = await tx.message.findUnique({
           where: {
             archiveId_stableKey: { archiveId: input.archiveId, stableKey },
           },
-          select: { metadata: true },
+          select: { metadata: true, body: true },
         });
         const existing = await tx.message.upsert({
           where: {
@@ -257,6 +261,20 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               firstSeenSnapshotId: input.snapshotId,
               lastSeenSnapshotId: input.snapshotId,
             }),
+            ...(deletion
+              ? {
+                  sourceDeleted: true,
+                  contentUnavailable: record.body === undefined,
+                  sourceDeletedAt: deletionObservedAt,
+                  sourceDeletionObservationKey: deletion.eventKey,
+                  sourceDeletionMetadata: json({
+                    kind: deletion.kind,
+                    eventKey: deletion.eventKey,
+                    observedAt: deletion.observedAt,
+                    ...(deletion.sourceMetadata ?? {}),
+                  }),
+                }
+              : {}),
             sentAt,
             firstSeenAt: input.observedAt,
             lastSeenAt: input.observedAt,
@@ -266,7 +284,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             jobEligibility === "eligible"
               ? {
                   senderId,
-                  body: record.body,
+                  ...(record.body !== undefined ? { body: record.body } : {}),
                   messageType: record.messageKind,
                   lastSeenAt: input.observedAt,
                   materialized: true,
@@ -277,6 +295,26 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
                     ...(record.metadata ?? {}),
                     ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
                   }),
+                  ...(deletion
+                    ? {
+                        sourceDeleted: true,
+                        ...(record.body !== undefined
+                          ? { contentUnavailable: false }
+                          : prior?.body == null
+                            ? { contentUnavailable: true }
+                            : {}),
+                        sourceDeletedAt: deletionObservedAt,
+                        sourceDeletionObservationKey: deletion.eventKey,
+                        sourceDeletionMetadata: json({
+                          kind: deletion.kind,
+                          eventKey: deletion.eventKey,
+                          observedAt: deletion.observedAt,
+                          ...(deletion.sourceMetadata ?? {}),
+                        }),
+                      }
+                    : record.body !== undefined
+                      ? { contentUnavailable: false }
+                      : {}),
                 }
               : {},
         });
@@ -292,11 +330,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           sourceNamespace: sourceConversation.namespace,
           sourceEntityKey: record.stableKey,
           logicalEntityKey: stableKey,
-          observationKey: record.stableKey,
+          observationKey: record.sourceDeletion?.eventKey ?? record.stableKey,
           messageId: existing.id,
           value: record,
           eligibility: jobEligibility,
-          observedAt: input.observedAt,
+          observationKind: record.sourceDeletion ? "source-deletion-tombstone" : "value",
+          observedAt: deletion?.observedAt ? deletionObservedAt : input.observedAt,
         });
       }
       for (const record of input.records) {
@@ -605,6 +644,7 @@ type ObservationInput = {
   readonly revisionId?: string;
   readonly messageAttachmentId?: string;
   readonly eligibility: ImportEligibility;
+  readonly observationKind?: "value" | "source-deletion-tombstone";
 };
 
 async function upsertObservation(
@@ -625,7 +665,7 @@ async function upsertObservation(
       archiveId_importJobId_observationKind_sourceConversationId_sourceEntityKey_observationKey: {
         archiveId: input.archiveId,
         importJobId: input.importJobId,
-        observationKind: "value",
+        observationKind: input.observationKind ?? "value",
         sourceConversationId: input.sourceConversationId,
         sourceEntityKey: input.sourceEntityKey,
         observationKey: input.observationKey,
@@ -634,7 +674,7 @@ async function upsertObservation(
     create: {
       ...fields,
       ...target,
-      observationKind: "value",
+      observationKind: input.observationKind ?? "value",
       eligibility: input.eligibility,
       valueDigest: digest,
       observedValue: json(value),

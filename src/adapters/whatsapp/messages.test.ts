@@ -126,4 +126,27 @@ describe("WhatsApp message normalization", () => {
     expect(message).toMatchObject({ timestamp: null });
     expect(message).not.toHaveProperty("replyToKey");
   });
+
+  it("maps revoke rows to source-neutral append-only deletion observations", () => {
+    const fixture = buildWhatsAppSqliteFixture("android-current.v1");
+    const rows = fixture.rows.message as Readonly<Record<string, unknown>>[];
+    rows[0] = {
+      ...rows[0],
+      event_type: "revoke",
+      deletion_event_id: "synthetic-revoke-event",
+      deletion_scope: "everyone",
+    };
+    const message = normalizeWhatsAppMessages({
+      ...fixture,
+      rows: { ...fixture.rows, message: rows },
+    }).find((record) => record.kind === "message" && record.source.value === "current-message-a");
+    expect(message).toMatchObject({
+      sourceDeletion: {
+        kind: "revoke",
+        eventKey: "synthetic-revoke-event",
+        observedAt: "2023-11-14T22:13:20.000Z",
+        sourceMetadata: { scope: "everyone" },
+      },
+    });
+  });
 });

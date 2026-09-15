@@ -365,6 +365,7 @@ async function rematerializeConversations(
       observedAt: true,
       eligibility: true,
       observedValue: true,
+      observationKind: true,
       source: { select: { kind: true } },
     },
   });
@@ -404,6 +405,7 @@ async function rematerializeMessages(
       observedAt: true,
       eligibility: true,
       observedValue: true,
+      observationKind: true,
       source: { select: { kind: true } },
       snapshotId: true,
     },
@@ -411,12 +413,24 @@ async function rematerializeMessages(
   for (const id of ids) {
     const rows = observations.filter((row) => row.messageId === id);
     const eligible = rows.filter((row) => row.eligibility === "eligible");
-    const allWinner = selectPreferredObservation(toMaterializationRows(eligible), () => true);
-    const bodyWinner = selectPreferredObservation(toMaterializationRows(eligible), (value) => {
-      const state = value?.bodyState;
-      return state === "present" && value?.body !== undefined;
-    });
-    const value = allWinner?.value;
+    const contentEligible = eligible.filter((row) => row.observationKind === "value");
+    const allWinner = selectPreferredObservation(
+      toMaterializationRows(contentEligible),
+      () => true,
+    );
+    const bodyWinner = selectPreferredObservation(
+      toMaterializationRows(contentEligible),
+      (value) => {
+        const state = value?.bodyState;
+        return state === "present" && value?.body !== undefined;
+      },
+    );
+    const deletion = [...eligible]
+      .filter((row) => row.observationKind === "source-deletion-tombstone")
+      .sort((left, right) => right.observedAt.getTime() - left.observedAt.getTime())[0];
+    const deletionRecord = asRecord(deletion?.observedValue);
+    const deletionValue = asRecord(deletionRecord?.sourceDeletion) ?? deletionRecord;
+    const value = allWinner?.value ?? deletionRecord;
     const bodyValue = bodyWinner?.value;
     const first = earliest(eligible);
     const last = latest(eligible);
@@ -453,6 +467,19 @@ async function rematerializeMessages(
             ? { body: null }
             : {}),
         ...(sentAt !== undefined ? { sentAt } : {}),
+        sourceDeleted: deletion !== undefined,
+        contentUnavailable: deletion !== undefined && bodyWinner === undefined,
+        ...(deletion
+          ? {
+              sourceDeletedAt: deletion.observedAt,
+              sourceDeletionObservationKey: deletion.observationKey,
+              sourceDeletionMetadata: (deletionValue ?? {}) as Prisma.InputJsonValue,
+            }
+          : {
+              sourceDeletedAt: null,
+              sourceDeletionObservationKey: null,
+              sourceDeletionMetadata: null,
+            }),
         ...(first ? { firstSeenAt: first.observedAt } : {}),
         ...(last ? { lastSeenAt: last.observedAt } : {}),
         ...(Object.keys(metadata).length > 0

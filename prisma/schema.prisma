@@ -252,6 +252,10 @@ model Conversation {
   materializationRunId         String?
   materializationInputDigest   String?                   @db.VarChar(64)
   materializationPolicyVersion String?
+  ownerDeleted                 Boolean                   @default(false)
+  ownerDeletedAt               DateTime?
+  ownerDeletedBy               String?
+  ownerDeletionReason          String?
   createdAt                    DateTime                  @default(now())
   updatedAt                    DateTime                  @updatedAt
   archive                      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -333,6 +337,15 @@ model Message {
   materializationRunId         String?
   materializationInputDigest   String?              @db.VarChar(64)
   materializationPolicyVersion String?
+  sourceDeleted                Boolean              @default(false)
+  contentUnavailable           Boolean              @default(false)
+  sourceDeletedAt              DateTime?
+  sourceDeletionObservationKey String?
+  sourceDeletionMetadata       Json?
+  ownerDeleted                 Boolean              @default(false)
+  ownerDeletedAt               DateTime?
+  ownerDeletedBy               String?
+  ownerDeletionReason          String?
   sentAt                       DateTime?
   firstSeenAt                  DateTime             @default(now())
   lastSeenAt                   DateTime             @default(now())
@@ -368,6 +381,10 @@ model MessageRevision {
   materializationRunId         String?
   materializationInputDigest   String?               @db.VarChar(64)
   materializationPolicyVersion String?
+  ownerDeleted                 Boolean               @default(false)
+  ownerDeletedAt               DateTime?
+  ownerDeletedBy               String?
+  ownerDeletionReason          String?
   body                         String?
   metadata                     Json?
   firstSeenAt                  DateTime              @default(now())
@@ -397,6 +414,10 @@ model Reaction {
   materializationRunId         String?
   materializationInputDigest   String?               @db.VarChar(64)
   materializationPolicyVersion String?
+  ownerDeleted                 Boolean               @default(false)
+  ownerDeletedAt               DateTime?
+  ownerDeletedBy               String?
+  ownerDeletionReason          String?
   createdAt                    DateTime              @default(now())
   updatedAt                    DateTime              @updatedAt
   archive                      Archive               @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -410,26 +431,30 @@ model Reaction {
 }
 
 model Attachment {
-  id             String              @id @default(uuid()) @db.Uuid
-  archiveId      String              @db.Uuid
-  stableKey      String?
-  sha256         String              @db.VarChar(64)
-  availability   String              @default("missing")
-  casKey         String?
-  originalName   String?
-  originalPath   String?
-  mimeType       String?
-  byteSize       BigInt?
-  width          Int?
-  height         Int?
-  durationMs     Int?
-  sourceMetadata Json?
-  firstSeenAt    DateTime            @default(now())
-  lastSeenAt     DateTime            @default(now())
-  createdAt      DateTime            @default(now())
-  updatedAt      DateTime            @updatedAt
-  archive        Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  messageLinks   MessageAttachment[]
+  id                  String              @id @default(uuid()) @db.Uuid
+  archiveId           String              @db.Uuid
+  stableKey           String?
+  sha256              String              @db.VarChar(64)
+  availability        String              @default("missing")
+  casKey              String?
+  originalName        String?
+  originalPath        String?
+  mimeType            String?
+  byteSize            BigInt?
+  width               Int?
+  height              Int?
+  durationMs          Int?
+  sourceMetadata      Json?
+  firstSeenAt         DateTime            @default(now())
+  lastSeenAt          DateTime            @default(now())
+  ownerDeleted        Boolean             @default(false)
+  ownerDeletedAt      DateTime?
+  ownerDeletedBy      String?
+  ownerDeletionReason String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  archive             Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  messageLinks        MessageAttachment[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
@@ -449,6 +474,10 @@ model MessageAttachment {
   materializationRunId         String?
   materializationInputDigest   String?                          @db.VarChar(64)
   materializationPolicyVersion String?
+  ownerDeleted                 Boolean                          @default(false)
+  ownerDeletedAt               DateTime?
+  ownerDeletedBy               String?
+  ownerDeletionReason          String?
   createdAt                    DateTime                         @default(now())
   updatedAt                    DateTime                         @updatedAt
   archive                      Archive                          @relation(fields: [archiveId], references: [id], onDelete: Cascade)

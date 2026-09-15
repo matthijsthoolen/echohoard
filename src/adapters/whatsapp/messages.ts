@@ -100,6 +100,7 @@ export function normalizeWhatsAppMessages(
       ...(messageKind === "unsupported" && nativeCode !== undefined
         ? { unsupportedTypeCode: nativeCode }
         : {}),
+      ...sourceDeletionFor(row),
     };
     byRow.set(number(row._id) ?? -1, record);
     result.push(record);
@@ -276,6 +277,25 @@ function sourceIdFor(
       ? stringValue(row.key_id)
       : stringValue(row.key_id ?? row.message_id);
   return id ? { sourceMessageId: id } : {};
+}
+
+function sourceDeletionFor(row: Row): Pick<NormalizedMessageRecord, "sourceDeletion"> {
+  const event = stringValue(row.event_type)?.toLowerCase();
+  if (event !== "revoke" && event !== "delete" && event !== "delete_for_me") return {};
+  const eventKey =
+    stringValue(row.deletion_event_id) ?? stringValue(row.event_id) ?? stringValue(row.key_id);
+  if (!eventKey) return {};
+  const observedAt = timestampFor(row.deletion_timestamp ?? row.timestamp);
+  return {
+    sourceDeletion: {
+      kind: event === "revoke" ? "revoke" : "delete",
+      eventKey,
+      observedAt,
+      ...(stringValue(row.deletion_scope)
+        ? { sourceMetadata: { scope: stringValue(row.deletion_scope)! } }
+        : {}),
+    },
+  };
 }
 function withoutReply(record: NormalizedMessageRecord): NormalizedMessageRecord {
   const { replyToKey: _replyToKey, ...rest } = record;

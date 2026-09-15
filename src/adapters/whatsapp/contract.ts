@@ -89,6 +89,15 @@ export interface NormalizedMessageRecord {
   readonly metadata?: NormalizedMessageMetadata;
   /** Retain an unmapped native message code as inert evidence. */
   readonly unsupportedTypeCode?: number;
+  /** Append-only source event; never means that owner policy deleted a row. */
+  readonly sourceDeletion?: NormalizedSourceDeletion;
+}
+
+export interface NormalizedSourceDeletion {
+  readonly kind: "revoke" | "delete";
+  readonly eventKey: string;
+  readonly observedAt: string | null;
+  readonly sourceMetadata?: Readonly<Record<string, string>>;
 }
 
 export interface NormalizedMessageMetadata {

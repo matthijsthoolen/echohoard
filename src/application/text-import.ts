@@ -47,6 +47,13 @@ export interface ImportMessageRecord {
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly replyToKey?: string;
   readonly unsupportedTypeCode?: number;
+  readonly sourceDeletion?: ImportSourceDeletion;
+}
+export interface ImportSourceDeletion {
+  readonly kind: "revoke" | "delete";
+  readonly eventKey: string;
+  readonly observedAt: string | null;
+  readonly sourceMetadata?: Readonly<Record<string, string>>;
 }
 export interface ImportRevisionRecord {
   readonly kind: "revision";

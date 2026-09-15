@@ -229,8 +229,137 @@ describe("transactional normalized text snapshot import", () => {
     expect(await prisma.messageObservation.count({ where: { archiveId: archiveOneId } })).toBe(2);
   });
 
+  it("preserves revoke tombstones across before/after-content order", async () => {
+    const tombstoneMessageKey = "whatsapp:message:revoke-before";
+    const account = await prisma.ownedAccount.findFirstOrThrow({
+      where: { archiveId: archiveOneId },
+    });
+    const sourceId = randomUUID();
+    const snapshotId = randomUUID();
+    const jobId = randomUUID();
+    await prisma.source.create({
+      data: {
+        id: sourceId,
+        archiveId: archiveOneId,
+        ownedAccountId: account.id,
+        kind: "live",
+        stableKey: `live-${sourceId}`,
+        sha256: "f".repeat(64),
+      },
+    });
+    await prisma.snapshot.create({
+      data: {
+        id: snapshotId,
+        archiveId: archiveOneId,
+        ownedAccountId: account.id,
+        sourceId,
+        sha256: "e".repeat(64),
+      },
+    });
+    await prisma.importJob.create({
+      data: {
+        id: jobId,
+        archiveId: archiveOneId,
+        ownedAccountId: account.id,
+        sourceId,
+        snapshotId,
+        status: "queued",
+      },
+    });
+    const tombstone: ImportRecord = {
+      kind: "message",
+      stableKey: tombstoneMessageKey,
+      source: { namespace: "whatsapp-android", value: "source-revoke-before" },
+      conversationKey,
+      timestamp: observedAt.toISOString(),
+      direction: "received",
+      messageKind: "text",
+      bodyState: "missing",
+      sourceDeletion: {
+        kind: "revoke",
+        eventKey: "synthetic-revoke-1",
+        observedAt: observedAt.toISOString(),
+      },
+    };
+    await importer.import({
+      archiveId: archiveOneId,
+      ownedAccountId: account.id,
+      snapshotId,
+      importJobId: jobId,
+      observedAt,
+      records: [
+        { kind: "conversation", stableKey: conversationKey, conversationKind: "direct" },
+        tombstone,
+      ],
+    });
+    await expect(
+      prisma.message.findFirstOrThrow({
+        where: { archiveId: archiveOneId, stableKey: tombstoneMessageKey },
+      }),
+    ).resolves.toMatchObject({
+      body: null,
+      sourceDeleted: true,
+      contentUnavailable: true,
+      ownerDeleted: false,
+    });
+    const laterSnapshot = randomUUID();
+    await prisma.snapshot.create({
+      data: {
+        id: laterSnapshot,
+        archiveId: archiveOneId,
+        ownedAccountId: account.id,
+        sourceId,
+        sha256: "d".repeat(64),
+      },
+    });
+    const laterJob = randomUUID();
+    await prisma.importJob.create({
+      data: {
+        id: laterJob,
+        archiveId: archiveOneId,
+        ownedAccountId: account.id,
+        sourceId,
+        snapshotId: laterSnapshot,
+        status: "queued",
+      },
+    });
+    await importer.import({
+      archiveId: archiveOneId,
+      ownedAccountId: account.id,
+      snapshotId: laterSnapshot,
+      importJobId: laterJob,
+      observedAt: new Date("2026-01-02T00:00:00.000Z"),
+      records: [
+        { kind: "conversation", stableKey: conversationKey, conversationKind: "direct" },
+        { ...tombstone, body: "hello", bodyState: "present", sourceDeletion: undefined },
+      ],
+    });
+    await expect(
+      prisma.message.findFirstOrThrow({
+        where: { archiveId: archiveOneId, stableKey: tombstoneMessageKey },
+      }),
+    ).resolves.toMatchObject({
+      body: "hello",
+      sourceDeleted: true,
+      contentUnavailable: false,
+      ownerDeleted: false,
+    });
+    expect(
+      await prisma.messageObservation.count({
+        where: {
+          archiveId: archiveOneId,
+          messageId: (
+            await prisma.message.findFirstOrThrow({
+              where: { archiveId: archiveOneId, stableKey: tombstoneMessageKey },
+            })
+          ).id,
+        },
+      }),
+    ).toBe(2);
+  });
+
   it("keeps identical normalized keys isolated between archives", async () => {
-    expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(2);
+    expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(3);
     expect(await prisma.message.count({ where: { archiveId: archiveTwoId } })).toBe(1);
     expect(await prisma.person.count({ where: { archiveId: archiveOneId } })).toBe(1);
     expect(await prisma.person.count({ where: { archiveId: archiveTwoId } })).toBe(1);
