@@ -196,7 +196,10 @@ export class PrismaReadPersistence implements ReadPersistencePort {
             )
           )`
       : Prisma.empty;
-    const conditions = [Prisma.sql`message."archiveId" = ${input.archiveId}::uuid`];
+    const conditions = [
+      Prisma.sql`message."archiveId" = ${input.archiveId}::uuid`,
+      Prisma.sql`message."materialized" = true`,
+    ];
     if (input.query.trim())
       conditions.push(
         Prisma.sql`message."searchVector" @@ plainto_tsquery('simple'::regconfig, ${input.query})`,
@@ -272,6 +275,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   ): Promise<readonly ConversationPersistenceRow[]> {
     const where = {
       archiveId: input.archiveId,
+      materialized: true,
       ...(input.search
         ? {
             OR: [
@@ -291,7 +295,12 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       take: input.limit,
       include: {
         _count: { select: { participants: true } },
-        messages: { select: { sentAt: true }, orderBy: { sentAt: "desc" }, take: 1 },
+        messages: {
+          where: { materialized: true },
+          select: { sentAt: true },
+          orderBy: { sentAt: "desc" },
+          take: 1,
+        },
       },
     });
     return (
@@ -344,6 +353,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       where: {
         archiveId: input.archiveId,
         conversationId: input.conversationId,
+        materialized: true,
         ...cursorWhere(input.after, input.direction, "sentAt"),
       },
       orderBy: [
@@ -352,8 +362,9 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       ],
       take: input.limit,
       include: {
-        _count: { select: { attachments: true } },
+        _count: { select: { attachments: { where: { materialized: true } } } },
         attachments: {
+          where: { materialized: true },
           select: {
             id: true,
             ordinal: true,
@@ -375,10 +386,12 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         },
         replyTo: { select: { id: true, sentAt: true, body: true } },
         revisions: {
+          where: { materialized: true },
           select: { id: true, firstSeenAt: true, body: true },
           orderBy: [{ firstSeenAt: "asc" }, { id: "asc" }],
         },
         reactions: {
+          where: { materialized: true },
           select: { id: true, personId: true, emoji: true },
           orderBy: [{ id: "asc" }],
         },
@@ -465,6 +478,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const rows = await (this.prisma.messageAttachment as unknown as ReadDelegate).findMany({
       where: {
         archiveId: input.archiveId,
+        materialized: true,
         ...(input.messageId ? { messageId: input.messageId } : {}),
         ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}),
         ...(input.mediaType ? { attachment: mediaTypeWhere(input.mediaType) } : {}),
@@ -548,12 +562,12 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         SELECT m."archiveId" AS archive_id, m.id, 'message'::text AS kind,
                COALESCE(m."sentAt", m."createdAt") AS occurred_at
         FROM "Message" m
-        WHERE m."archiveId" = ${input.archiveId}::uuid
+        WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
         UNION ALL
         SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id, 'media'::text AS kind,
                ma."createdAt" AS occurred_at
         FROM "MessageAttachment" ma
-        WHERE ma."archiveId" = ${input.archiveId}::uuid
+           WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
       )
       SELECT events.id, events.kind, events.occurred_at
       FROM events
@@ -641,8 +655,8 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
           errorClass: true,
         },
       }),
-      messageDelegate.count({ where: { archiveId: input.archiveId } }),
-      conversationDelegate.count({ where: { archiveId: input.archiveId } }),
+      messageDelegate.count({ where: { archiveId: input.archiveId, materialized: true } }),
+      conversationDelegate.count({ where: { archiveId: input.archiveId, materialized: true } }),
       personDelegate.count({ where: { archiveId: input.archiveId } }),
       this.prisma.$queryRaw<
         Array<{ availability: string; referenced: bigint | number }>
@@ -651,14 +665,15 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
           FROM "MessageAttachment" ma
           JOIN "Attachment" a
             ON a.id = ma."attachmentId" AND a."archiveId" = ma."archiveId"
-          WHERE ma."archiveId" = ${input.archiveId}::uuid
+         WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
           GROUP BY a.availability
         `),
       this.prisma.$queryRaw<Array<{ type: string; count: bigint | number }>>(Prisma.sql`
           SELECT COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown') AS type,
                  COUNT(*)::bigint AS count
           FROM "Message" m
-          WHERE m."archiveId" = ${input.archiveId}::uuid AND m."messageType" = 'unsupported'
+           WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
+             AND m."messageType" = 'unsupported'
           GROUP BY COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown')
           ORDER BY type ASC
         `),
@@ -724,8 +739,8 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
         FROM finalized_messages fm
         LEFT JOIN finalized_people people
           ON people.archive_id = fm.archive_id
-        LEFT JOIN "MessageAttachment" link
-          ON link."archiveId" = fm.archive_id AND link."messageId" = fm.id
+         LEFT JOIN "MessageAttachment" link
+           ON link."archiveId" = fm.archive_id AND link."messageId" = fm.id AND link."materialized" = true
         LEFT JOIN "Attachment" attachment
           ON attachment."archiveId" = link."archiveId"
           AND attachment.id = link."attachmentId"
@@ -758,8 +773,8 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
           END AS availability,
           COUNT(DISTINCT attachment.id)::bigint AS count
         FROM finalized_messages fm
-        JOIN "MessageAttachment" link
-          ON link."archiveId" = fm.archive_id AND link."messageId" = fm.id
+         JOIN "MessageAttachment" link
+           ON link."archiveId" = fm.archive_id AND link."messageId" = fm.id AND link."materialized" = true
         JOIN "Attachment" attachment
           ON attachment."archiveId" = link."archiveId"
           AND attachment.id = link."attachmentId"
@@ -867,6 +882,7 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
         message."sentAt" AS sent_at
       FROM "Message" message
       WHERE message."archiveId" = ${input.archiveId}::uuid
+        AND message."materialized" = true
         AND EXISTS (
           SELECT 1
           FROM "Snapshot" snapshot

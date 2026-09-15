@@ -27,6 +27,8 @@ model Archive {
   sources                         Source[]
   snapshots                       Snapshot[]
   importJobs                      ImportJob[]
+  importEligibilityDecisions      ImportEligibilityDecision[]
+  materializationRuns             MaterializationRun[]
   ownedAccounts                   OwnedAccount[]
   people                          Person[]
   identities                      Identity[]
@@ -174,6 +176,7 @@ model ImportJob {
   sourceId                        String                           @db.Uuid
   snapshotId                      String?                          @db.Uuid
   status                          String                           @default("discovered")
+  eligibility                     String                           @default("eligible")
   adapterVersion                  String?
   outcome                         Json?
   errorClass                      String?
@@ -194,12 +197,15 @@ model ImportJob {
   revisionObservations            RevisionObservation[]
   reactionObservations            ReactionObservation[]
   attachmentReferenceObservations AttachmentReferenceObservation[]
+  importEligibilityDecisions      ImportEligibilityDecision[]
+  materializationRuns             MaterializationRun[]
 
   @@unique([archiveId, id])
   @@unique([id, archiveId, ownedAccountId])
   @@index([archiveId, status])
   @@index([status, leaseExpiresAt])
   @@index([archiveId, createdAt])
+  @@index([archiveId, eligibility])
 }
 
 model Person {
@@ -237,17 +243,21 @@ model Identity {
 }
 
 model Conversation {
-  id                  String                    @id @default(uuid()) @db.Uuid
-  archiveId           String                    @db.Uuid
-  kind                String
-  stableKey           String
-  title               String?
-  createdAt           DateTime                  @default(now())
-  updatedAt           DateTime                  @updatedAt
-  archive             Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  participants        ConversationParticipant[]
-  messages            Message[]
-  sourceConversations SourceConversation[]
+  id                           String                    @id @default(uuid()) @db.Uuid
+  archiveId                    String                    @db.Uuid
+  kind                         String
+  stableKey                    String
+  title                        String?
+  materialized                 Boolean                   @default(true)
+  materializationRunId         String?
+  materializationInputDigest   String?                   @db.VarChar(64)
+  materializationPolicyVersion String?
+  createdAt                    DateTime                  @default(now())
+  updatedAt                    DateTime                  @updatedAt
+  archive                      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  participants                 ConversationParticipant[]
+  messages                     Message[]
+  sourceConversations          SourceConversation[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
@@ -307,33 +317,37 @@ model ConversationParticipant {
 }
 
 model Message {
-  id                   String               @id @default(uuid()) @db.Uuid
-  archiveId            String               @db.Uuid
-  conversationId       String               @db.Uuid
-  sourceConversationId String?              @db.Uuid
-  senderId             String?              @db.Uuid
-  replyToId            String?              @db.Uuid
-  stableKey            String
-  sourceType           String?
-  sourceKey            String?
-  messageType          String
-  body                 String?
-  metadata             Json?
-  sentAt               DateTime?
-  firstSeenAt          DateTime             @default(now())
-  lastSeenAt           DateTime             @default(now())
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
-  archive              Archive              @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  conversation         Conversation         @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  sourceConversation   SourceConversation?  @relation(fields: [sourceConversationId, conversationId, archiveId], references: [id, unifiedConversationId, archiveId], onDelete: Restrict)
-  sender               Person?              @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
-  replyTo              Message?             @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
-  replies              Message[]            @relation("MessageReplies")
-  revisions            MessageRevision[]
-  reactions            Reaction[]
-  attachments          MessageAttachment[]
-  messageObservations  MessageObservation[]
+  id                           String               @id @default(uuid()) @db.Uuid
+  archiveId                    String               @db.Uuid
+  conversationId               String               @db.Uuid
+  sourceConversationId         String?              @db.Uuid
+  senderId                     String?              @db.Uuid
+  replyToId                    String?              @db.Uuid
+  stableKey                    String
+  sourceType                   String?
+  sourceKey                    String?
+  messageType                  String
+  body                         String?
+  metadata                     Json?
+  materialized                 Boolean              @default(true)
+  materializationRunId         String?
+  materializationInputDigest   String?              @db.VarChar(64)
+  materializationPolicyVersion String?
+  sentAt                       DateTime?
+  firstSeenAt                  DateTime             @default(now())
+  lastSeenAt                   DateTime             @default(now())
+  createdAt                    DateTime             @default(now())
+  updatedAt                    DateTime             @updatedAt
+  archive                      Archive              @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation                 Conversation         @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  sourceConversation           SourceConversation?  @relation(fields: [sourceConversationId, conversationId, archiveId], references: [id, unifiedConversationId, archiveId], onDelete: Restrict)
+  sender                       Person?              @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  replyTo                      Message?             @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
+  replies                      Message[]            @relation("MessageReplies")
+  revisions                    MessageRevision[]
+  reactions                    Reaction[]
+  attachments                  MessageAttachment[]
+  messageObservations          MessageObservation[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, conversationId, id])
@@ -346,19 +360,23 @@ model Message {
 }
 
 model MessageRevision {
-  id           String                @id @default(uuid()) @db.Uuid
-  archiveId    String                @db.Uuid
-  messageId    String                @db.Uuid
-  revisionKey  String
-  body         String?
-  metadata     Json?
-  firstSeenAt  DateTime              @default(now())
-  observedAt   DateTime              @default(now())
-  createdAt    DateTime              @default(now())
-  updatedAt    DateTime              @updatedAt
-  archive      Archive               @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  message      Message               @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  observations RevisionObservation[]
+  id                           String                @id @default(uuid()) @db.Uuid
+  archiveId                    String                @db.Uuid
+  messageId                    String                @db.Uuid
+  revisionKey                  String
+  materialized                 Boolean               @default(true)
+  materializationRunId         String?
+  materializationInputDigest   String?               @db.VarChar(64)
+  materializationPolicyVersion String?
+  body                         String?
+  metadata                     Json?
+  firstSeenAt                  DateTime              @default(now())
+  observedAt                   DateTime              @default(now())
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
+  archive                      Archive               @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  message                      Message               @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  observations                 RevisionObservation[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, revisionKey])
@@ -366,21 +384,25 @@ model MessageRevision {
 }
 
 model Reaction {
-  id           String                @id @default(uuid()) @db.Uuid
-  archiveId    String                @db.Uuid
-  messageId    String                @db.Uuid
-  personId     String                @db.Uuid
-  emoji        String
-  stableKey    String
-  firstSeenAt  DateTime              @default(now())
-  lastSeenAt   DateTime              @default(now())
-  metadata     Json?
-  createdAt    DateTime              @default(now())
-  updatedAt    DateTime              @updatedAt
-  archive      Archive               @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  message      Message               @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  person       Person                @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Restrict)
-  observations ReactionObservation[]
+  id                           String                @id @default(uuid()) @db.Uuid
+  archiveId                    String                @db.Uuid
+  messageId                    String                @db.Uuid
+  personId                     String                @db.Uuid
+  emoji                        String
+  stableKey                    String
+  firstSeenAt                  DateTime              @default(now())
+  lastSeenAt                   DateTime              @default(now())
+  metadata                     Json?
+  materialized                 Boolean               @default(true)
+  materializationRunId         String?
+  materializationInputDigest   String?               @db.VarChar(64)
+  materializationPolicyVersion String?
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
+  archive                      Archive               @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  message                      Message               @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  person                       Person                @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Restrict)
+  observations                 ReactionObservation[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, stableKey])
@@ -416,19 +438,23 @@ model Attachment {
 }
 
 model MessageAttachment {
-  id           String                           @id @default(uuid()) @db.Uuid
-  archiveId    String                           @db.Uuid
-  messageId    String                           @db.Uuid
-  attachmentId String                           @db.Uuid
-  ordinal      Int?
-  role         String?
-  metadata     Json?
-  createdAt    DateTime                         @default(now())
-  updatedAt    DateTime                         @updatedAt
-  archive      Archive                          @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  message      Message                          @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  attachment   Attachment                       @relation(fields: [attachmentId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  observations AttachmentReferenceObservation[]
+  id                           String                           @id @default(uuid()) @db.Uuid
+  archiveId                    String                           @db.Uuid
+  messageId                    String                           @db.Uuid
+  attachmentId                 String                           @db.Uuid
+  ordinal                      Int?
+  role                         String?
+  metadata                     Json?
+  materialized                 Boolean                          @default(true)
+  materializationRunId         String?
+  materializationInputDigest   String?                          @db.VarChar(64)
+  materializationPolicyVersion String?
+  createdAt                    DateTime                         @default(now())
+  updatedAt                    DateTime                         @updatedAt
+  archive                      Archive                          @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  message                      Message                          @relation(fields: [messageId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  attachment                   Attachment                       @relation(fields: [attachmentId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  observations                 AttachmentReferenceObservation[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, messageId, attachmentId])
@@ -453,6 +479,7 @@ model ConversationObservation {
   observationKind       String
   eligibility           String             @default("eligible")
   valueDigest           String             @db.VarChar(64)
+  observedValue         Json?
   observedAt            DateTime
   createdAt             DateTime           @default(now())
   archive               Archive            @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -485,6 +512,7 @@ model MessageObservation {
   observationKind       String
   eligibility           String             @default("eligible")
   valueDigest           String             @db.VarChar(64)
+  observedValue         Json?
   observedAt            DateTime
   createdAt             DateTime           @default(now())
   archive               Archive            @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -518,6 +546,7 @@ model RevisionObservation {
   observationKind       String
   eligibility           String             @default("eligible")
   valueDigest           String             @db.VarChar(64)
+  observedValue         Json?
   observedAt            DateTime
   createdAt             DateTime           @default(now())
   archive               Archive            @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -551,6 +580,7 @@ model ReactionObservation {
   observationKind       String
   eligibility           String             @default("eligible")
   valueDigest           String             @db.VarChar(64)
+  observedValue         Json?
   observedAt            DateTime
   createdAt             DateTime           @default(now())
   archive               Archive            @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -584,6 +614,7 @@ model AttachmentReferenceObservation {
   observationKind       String
   eligibility           String             @default("eligible")
   valueDigest           String             @db.VarChar(64)
+  observedValue         Json?
   observedAt            DateTime
   createdAt             DateTime           @default(now())
   archive               Archive            @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -598,4 +629,51 @@ model AttachmentReferenceObservation {
   @@unique([archiveId, importJobId, observationKind, sourceConversationId, sourceEntityKey, observationKey])
   @@index([archiveId, messageAttachmentId, observedAt])
   @@index([archiveId, logicalEntityKey])
+}
+
+/// Immutable audit trail for the current eligibility of an import. The job's
+/// eligibility column is a transactional projection used by queries; these
+/// rows retain every owner/automation decision.
+model ImportEligibilityDecision {
+  id             String    @id @default(uuid()) @db.Uuid
+  archiveId      String    @db.Uuid
+  importJobId    String    @db.Uuid
+  eligibility    String
+  actor          String
+  reason         String
+  idempotencyKey String
+  decidedAt      DateTime
+  createdAt      DateTime  @default(now())
+  archive        Archive   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  importJob      ImportJob @relation(fields: [importJobId, archiveId], references: [id, archiveId], onDelete: Restrict)
+
+  @@unique([archiveId, id])
+  @@unique([archiveId, importJobId, idempotencyKey])
+  @@index([archiveId, importJobId, decidedAt])
+}
+
+/// A rebuild is only current after it reaches completed. Failed/running rows
+/// are retained so an interrupted apply is observable and retryable.
+model MaterializationRun {
+  id             String    @id @default(uuid()) @db.Uuid
+  archiveId      String    @db.Uuid
+  importJobId    String    @db.Uuid
+  action         String
+  status         String    @default("running")
+  actor          String
+  reason         String
+  idempotencyKey String
+  policyVersion  String
+  inputSetDigest String    @db.VarChar(64)
+  result         Json?
+  errorClass     String?
+  startedAt      DateTime
+  completedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  archive        Archive   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  importJob      ImportJob @relation(fields: [importJobId, archiveId], references: [id, archiveId], onDelete: Restrict)
+
+  @@unique([archiveId, id])
+  @@unique([archiveId, importJobId, idempotencyKey])
+  @@index([archiveId, importJobId, status])
 }

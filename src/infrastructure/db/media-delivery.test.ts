@@ -40,7 +40,10 @@ describe("Prisma media delivery", () => {
       expect(result?.byteSize).toBe(content.length);
       expect(calls).toEqual([
         expect.objectContaining({
-          where: { archiveId_id: { archiveId, id: attachmentId } },
+          where: {
+            archiveId_id: { archiveId, id: attachmentId },
+            messageLinks: { some: { archiveId, materialized: true } },
+          },
         }),
       ]);
       const reader = result!.open().getReader();

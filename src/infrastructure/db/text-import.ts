@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import { reconcileAttachmentAvailability } from "../../application/text-import.js";
+import type { ImportEligibility } from "../../application/import-exclusion.js";
 import type {
   ImportAttachmentAvailability,
   ImportAttachmentRecord,
@@ -37,10 +38,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         throw new Error("Text snapshot import requires an account in the archive scope");
       const job = await tx.importJob.findUnique({
         where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
-        select: { ownedAccountId: true, sourceId: true, snapshotId: true },
+        select: { ownedAccountId: true, sourceId: true, snapshotId: true, eligibility: true },
       });
       if (!job || job.ownedAccountId !== ownedAccountId || job.snapshotId !== input.snapshotId)
         throw new Error("Text snapshot import scope does not match its import job");
+      const jobEligibility: ImportEligibility =
+        job.eligibility === "excluded" ? "excluded" : "eligible";
       for (const record of input.records) {
         if (record.kind === "person") {
           const existing = await tx.person.upsert({
@@ -120,8 +123,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               kind: record.conversationKind,
               stableKey,
               title: record.title,
+              materialized: jobEligibility === "eligible",
             },
-            update: { kind: record.conversationKind, title: record.title },
+            update:
+              jobEligibility === "eligible"
+                ? { kind: record.conversationKind, title: record.title, materialized: true }
+                : {},
           });
           conversations.set(record.stableKey, existing.id);
           const sourceConversation = await tx.sourceConversation.upsert({
@@ -160,6 +167,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             logicalEntityKey: stableKey,
             observationKey: record.stableKey,
             value: record,
+            eligibility: jobEligibility,
             observedAt: input.observedAt,
           });
         }
@@ -244,20 +252,25 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             sentAt,
             firstSeenAt: input.observedAt,
             lastSeenAt: input.observedAt,
+            materialized: jobEligibility === "eligible",
           },
-          update: {
-            senderId,
-            body: record.body,
-            messageType: record.messageKind,
-            lastSeenAt: input.observedAt,
-            metadata: json({
-              ...(asObject(prior?.metadata) ?? {}),
-              direction: record.direction,
-              bodyState: record.bodyState,
-              ...(record.metadata ?? {}),
-              ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
-            }),
-          },
+          update:
+            jobEligibility === "eligible"
+              ? {
+                  senderId,
+                  body: record.body,
+                  messageType: record.messageKind,
+                  lastSeenAt: input.observedAt,
+                  materialized: true,
+                  metadata: json({
+                    ...(asObject(prior?.metadata) ?? {}),
+                    direction: record.direction,
+                    bodyState: record.bodyState,
+                    ...(record.metadata ?? {}),
+                    ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
+                  }),
+                }
+              : {},
         });
         messages.set(record.stableKey, existing.id);
         await upsertObservation(tx.messageObservation, {
@@ -274,6 +287,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           observationKey: record.stableKey,
           messageId: existing.id,
           value: record,
+          eligibility: jobEligibility,
           observedAt: input.observedAt,
         });
       }
@@ -320,11 +334,16 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               }),
               firstSeenAt: input.observedAt,
               observedAt: input.observedAt,
+              materialized: jobEligibility === "eligible",
             },
-            update: {
-              observedAt: input.observedAt,
-              metadata: json({ ...(asObject(priorRevision?.metadata) ?? {}) }),
-            },
+            update:
+              jobEligibility === "eligible"
+                ? {
+                    observedAt: input.observedAt,
+                    materialized: true,
+                    metadata: json({ ...(asObject(priorRevision?.metadata) ?? {}) }),
+                  }
+                : {},
           });
           const messageRecord = input.records.find(
             (candidate): candidate is ImportMessageRecord =>
@@ -348,6 +367,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               observationKey: record.stableKey,
               revisionId: revision.id,
               value: record,
+              eligibility: jobEligibility,
               observedAt: input.observedAt,
             });
         }
@@ -369,6 +389,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           input.observedAt,
           messageId,
           record,
+          jobEligibility,
         );
         if (sourceConversationId)
           await upsertObservation(tx.attachmentReferenceObservation, {
@@ -385,6 +406,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             observationKey: record.stableKey,
             messageAttachmentId: link.id,
             value: record,
+            eligibility: jobEligibility,
             observedAt: input.observedAt,
           });
       }
@@ -407,6 +429,7 @@ async function importAttachment(
   observedAt: Date,
   messageId: string,
   record: ImportAttachmentRecord,
+  eligibility: ImportEligibility,
 ): Promise<{ readonly id: string }> {
   const byStableKey = await tx.attachment.findFirst({
     where: { archiveId, stableKey: record.stableKey },
@@ -464,11 +487,13 @@ async function importAttachment(
       ordinal: record.ordinal,
       role: record.role,
       metadata: record.metadata ? json(record.metadata) : undefined,
+      materialized: eligibility === "eligible",
     },
     update: {
       ordinal: record.ordinal,
       role: record.role,
       ...(record.metadata ? { metadata: json(record.metadata) } : {}),
+      materialized: eligibility === "eligible",
     },
   });
   return { id: link.id };
@@ -478,7 +503,17 @@ function attachmentMetadata(
   record: ImportAttachmentRecord,
   observedAt: Date,
   prior?: { readonly originalName: string | null; readonly originalPath: string | null },
-): Prisma.AttachmentUpdateInput {
+): {
+  readonly originalName?: string;
+  readonly originalPath?: string;
+  readonly mimeType?: string;
+  readonly byteSize?: bigint;
+  readonly width?: number;
+  readonly height?: number;
+  readonly durationMs?: number;
+  readonly sourceMetadata?: Prisma.InputJsonValue;
+  readonly lastSeenAt: Date;
+} {
   return {
     ...(record.originalName !== undefined ? { originalName: record.originalName } : {}),
     ...(record.originalPath !== undefined ? { originalPath: record.originalPath } : {}),
@@ -553,6 +588,7 @@ type ObservationInput = {
   readonly messageId?: string;
   readonly revisionId?: string;
   readonly messageAttachmentId?: string;
+  readonly eligibility: ImportEligibility;
 };
 
 async function upsertObservation(
@@ -583,10 +619,11 @@ async function upsertObservation(
       ...fields,
       ...target,
       observationKind: "value",
-      eligibility: "eligible",
+      eligibility: input.eligibility,
       valueDigest: digest,
+      observedValue: json(value),
     },
-    update: { ...target, valueDigest: digest, observedAt: input.observedAt },
+    update: {},
   } as never);
 }
 

@@ -21,7 +21,10 @@ export class PrismaMediaDelivery implements MediaDeliveryPort {
     attachmentId: string,
   ): Promise<MediaDeliveryAttachment | null> {
     const attachment = await this.prisma.attachment.findUnique({
-      where: { archiveId_id: { archiveId, id: attachmentId } },
+      where: {
+        archiveId_id: { archiveId, id: attachmentId },
+        messageLinks: { some: { archiveId, materialized: true } },
+      },
       select: {
         availability: true,
         byteSize: true,
