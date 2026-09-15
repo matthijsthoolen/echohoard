@@ -21,6 +21,8 @@ export interface ImportIdentityRecord {
 export interface ImportConversationRecord {
   readonly kind: "conversation";
   readonly stableKey: string;
+  /** Source namespace for the account-specific conversation identity. */
+  readonly source?: { readonly namespace: string; readonly value: string };
   readonly conversationKind: string;
   readonly title?: string;
 }

@@ -103,6 +103,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           identities.set(record.stableKey, existing.id);
         }
         if (record.kind === "conversation") {
+          const sourceNamespace = record.source?.namespace ?? "normalized-import";
           const stableKey = await conversationStableKey(
             tx,
             input.archiveId,
@@ -128,19 +129,19 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               archiveId_ownedAccountId_sourceNamespace_sourceConversationKey: {
                 archiveId: input.archiveId,
                 ownedAccountId,
-                sourceNamespace: "normalized-import",
+                sourceNamespace,
                 sourceConversationKey: record.stableKey,
               },
             },
             create: {
               id: stableUuid(
                 input.archiveId,
-                `${ownedAccountId}:source-conversation:${record.stableKey}`,
+                `${ownedAccountId}:source-conversation:${sourceNamespace}:${record.stableKey}`,
               ),
               archiveId: input.archiveId,
               ownedAccountId,
               unifiedConversationId: existing.id,
-              sourceNamespace: "normalized-import",
+              sourceNamespace,
               sourceConversationKey: record.stableKey,
             },
             update: { unifiedConversationId: existing.id },
@@ -153,6 +154,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             snapshotId: input.snapshotId,
             importJobId: input.importJobId,
             sourceConversationId: sourceConversation.id,
+            sourceNamespace,
             sourceConversationKey: record.stableKey,
             sourceEntityKey: record.stableKey,
             logicalEntityKey: stableKey,
@@ -266,6 +268,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           importJobId: input.importJobId,
           sourceConversationId,
           sourceConversationKey: record.conversationKey,
+          sourceNamespace: record.source.namespace,
           sourceEntityKey: record.stableKey,
           logicalEntityKey: stableKey,
           observationKey: record.stableKey,
@@ -306,7 +309,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               },
             },
             create: {
-              id: stableUuid(input.archiveId, record.stableKey),
+              id: stableUuid(input.archiveId, `${messageId}:${record.stableKey}`),
               archiveId: input.archiveId,
               messageId,
               revisionKey: record.stableKey,
@@ -338,6 +341,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               snapshotId: input.snapshotId,
               importJobId: input.importJobId,
               sourceConversationId: revisionSourceConversationId,
+              sourceNamespace: messageRecord?.source.namespace ?? "normalized-import",
               sourceConversationKey: messageRecord?.conversationKey ?? "unknown",
               sourceEntityKey: record.stableKey,
               logicalEntityKey: record.stableKey,
@@ -374,6 +378,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             snapshotId: input.snapshotId,
             importJobId: input.importJobId,
             sourceConversationId,
+            sourceNamespace: messageRecord?.source.namespace ?? "normalized-import",
             sourceConversationKey: messageRecord?.conversationKey ?? "unknown",
             sourceEntityKey: record.stableKey,
             logicalEntityKey: record.stableKey,
@@ -448,7 +453,7 @@ async function importAttachment(
           lastSeenAt: observedAt,
         },
       });
-  await tx.messageAttachment.upsert({
+  const link = await tx.messageAttachment.upsert({
     where: {
       archiveId_messageId_attachmentId: { archiveId, messageId, attachmentId: attachment.id },
     },
@@ -466,7 +471,7 @@ async function importAttachment(
       ...(record.metadata ? { metadata: json(record.metadata) } : {}),
     },
   });
-  return { id: attachment.id };
+  return { id: link.id };
 }
 
 function attachmentMetadata(
@@ -538,6 +543,7 @@ type ObservationInput = {
   readonly snapshotId: string;
   readonly importJobId: string;
   readonly sourceConversationId: string;
+  readonly sourceNamespace: string;
   readonly sourceConversationKey: string;
   readonly sourceEntityKey: string;
   readonly logicalEntityKey: string;
