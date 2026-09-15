@@ -209,7 +209,6 @@ export class PrismaConversationPrivacyPersistence implements ConversationPrivacy
     });
     return rows.map((row) => privacyPolicy(row as PrivacyConversationRow));
   }
-
 }
 
 function privacyPolicy(row: PrivacyConversationRow): ConversationPrivacyPolicy {

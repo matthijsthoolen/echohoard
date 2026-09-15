@@ -5,10 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 const url = process.env.DATABASE_URL;
 if (!url) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
 const prisma = new PrismaClient({ datasourceUrl: url });
-const [userId, archiveId, otherArchiveId, attachmentId, transcriptId, requestId, runId] = Array.from(
-  { length: 7 },
-  () => randomUUID(),
-);
+const [userId, archiveId, otherArchiveId, attachmentId, transcriptId, requestId, runId] =
+  Array.from({ length: 7 }, () => randomUUID());
 const digest = "c".repeat(64);
 
 describe("transcript persistence constraints", () => {
@@ -85,6 +83,8 @@ describe("transcript persistence constraints", () => {
         },
       }),
     ).rejects.toThrow();
-    await expect(prisma.transcriptVersion.count({ where: { archiveId, transcriptId } })).resolves.toBe(1);
+    await expect(
+      prisma.transcriptVersion.count({ where: { archiveId, transcriptId } }),
+    ).resolves.toBe(1);
   });
 });
