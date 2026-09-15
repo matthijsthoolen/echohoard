@@ -46,6 +46,7 @@ model Archive {
   revisionObservations            RevisionObservation[]
   reactionObservations            ReactionObservation[]
   attachmentReferenceObservations AttachmentReferenceObservation[]
+  ownerDeletionAudits             OwnerDeletionAudit[]
   admittedIdentities              ArchiveIdentity[]
   authSessions                    AuthSession[]
   privacyAudits                   ConversationPrivacyAudit[]
@@ -268,6 +269,7 @@ model Conversation {
   createdAt                    DateTime                   @default(now())
   updatedAt                    DateTime                   @updatedAt
   archive                      Archive                    @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  ownerDeletionVersion         Int                       @default(0)
   participants                 ConversationParticipant[]
   messages                     Message[]
   sourceConversations          SourceConversation[]
@@ -302,6 +304,7 @@ model ConversationMergeAudit {
   @@unique([archiveId, id])
   @@unique([archiveId, idempotencyKey])
   @@index([archiveId, targetConversationId, createdAt])
+}
 
 /// Identifiers and actions only. Titles, identities, content, and policy
 /// payloads are deliberately excluded from this immutable audit trail.
@@ -398,6 +401,7 @@ model Message {
   ownerDeletedAt               DateTime?
   ownerDeletedBy               String?
   ownerDeletionReason          String?
+  ownerDeletionVersion         Int                  @default(0)
   sentAt                       DateTime?
   firstSeenAt                  DateTime             @default(now())
   lastSeenAt                   DateTime             @default(now())
@@ -483,35 +487,58 @@ model Reaction {
 }
 
 model Attachment {
-  id                  String              @id @default(uuid()) @db.Uuid
-  archiveId           String              @db.Uuid
-  stableKey           String?
-  sha256              String              @db.VarChar(64)
-  availability        String              @default("missing")
-  casKey              String?
-  originalName        String?
-  originalPath        String?
-  mimeType            String?
-  byteSize            BigInt?
-  width               Int?
-  height              Int?
-  durationMs          Int?
-  sourceMetadata      Json?
-  firstSeenAt         DateTime            @default(now())
-  lastSeenAt          DateTime            @default(now())
-  ownerDeleted        Boolean             @default(false)
-  ownerDeletedAt      DateTime?
-  ownerDeletedBy      String?
-  ownerDeletionReason String?
-  createdAt           DateTime            @default(now())
-  updatedAt           DateTime            @updatedAt
-  archive             Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
-  messageLinks        MessageAttachment[]
+  id                   String              @id @default(uuid()) @db.Uuid
+  archiveId            String              @db.Uuid
+  stableKey            String?
+  sha256               String              @db.VarChar(64)
+  availability         String              @default("missing")
+  casKey               String?
+  originalName         String?
+  originalPath         String?
+  mimeType             String?
+  byteSize             BigInt?
+  width                Int?
+  height               Int?
+  durationMs           Int?
+  sourceMetadata       Json?
+  firstSeenAt          DateTime            @default(now())
+  lastSeenAt           DateTime            @default(now())
+  ownerDeleted         Boolean             @default(false)
+  ownerDeletedAt       DateTime?
+  ownerDeletedBy       String?
+  ownerDeletionReason  String?
+  ownerDeletionVersion Int                 @default(0)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  archive              Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  messageLinks         MessageAttachment[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
   @@unique([archiveId, sha256])
   @@index([archiveId, availability])
+}
+
+/// Identifier-only audit receipt for reversible owner policy changes.
+model OwnerDeletionAudit {
+  id               String   @id @default(uuid()) @db.Uuid
+  archiveId        String   @db.Uuid
+  entityKind       String
+  entityId         String   @db.Uuid
+  action           String
+  actor            String
+  reason           String
+  idempotencyKey   String
+  policyVersion    String
+  expectedVersion  Int?
+  resultingVersion Int
+  cascadeCount     Int      @default(0)
+  occurredAt       DateTime @default(now())
+  archive          Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+
+  @@unique([archiveId, id])
+  @@unique([archiveId, idempotencyKey])
+  @@index([archiveId, entityKind, entityId, occurredAt])
 }
 
 model MessageAttachment {

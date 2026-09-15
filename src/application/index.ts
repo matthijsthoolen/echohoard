@@ -9,4 +9,5 @@ export * from "./health-reads.js";
 export * from "./statistics.js";
 export * from "./import-exclusion.js";
 export * from "./conversation-grouping.js";
+export * from "./owner-deletion.js";
 export type ApplicationModule = { domain: DomainModule };
