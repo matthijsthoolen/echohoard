@@ -44,9 +44,7 @@ export function createPeopleRoute({ getRuntime }: PeopleRouteDependencies) {
   };
 }
 
-function parseQuery(
-  params: URLSearchParams,
-):
+function parseQuery(params: URLSearchParams):
   | {
       readonly ok: true;
       readonly limit: number;
