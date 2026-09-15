@@ -4,6 +4,7 @@ import { reconcileAttachmentAvailability } from "../../application/text-import.j
 import type {
   ImportAttachmentAvailability,
   ImportAttachmentRecord,
+  ImportMessageRecord,
   TextSnapshotImportInput,
   TextSnapshotImporter,
 } from "../../application/text-import.js";
@@ -34,6 +35,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         input.ownedAccountId ?? (accounts.length === 1 ? accounts[0].id : undefined);
       if (!ownedAccountId || !accounts.some((account) => account.id === ownedAccountId))
         throw new Error("Text snapshot import requires an account in the archive scope");
+      const job = await tx.importJob.findUnique({
+        where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
+        select: { ownedAccountId: true, sourceId: true, snapshotId: true },
+      });
+      if (!job || job.ownedAccountId !== ownedAccountId || job.snapshotId !== input.snapshotId)
+        throw new Error("Text snapshot import scope does not match its import job");
       for (const record of input.records) {
         if (record.kind === "person") {
           const existing = await tx.person.upsert({
@@ -44,7 +51,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               },
             },
             create: {
-              id: stableUuid(input.archiveId, record.stableKey),
+              id: stableUuid(input.archiveId, stableKey),
               archiveId: input.archiveId,
               displayName: record.displayName,
             },
@@ -96,15 +103,21 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           identities.set(record.stableKey, existing.id);
         }
         if (record.kind === "conversation") {
+          const stableKey = await conversationStableKey(
+            tx,
+            input.archiveId,
+            ownedAccountId,
+            record.stableKey,
+          );
           const existing = await tx.conversation.upsert({
             where: {
-              archiveId_stableKey: { archiveId: input.archiveId, stableKey: record.stableKey },
+              archiveId_stableKey: { archiveId: input.archiveId, stableKey },
             },
             create: {
               id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               kind: record.conversationKind,
-              stableKey: record.stableKey,
+              stableKey,
               title: record.title,
             },
             update: { kind: record.conversationKind, title: record.title },
@@ -133,6 +146,20 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             update: { unifiedConversationId: existing.id },
           });
           sourceConversations.set(record.stableKey, sourceConversation.id);
+          await upsertObservation(tx.conversationObservation, {
+            archiveId: input.archiveId,
+            ownedAccountId,
+            sourceId: job.sourceId,
+            snapshotId: input.snapshotId,
+            importJobId: input.importJobId,
+            sourceConversationId: sourceConversation.id,
+            sourceConversationKey: record.stableKey,
+            sourceEntityKey: record.stableKey,
+            logicalEntityKey: stableKey,
+            observationKey: record.stableKey,
+            value: record,
+            observedAt: input.observedAt,
+          });
         }
       }
       for (const record of input.records) {
@@ -174,23 +201,30 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           ? await identityPersonId(input.archiveId, identities.get(record.senderIdentityKey), tx)
           : null;
         const sentAt = record.timestamp ? new Date(record.timestamp) : null;
+        const stableKey = await messageStableKey(
+          tx,
+          input.archiveId,
+          ownedAccountId,
+          sourceConversationId,
+          record.stableKey,
+        );
         const prior = await tx.message.findUnique({
           where: {
-            archiveId_stableKey: { archiveId: input.archiveId, stableKey: record.stableKey },
+            archiveId_stableKey: { archiveId: input.archiveId, stableKey },
           },
           select: { metadata: true },
         });
         const existing = await tx.message.upsert({
           where: {
-            archiveId_stableKey: { archiveId: input.archiveId, stableKey: record.stableKey },
+            archiveId_stableKey: { archiveId: input.archiveId, stableKey },
           },
           create: {
-            id: stableUuid(input.archiveId, record.stableKey),
+            id: stableUuid(input.archiveId, stableKey),
             archiveId: input.archiveId,
             conversationId,
             sourceConversationId,
             senderId,
-            stableKey: record.stableKey,
+            stableKey,
             sourceType: record.source.namespace,
             sourceKey: record.source.value,
             messageType: record.messageKind,
@@ -224,6 +258,21 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           },
         });
         messages.set(record.stableKey, existing.id);
+        await upsertObservation(tx.messageObservation, {
+          archiveId: input.archiveId,
+          ownedAccountId,
+          sourceId: job.sourceId,
+          snapshotId: input.snapshotId,
+          importJobId: input.importJobId,
+          sourceConversationId,
+          sourceConversationKey: record.conversationKey,
+          sourceEntityKey: record.stableKey,
+          logicalEntityKey: stableKey,
+          observationKey: record.stableKey,
+          messageId: existing.id,
+          value: record,
+          observedAt: input.observedAt,
+        });
       }
       for (const record of input.records) {
         if (record.kind === "message" && record.replyToKey) {
@@ -248,7 +297,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             },
             select: { metadata: true },
           });
-          await tx.messageRevision.upsert({
+          const revision = await tx.messageRevision.upsert({
             where: {
               archiveId_messageId_revisionKey: {
                 archiveId: input.archiveId,
@@ -274,13 +323,65 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               metadata: json({ ...(asObject(priorRevision?.metadata) ?? {}) }),
             },
           });
+          const messageRecord = input.records.find(
+            (candidate): candidate is ImportMessageRecord =>
+              candidate.kind === "message" && candidate.stableKey === record.messageKey,
+          );
+          const revisionSourceConversationId = messageRecord
+            ? sourceConversations.get(messageRecord.conversationKey)
+            : undefined;
+          if (revisionSourceConversationId)
+            await upsertObservation(tx.revisionObservation, {
+              archiveId: input.archiveId,
+              ownedAccountId,
+              sourceId: job.sourceId,
+              snapshotId: input.snapshotId,
+              importJobId: input.importJobId,
+              sourceConversationId: revisionSourceConversationId,
+              sourceConversationKey: messageRecord?.conversationKey ?? "unknown",
+              sourceEntityKey: record.stableKey,
+              logicalEntityKey: record.stableKey,
+              observationKey: record.stableKey,
+              revisionId: revision.id,
+              value: record,
+              observedAt: input.observedAt,
+            });
         }
       }
       for (const record of input.records) {
         if (record.kind !== "attachment") continue;
         const messageId = messages.get(record.messageKey);
         if (!messageId) continue;
-        await importAttachment(tx, input.archiveId, input.observedAt, messageId, record);
+        const messageRecord = input.records.find(
+          (candidate): candidate is ImportMessageRecord =>
+            candidate.kind === "message" && candidate.stableKey === record.messageKey,
+        );
+        const sourceConversationId = messageRecord
+          ? sourceConversations.get(messageRecord.conversationKey)
+          : undefined;
+        const link = await importAttachment(
+          tx,
+          input.archiveId,
+          input.observedAt,
+          messageId,
+          record,
+        );
+        if (sourceConversationId)
+          await upsertObservation(tx.attachmentReferenceObservation, {
+            archiveId: input.archiveId,
+            ownedAccountId,
+            sourceId: job.sourceId,
+            snapshotId: input.snapshotId,
+            importJobId: input.importJobId,
+            sourceConversationId,
+            sourceConversationKey: messageRecord?.conversationKey ?? "unknown",
+            sourceEntityKey: record.stableKey,
+            logicalEntityKey: record.stableKey,
+            observationKey: record.stableKey,
+            messageAttachmentId: link.id,
+            value: record,
+            observedAt: input.observedAt,
+          });
       }
       await tx.snapshot.update({
         where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
@@ -301,7 +402,7 @@ async function importAttachment(
   observedAt: Date,
   messageId: string,
   record: ImportAttachmentRecord,
-): Promise<void> {
+): Promise<{ readonly id: string }> {
   const byStableKey = await tx.attachment.findFirst({
     where: { archiveId, stableKey: record.stableKey },
   });
@@ -365,6 +466,7 @@ async function importAttachment(
       ...(record.metadata ? { metadata: json(record.metadata) } : {}),
     },
   });
+  return { id: attachment.id };
 }
 
 function attachmentMetadata(
@@ -426,4 +528,91 @@ function stableUuid(archiveId: string, key: string): string {
     .digest("hex")
     .slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
+}
+
+type ObservationDelegate = { upsert(args: never): Promise<unknown> };
+type ObservationInput = {
+  readonly archiveId: string;
+  readonly ownedAccountId: string;
+  readonly sourceId: string;
+  readonly snapshotId: string;
+  readonly importJobId: string;
+  readonly sourceConversationId: string;
+  readonly sourceConversationKey: string;
+  readonly sourceEntityKey: string;
+  readonly logicalEntityKey: string;
+  readonly observationKey: string;
+  readonly value: unknown;
+  readonly observedAt: Date;
+  readonly messageId?: string;
+  readonly revisionId?: string;
+  readonly messageAttachmentId?: string;
+};
+
+async function upsertObservation(
+  delegate: ObservationDelegate,
+  input: ObservationInput,
+): Promise<void> {
+  const { value, messageId, revisionId, messageAttachmentId, ...fields } = input;
+  const target = messageId
+    ? { messageId }
+    : revisionId
+      ? { revisionId }
+      : messageAttachmentId
+        ? { messageAttachmentId }
+        : {};
+  const digest = createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
+  await delegate.upsert({
+    where: {
+      archiveId_importJobId_observationKind_sourceConversationId_sourceEntityKey_observationKey: {
+        archiveId: input.archiveId,
+        importJobId: input.importJobId,
+        observationKind: "value",
+        sourceConversationId: input.sourceConversationId,
+        sourceEntityKey: input.sourceEntityKey,
+        observationKey: input.observationKey,
+      },
+    },
+    create: {
+      ...fields,
+      ...target,
+      observationKind: "value",
+      eligibility: "eligible",
+      valueDigest: digest,
+    },
+    update: { ...target, valueDigest: digest, observedAt: input.observedAt },
+  } as never);
+}
+
+async function conversationStableKey(
+  tx: Tx,
+  archiveId: string,
+  ownedAccountId: string,
+  sourceKey: string,
+): Promise<string> {
+  const existing = await tx.conversation.findUnique({
+    where: { archiveId_stableKey: { archiveId, stableKey: sourceKey } },
+    include: { sourceConversations: { select: { ownedAccountId: true } } },
+  });
+  return existing &&
+    existing.sourceConversations.some((row) => row.ownedAccountId !== ownedAccountId)
+    ? `${ownedAccountId}:${sourceKey}`
+    : sourceKey;
+}
+
+async function messageStableKey(
+  tx: Tx,
+  archiveId: string,
+  ownedAccountId: string,
+  sourceConversationId: string,
+  sourceKey: string,
+): Promise<string> {
+  const existing = await tx.message.findUnique({
+    where: { archiveId_stableKey: { archiveId, stableKey: sourceKey } },
+    select: { sourceConversation: { select: { ownedAccountId: true } } },
+  });
+  return existing?.sourceConversation?.ownedAccountId !== undefined &&
+    existing.sourceConversation.ownedAccountId !== ownedAccountId
+    ? `${ownedAccountId}:${sourceConversationId}:${sourceKey}`
+    : sourceKey;
 }

@@ -113,6 +113,10 @@ describe("transactional normalized text snapshot import", () => {
     );
     expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(1);
     expect(await prisma.messageRevision.count({ where: { archiveId: archiveOneId } })).toBe(1);
+    expect(await prisma.messageObservation.count({ where: { archiveId: archiveOneId } })).toBe(1);
+    expect(await prisma.conversationObservation.count({ where: { archiveId: archiveOneId } })).toBe(
+      1,
+    );
     const message = await prisma.message.findFirstOrThrow({ where: { archiveId: archiveOneId } });
     expect(message.firstSeenAt.toISOString()).toBe(observedAt.toISOString());
     expect(message.lastSeenAt.toISOString()).toBe(observedAt.toISOString());
@@ -143,6 +147,7 @@ describe("transactional normalized text snapshot import", () => {
       }),
     ).rejects.toThrow();
     expect(await prisma.message.count({ where: { archiveId: archiveTwoId } })).toBe(0);
+    expect(await prisma.messageObservation.count({ where: { archiveId: archiveTwoId } })).toBe(0);
     await prisma.snapshot.create({
       data: {
         id: missingSnapshot,
@@ -172,8 +177,60 @@ describe("transactional normalized text snapshot import", () => {
     expect(await prisma.message.count({ where: { archiveId: archiveTwoId } })).toBe(1);
   });
 
+  it("keeps the same source chat and message separate for another owned account", async () => {
+    const accountId = await createFixtureOwnedAccount(
+      prisma,
+      archiveOneId,
+      `second-${randomUUID()}`,
+    );
+    const sourceId = randomUUID();
+    const snapshotId = randomUUID();
+    const jobId = randomUUID();
+    await prisma.source.create({
+      data: {
+        id: sourceId,
+        archiveId: archiveOneId,
+        ownedAccountId: accountId,
+        kind: "whatsapp",
+        stableKey: `second-${sourceId}`,
+        sha256: "d".repeat(64),
+      },
+    });
+    await prisma.snapshot.create({
+      data: {
+        id: snapshotId,
+        archiveId: archiveOneId,
+        ownedAccountId: accountId,
+        sourceId,
+        sha256: "e".repeat(64),
+      },
+    });
+    await prisma.importJob.create({
+      data: {
+        id: jobId,
+        archiveId: archiveOneId,
+        ownedAccountId: accountId,
+        sourceId,
+        snapshotId,
+        status: "queued",
+      },
+    });
+    await importer.import({
+      archiveId: archiveOneId,
+      ownedAccountId: accountId,
+      snapshotId,
+      importJobId: jobId,
+      observedAt,
+      records,
+    });
+    expect(await prisma.sourceConversation.count({ where: { archiveId: archiveOneId } })).toBe(2);
+    expect(await prisma.conversation.count({ where: { archiveId: archiveOneId } })).toBe(2);
+    expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(2);
+    expect(await prisma.messageObservation.count({ where: { archiveId: archiveOneId } })).toBe(2);
+  });
+
   it("keeps identical normalized keys isolated between archives", async () => {
-    expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(1);
+    expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(2);
     expect(await prisma.message.count({ where: { archiveId: archiveTwoId } })).toBe(1);
     expect(await prisma.person.count({ where: { archiveId: archiveOneId } })).toBe(1);
     expect(await prisma.person.count({ where: { archiveId: archiveTwoId } })).toBe(1);
