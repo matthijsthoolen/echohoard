@@ -51,7 +51,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               },
             },
             create: {
-              id: stableUuid(input.archiveId, stableKey),
+              id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               displayName: record.displayName,
             },
@@ -114,7 +114,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               archiveId_stableKey: { archiveId: input.archiveId, stableKey },
             },
             create: {
-              id: stableUuid(input.archiveId, record.stableKey),
+              id: stableUuid(input.archiveId, stableKey),
               archiveId: input.archiveId,
               kind: record.conversationKind,
               stableKey,
