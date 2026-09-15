@@ -1,3 +1,5 @@
+import { noopAuthDiagnostic, type AuthDiagnostic } from "./auth-diagnostics";
+
 export type ArchivePrincipal = {
   userId: string;
   archiveId: string;
@@ -47,6 +49,7 @@ export class OidcAuth {
     private readonly provider: OidcProvider,
     private readonly directory: PrincipalDirectory,
     private readonly sessions: SessionStore,
+    private readonly diagnostic: AuthDiagnostic = noopAuthDiagnostic,
   ) {}
   login(state: string, nonce?: string, codeChallenge?: string): string {
     return this.provider.authorizationUrl(state, nonce, codeChallenge);
@@ -63,19 +66,34 @@ export class OidcAuth {
     try {
       claims = await this.provider.exchange(code, expectedNonce, codeVerifier);
     } catch {
+      this.diagnostic("oidc.callback.exchange-error", {});
       return null;
     }
+    const nonceMatches = expectedNonce === undefined || claims.nonce === expectedNonce;
+    const expired = typeof claims.exp === "number" && claims.exp * 1000 <= Date.now();
     if (
       typeof claims.iss !== "string" ||
       typeof claims.sub !== "string" ||
-      (expectedNonce !== undefined && claims.nonce !== expectedNonce) ||
-      (typeof claims.exp === "number" && claims.exp * 1000 <= Date.now())
-    )
+      !nonceMatches ||
+      expired
+    ) {
+      this.diagnostic("oidc.callback.claims-rejected", {
+        issuer_present: typeof claims.iss === "string",
+        subject_present: typeof claims.sub === "string",
+        nonce_matches: nonceMatches,
+        expired,
+      });
       return null;
+    }
     const principal = await this.directory.findBySubject(claims.iss, claims.sub);
-    if (!principal) return null;
+    if (!principal) {
+      this.diagnostic("oidc.callback.identity-not-admitted", {});
+      return null;
+    }
     await this.sessions.cleanupExpired(100);
-    return this.sessions.create(principal);
+    const session = await this.sessions.create(principal);
+    this.diagnostic("oidc.callback.accepted", { role: principal.role ?? "unspecified" });
+    return session;
   }
   async approveIdentity(
     principal: ArchivePrincipal,

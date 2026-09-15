@@ -9,6 +9,7 @@ import type {
   PendingIdentity,
   PrincipalDirectory,
 } from "../../application/auth";
+import { noopAuthDiagnostic, type AuthDiagnostic } from "../../application/auth-diagnostics";
 
 export async function readSecretFile(path: string): Promise<string> {
   const value = (await readFile(path, "utf8")).trim();
@@ -24,6 +25,7 @@ export class HttpOidcProvider implements OidcProvider {
     private readonly clientSecret: string,
     private readonly redirectUri: string,
     private readonly fetcher: typeof fetch = fetch,
+    private readonly diagnostic: AuthDiagnostic = noopAuthDiagnostic,
   ) {}
   public authorizationUrl(state: string, nonce?: string, codeChallenge?: string): string {
     // Authentik keeps the issuer provider-specific but exposes one global
@@ -43,8 +45,16 @@ export class HttpOidcProvider implements OidcProvider {
     return url.toString();
   }
   public async exchange(code: string, nonce?: string, codeVerifier?: string): Promise<OidcClaims> {
-    if (!codeVerifier) return {};
-    this.metadata ??= await this.discover();
+    if (!codeVerifier) {
+      this.diagnostic("oidc.exchange.rejected", { reason: "missing-code-verifier" });
+      return {};
+    }
+    try {
+      this.metadata ??= await this.discover();
+    } catch (error) {
+      this.diagnostic("oidc.exchange.failed", { reason: "discovery-failed" });
+      throw error;
+    }
     const response = await this.fetcher(this.metadata.token_endpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -57,10 +67,25 @@ export class HttpOidcProvider implements OidcProvider {
         code_verifier: codeVerifier,
       }),
     });
-    if (!response.ok) return {};
-    const payload: unknown = await response.json();
+    if (!response.ok) {
+      this.diagnostic("oidc.exchange.failed", {
+        reason: "token-endpoint-rejected",
+        http_status: response.status,
+      });
+      return {};
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      this.diagnostic("oidc.exchange.failed", { reason: "token-response-invalid-json" });
+      throw new Error("OIDC token response was not valid JSON");
+    }
     const idToken = (payload as { id_token?: unknown }).id_token;
-    if (typeof idToken !== "string") return {};
+    if (typeof idToken !== "string" || !idToken) {
+      this.diagnostic("oidc.exchange.failed", { reason: "token-response-missing-id-token" });
+      return {};
+    }
     try {
       const verified = await jwtVerify(
         idToken,
@@ -71,8 +96,18 @@ export class HttpOidcProvider implements OidcProvider {
         },
       );
       const claims = verified.payload as OidcClaims;
-      return nonce === undefined || claims.nonce === nonce ? claims : {};
-    } catch {
+      if (nonce !== undefined && claims.nonce !== nonce) {
+        this.diagnostic("oidc.exchange.failed", { reason: "nonce-mismatch" });
+        return {};
+      }
+      this.diagnostic("oidc.exchange.accepted", { issuer_present: typeof claims.iss === "string" });
+      return claims;
+    } catch (error) {
+      const code = errorCode(error);
+      this.diagnostic("oidc.exchange.failed", {
+        reason: "id-token-verification-failed",
+        ...(code ? { jose_error_code: code } : {}),
+      });
       return {};
     }
   }
@@ -86,6 +121,12 @@ export class HttpOidcProvider implements OidcProvider {
       throw new Error("OIDC metadata incomplete");
     return { token_endpoint: metadata.token_endpoint, jwks_uri: metadata.jwks_uri };
   }
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("code" in error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" && /^[A-Z0-9_]+$/u.test(code) ? code : undefined;
 }
 
 export class PrismaPrincipalDirectory implements PrincipalDirectory {

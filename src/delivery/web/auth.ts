@@ -5,6 +5,7 @@ import {
 } from "../../application/auth.js";
 import { createHash } from "node:crypto";
 import { renderErrorDocument } from "./error-document";
+import { noopAuthDiagnostic, type AuthDiagnostic } from "../../application/auth-diagnostics";
 
 const STATE_COOKIE = "echohoard_oidc_state";
 const NONCE_COOKIE = "echohoard_oidc_nonce";
@@ -46,6 +47,7 @@ export class WebAuthBoundary {
   constructor(
     private readonly auth: OidcAuth,
     private readonly callbackUrl: string,
+    private readonly diagnostic: AuthDiagnostic = noopAuthDiagnostic,
   ) {}
 
   login(): AuthResponse {
@@ -74,10 +76,21 @@ export class WebAuthBoundary {
     const nonce = readCookie(request, NONCE_COOKIE);
     const verifier = readCookie(request, VERIFIER_COOKIE);
     if (!state || !expectedState || state !== expectedState || !code || !nonce) {
+      this.diagnostic("oidc.callback.request-rejected", {
+        state_present: Boolean(state),
+        expected_state_present: Boolean(expectedState),
+        state_matches: Boolean(state && expectedState && state === expectedState),
+        code_present: Boolean(code),
+        nonce_present: Boolean(nonce),
+        verifier_present: Boolean(verifier),
+      });
       return browserError("bad-request", 400);
     }
     const session = await this.auth.callback(code, nonce, verifier);
-    if (!session) return browserError("access-denied", 403);
+    if (!session) {
+      this.diagnostic("oidc.callback.browser-denied", { status: 403 });
+      return browserError("access-denied", 403);
+    }
     return new Response(null, {
       status: 302,
       headers: {

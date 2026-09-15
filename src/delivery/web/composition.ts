@@ -15,6 +15,7 @@ import { HttpOidcProvider, PrismaPrincipalDirectory } from "../../infrastructure
 import { PrismaSessionStore } from "../../infrastructure/auth/sessions";
 import { WebAuthBoundary } from "./auth";
 import type { WebRuntime } from "./runtime";
+import { productionAuthDiagnostic } from "../../application/auth-diagnostics";
 
 let activeProductionRuntime: WebRuntime | undefined;
 export function productionWebRuntime(): WebRuntime {
@@ -42,11 +43,15 @@ function createProductionWebRuntime(): WebRuntime {
           settings.OIDC_CLIENT_ID,
           secret,
           settings.OIDC_REDIRECT_URI,
+          fetch,
+          productionAuthDiagnostic,
         ),
         new PrismaPrincipalDirectory(prisma, settings.OIDC_ISSUER, settings.OIDC_ARCHIVE_ID),
         new PrismaSessionStore(prisma),
+        productionAuthDiagnostic,
       ),
       "/",
+      productionAuthDiagnostic,
     ),
     reads: {
       listConversations: (query) => reads.listConversations(query),
