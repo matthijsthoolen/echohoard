@@ -3,7 +3,7 @@
 ## Hierarchy and execution rule
 
 - Initiatives: EchoHoard V1 and V2, specified in `docs/FEATURE.md` and `docs/V2_FEATURE.md` and represented by overview items in the existing EchoHoard Plane Module.
-- Features: EH-01 through EH-13 and EHV2-01 through EHV2-07, specified in `docs/tasks/`. They are outcome trackers, not implementation assignments.
+- Features: EH-01 through EH-14 and EHV2-01 through EHV2-07, specified in `docs/tasks/`. They are outcome trackers, not implementation assignments.
 - Executable stories: EH-xx-yy, specified in `docs/stories/`. A worker receives one leaf story plus repository access.
 
 Only executable leaf stories receive a worker model class or may enter Ready. EH-01-01 is the historical V1 entry leaf; EH-13-01 is the new V1.1 entry leaf. Every other unfinished leaf remains Backlog until all `Blocked by` stories are Done. Feature trackers and initiative overviews remain Backlog tracking records.
@@ -24,6 +24,7 @@ Only executable leaf stories receive a worker model class or may enter Ready. EH
 | EH-10 | Production packaging | [EH-10 stories](stories/EH-10.md) | 5 | EH-07, EH-08, EH-09 |
 | EH-11 | Private deployment and recovery | [EH-11 stories](stories/EH-11.md) | 6 | EH-10 |
 | EH-12 | Attended real-data acceptance | [EH-12 stories](stories/EH-12.md) | 5 | EH-09, EH-11, EH-13 |
+| EH-14 | Saphira-branded failure experience | [EH-14 stories](stories/EH-14.md) | 2 | EH-07 |
 
 ## Executable leaf graph
 
@@ -115,6 +116,15 @@ EH-13 is required before EH-12 touches real data. It adds persistence/reconcilia
 | EH-13-07 | Preserve revoke/delete observations | medium | EH-13-04, EH-13-05 | Backlog |
 | EH-13-08 | Prove migration and convergence | medium | EH-13-06, EH-13-07 | Backlog |
 
+## Saphira-branded error experience
+
+EH-14 is an independently valuable browser-experience extension. Its reusable brand foundation may start immediately; the EchoHoard integration follows that canonical asset and skill contract.
+
+| Story | Short outcome | Model class | Blocked by | Initial state |
+|---|---|---|---|---|
+| EH-14-01 | Canonicalize Saphira brand-image generation | medium | none | Ready |
+| EH-14-02 | Build the complete EchoHoard error experience | medium | EH-14-01, EH-07-01 | Backlog |
+
 ## V2 feature map
 
 | Feature | Outcome | Story catalog | Leaves | Blocked by |
@@ -187,6 +197,7 @@ EH-13 is required before EH-12 touches real data. It adds persistence/reconcilia
 | AC-26–AC-28 | EH-09, EH-11, and EH-12 |
 | AC-29 | EH-10 and EH-11 |
 | AC-30 | EH-11 and EH-12 |
+| EH14-AC-01–EH14-AC-06 | EH-14 |
 
 Each feature contract maps its criteria to concrete leaf acceptance and verification. Final integration stories verify composition without replacing focused leaf proofs.
 
@@ -194,11 +205,11 @@ Each feature contract maps its criteria to concrete leaf acceptance and verifica
 
 | Class | Count | Share |
 |---|---:|---:|
-| simple | 16 | 13.6% |
-| medium | 86 | 72.9% |
-| complex | 13 | 11.0% |
+| simple | 16 | 13.3% |
+| medium | 88 | 73.3% |
+| complex | 13 | 10.8% |
 | reasoning | 3 | 2.5% |
-| total | 118 | 100% |
+| total | 120 | 100% |
 
 The additional non-routine leaves are isolated to load-bearing identity/upstream decisions, authentication, irreversible cleanup, private filesystem/model/provider boundaries, and attended live acceptance. Ordinary schema, application, UI, and verification work remains simple or medium.
 
@@ -209,11 +220,11 @@ The additional non-routine leaves are isolated to load-bearing identity/upstream
 
 ## Graph validation
 
-- All 30 initiative acceptance criteria have feature ownership, and every feature has observable leaf acceptance plus verification.
-- All 118 leaves declare goal, repository, local constraints, bounded work, acceptance criteria, verification, out of scope, blockers, priority, and model class.
+- All 30 initiative acceptance criteria and all 6 EH-14 feature criteria have feature ownership, and every feature has observable leaf acceptance plus verification.
+- All 120 leaves declare goal, repository, local constraints, bounded work, acceptance criteria, verification, out of scope, blockers, priority, and model class.
 - Every leaf targets one repository; private deployment and acceptance leaves explicitly target `unraided-treasures`.
 - The dependency graph is acyclic, every blocker identifies an existing leaf, and cross-feature edges are explicit.
-- For the new graph, only EH-13-01 is unblocked and Ready because its V1 implementation prerequisites are already complete. V2 leaves remain Backlog until EH-13-08 and their explicit blockers are Done. Feature/initiative trackers have no worker model class.
+- For the new graph, EH-13-01 and EH-14-01 are unblocked and Ready because their prerequisites are already complete. EH-14-02 remains Backlog until the canonical Saphira contract exists; V2 leaves remain Backlog until EH-13-08 and their explicit blockers are Done. Feature/initiative trackers have no worker model class.
 - Each leaf fits the one-primary-outcome, one-to-three-deliverable, focused-verification, and at-most-one-difficult-risk-axis guardrails.
 - A fresh worker can begin from its leaf contract and repository instructions without the planning conversation; no assignment uses “as discussed” or another hidden decision.
 - Safe parallelism remains available after shared contracts; repository verification stays distinct from private authenticated/live acceptance.
@@ -234,6 +245,7 @@ The additional non-routine leaves are isolated to load-bearing identity/upstream
 - [EH-11](tasks/EH-11.md)
 - [EH-12](tasks/EH-12.md)
 - [EH-13](tasks/EH-13.md)
+- [EH-14](tasks/EH-14.md)
 - [EHV2 initiative](V2_FEATURE.md)
 - [EHV2-01](tasks/EHV2-01.md)
 - [EHV2-02](tasks/EHV2-02.md)

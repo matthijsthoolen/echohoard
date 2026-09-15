@@ -139,7 +139,7 @@ As the owner of a large personal WhatsApp history, I want EchoHoard to preserve 
 - Conversation export, PDF generation, ZIP export, or restore-to-phone.
 - Public internet publication, anonymous access, or multi-user sharing UI.
 - Perfect support for every historic/experimental WhatsApp message type; unknown types must be preserved safely.
-- Final visual branding beyond the EchoHoard name and a coherent baseline UI.
+- Final marketing branding beyond the EchoHoard name and a coherent baseline UI. The separately approved Saphira-branded browser failure experience is owned by EH-14.
 
 ## Open decisions
 
@@ -153,3 +153,4 @@ Before EH-12 imports the owner's real archive, EH-13 must add explicit owned Wha
 
 - `/home/matthijs/projects/echohoard` — public reusable application, tests, container image, and generic deployment contract.
 - `/home/matthijs/projects/unraided-treasures` — private-instance deployment, Vault, Authentik, Caddy, Komodo, Borg, Saphira registration, and live acceptance records.
+- `/home/matthijs/projects/OnzeSkills` — reusable Saphira brand-image generation contract and canonical visual references for EH-14.
