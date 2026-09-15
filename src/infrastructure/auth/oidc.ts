@@ -3,6 +3,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type {
   ArchivePrincipal,
+  AuthBootstrapState,
   OidcClaims,
   OidcProvider,
   PendingIdentity,
@@ -93,6 +94,13 @@ export class PrismaPrincipalDirectory implements PrincipalDirectory {
     private readonly configuredIssuer: string,
     private readonly configuredArchiveId?: string,
   ) {}
+  public async bootstrapState(): Promise<AuthBootstrapState> {
+    const admin = await this.prisma.archiveIdentity.findFirst({
+      where: { role: "admin" },
+      select: { id: true },
+    });
+    return admin ? "ready" : "setup";
+  }
   public async findBySubject(issuer: string, subject: string): Promise<ArchivePrincipal | null> {
     if (issuer !== this.configuredIssuer || !subject) return null;
     return this.prisma.$transaction(async (tx) => {

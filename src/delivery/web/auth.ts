@@ -1,4 +1,8 @@
-import { OidcAuth, type ArchivePrincipal } from "../../application/auth.js";
+import {
+  OidcAuth,
+  type ArchivePrincipal,
+  type AuthBootstrapState,
+} from "../../application/auth.js";
 import { createHash } from "node:crypto";
 import { renderErrorDocument } from "./error-document";
 
@@ -56,6 +60,10 @@ export class WebAuthBoundary {
         "Set-Cookie": `${STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions}; Max-Age=600, ${NONCE_COOKIE}=${encodeURIComponent(nonce)}; ${cookieOptions}; Max-Age=600, ${VERIFIER_COOKIE}=${encodeURIComponent(pkce.verifier)}; ${cookieOptions}; Max-Age=600`,
       },
     });
+  }
+
+  async bootstrapState(): Promise<AuthBootstrapState> {
+    return this.auth.bootstrapState();
   }
 
   async callback(request: Request): Promise<AuthResponse> {

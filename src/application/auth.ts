@@ -5,6 +5,7 @@ export type ArchivePrincipal = {
   issuer: string;
   role?: "admin" | "member";
 };
+export type AuthBootstrapState = "setup" | "ready";
 export type OidcClaims = { iss?: unknown; sub?: unknown; exp?: unknown; nonce?: unknown };
 export type PendingIdentity = Readonly<{
   issuer: string;
@@ -19,6 +20,7 @@ export interface OidcProvider {
 
 export interface PrincipalDirectory {
   findBySubject(issuer: string, subject: string): Promise<ArchivePrincipal | null>;
+  bootstrapState?(): Promise<AuthBootstrapState>;
   approveIdentity?(input: {
     archiveId: string;
     approverIssuer: string;
@@ -48,6 +50,9 @@ export class OidcAuth {
   ) {}
   login(state: string, nonce?: string, codeChallenge?: string): string {
     return this.provider.authorizationUrl(state, nonce, codeChallenge);
+  }
+  async bootstrapState(): Promise<AuthBootstrapState> {
+    return (await this.directory.bootstrapState?.()) ?? "ready";
   }
   async callback(
     code: string,

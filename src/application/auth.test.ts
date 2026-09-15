@@ -44,6 +44,19 @@ const setup = (claims = provider.exchange) => {
   return { auth, sessions };
 };
 describe("OIDC archive principal", () => {
+  it("reports setup until an administrator exists", async () => {
+    const sessions: SessionStore = new MemorySessionStore();
+    const auth = new OidcAuth(
+      provider,
+      {
+        findBySubject: async () => null,
+        bootstrapState: async () => "setup",
+      },
+      sessions,
+    );
+    await expect(auth.bootstrapState()).resolves.toBe("setup");
+  });
+
   it("maps configured subject and enforces archive scope", async () => {
     const { auth } = setup();
     const token = await auth.callback("code");
