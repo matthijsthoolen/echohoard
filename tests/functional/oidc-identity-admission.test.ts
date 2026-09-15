@@ -9,6 +9,8 @@ const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
 const userId = randomUUID();
 const archiveId = randomUUID();
 const issuer = "https://issuer.example.test";
+const bootstrapIssuer = "https://bootstrap-issuer.example.test";
+const concurrentBootstrapIssuer = "https://concurrent-bootstrap-issuer.example.test";
 
 describe("PostgreSQL OIDC identity admission", () => {
   beforeAll(async () => {
@@ -19,7 +21,17 @@ describe("PostgreSQL OIDC identity admission", () => {
 
   afterAll(async () => {
     await prisma.archiveIdentity.deleteMany({
-      where: { issuer, subject: { in: ["bootstrap-owner", "bootstrap-member"] } },
+      where: {
+        issuer: { in: [issuer, bootstrapIssuer, concurrentBootstrapIssuer] },
+        subject: {
+          in: [
+            "bootstrap-owner",
+            "bootstrap-member",
+            "concurrent-bootstrap-owner",
+            "concurrent-bootstrap-member",
+          ],
+        },
+      },
     });
     await prisma.user.deleteMany({ where: { id: userId } });
     await prisma.$disconnect();
@@ -77,28 +89,58 @@ describe("PostgreSQL OIDC identity admission", () => {
   });
 
   it("bootstraps the first archive when no archive is configured", async () => {
-    const directory = new PrismaPrincipalDirectory(prisma, issuer);
-    const result = await directory.findBySubject(issuer, "bootstrap-owner");
+    const directory = new PrismaPrincipalDirectory(prisma, bootstrapIssuer);
+    const result = await directory.findBySubject(bootstrapIssuer, "bootstrap-owner");
 
-    expect(result).toMatchObject({ issuer, subject: "bootstrap-owner", role: "admin" });
+    expect(result).toMatchObject({
+      issuer: bootstrapIssuer,
+      subject: "bootstrap-owner",
+      role: "admin",
+    });
+    expect(result?.archiveId).not.toBe(archiveId);
     await expect(
       prisma.archiveIdentity.findFirst({
-        where: { issuer, subject: "bootstrap-owner" },
+        where: { issuer: bootstrapIssuer, subject: "bootstrap-owner" },
         select: { role: true, archive: { select: { name: true } } },
       }),
     ).resolves.toMatchObject({ role: "admin", archive: { name: expect.any(String) } });
   });
 
   it("queues a later identity in the bootstrapped archive", async () => {
-    const directory = new PrismaPrincipalDirectory(prisma, issuer);
-    const result = await directory.findBySubject(issuer, "bootstrap-member");
+    const directory = new PrismaPrincipalDirectory(prisma, bootstrapIssuer);
+    const result = await directory.findBySubject(bootstrapIssuer, "bootstrap-member");
 
     expect(result).toBeNull();
     await expect(
       prisma.archiveIdentity.findFirst({
-        where: { issuer, subject: "bootstrap-member" },
+        where: { issuer: bootstrapIssuer, subject: "bootstrap-member" },
         select: { role: true },
       }),
     ).resolves.toEqual({ role: "pending" });
+  });
+
+  it("concurrently bootstraps one archive instead of binding an unrelated archive", async () => {
+    const directoryA = new PrismaPrincipalDirectory(prisma, concurrentBootstrapIssuer);
+    const directoryB = new PrismaPrincipalDirectory(prisma, concurrentBootstrapIssuer);
+    const results = await Promise.all([
+      directoryA.findBySubject(concurrentBootstrapIssuer, "concurrent-bootstrap-owner"),
+      directoryB.findBySubject(concurrentBootstrapIssuer, "concurrent-bootstrap-member"),
+    ]);
+
+    expect(results.filter((result) => result?.role === "admin")).toHaveLength(1);
+    expect(results.filter((result) => result === null)).toHaveLength(1);
+    const archiveIds = new Set(results.map((result) => result?.archiveId).filter(Boolean));
+    expect(archiveIds.size).toBe(1);
+    expect([...archiveIds][0]).not.toBe(archiveId);
+    await expect(
+      prisma.archiveIdentity.findMany({
+        where: {
+          issuer: concurrentBootstrapIssuer,
+          subject: { in: ["concurrent-bootstrap-owner", "concurrent-bootstrap-member"] },
+        },
+        orderBy: { subject: "asc" },
+        select: { role: true },
+      }),
+    ).resolves.toEqual([{ role: "pending" }, { role: "admin" }]);
   });
 });

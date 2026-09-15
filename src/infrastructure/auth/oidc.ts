@@ -285,10 +285,16 @@ export class PrismaPrincipalDirectory implements PrincipalDirectory {
       select: { archive: { select: { id: true, userId: true } } },
     });
     if (existingIdentity) return existingIdentity.archive;
-    return tx.archive.findFirst({
+    const bootstrapArchive = await tx.archiveIdentity.findFirst({
+      where: { issuer, role: "admin" },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      select: { id: true, userId: true },
+      select: { archive: { select: { id: true, userId: true } } },
     });
+    if (bootstrapArchive) return bootstrapArchive.archive;
+    // Without an explicitly configured archive, a new subject must bootstrap
+    // its own archive. Never attach it to an unrelated archive merely because
+    // that archive happens to be the oldest one in the database.
+    return null;
   }
 }
 
