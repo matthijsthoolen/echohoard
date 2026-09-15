@@ -100,7 +100,10 @@ async function run(
   await stderrClosed;
   clearTimeout(timer);
   if (result === null) throw new DecryptError("timeout", "decryption timed out");
-  return { code: result, stderr: redact(stderr) };
+  // Keep stderr inside this adapter until the failure kind is classified.
+  // DecryptError redacts the eventual user-facing message; redacting here
+  // first would hide key/decrypt markers from classify().
+  return { code: result, stderr };
 }
 
 async function validateSqlite(path: string): Promise<DecryptResult> {

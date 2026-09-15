@@ -21,7 +21,7 @@ const nodeFixture = async (body: string) => {
   const root = await mkdtemp(join(tmpdir(), "echohoard-wa-command-"));
   roots.push(root);
   const command = join(root, "command.cjs");
-  await writeFile(command, `#!/usr/bin/env node\n${body}`);
+  await writeFile(command, `#!${process.execPath}\n${body}`);
   await chmod(command, 0o755);
   return command;
 };
