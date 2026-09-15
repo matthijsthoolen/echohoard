@@ -13,7 +13,11 @@ FROM node:${NODE_VERSION} AS node-base
 ENV PNPM_HOME=/pnpm
 ENV PATH=${PNPM_HOME}:${PATH}
 WORKDIR /app
-RUN corepack enable && corepack prepare pnpm@9.15.5 --activate
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable \
+    && corepack prepare pnpm@9.15.5 --activate
 
 FROM node-base AS dependencies
 COPY package.json pnpm-lock.yaml ./
