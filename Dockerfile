@@ -21,11 +21,13 @@ RUN apt-get update \
 
 FROM node-base AS dependencies
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+RUN --mount=type=cache,id=echohoard-pnpm-store,target=/pnpm/store \
+    pnpm install --frozen-lockfile
 
 FROM dependencies AS production-dependencies
 COPY prisma ./prisma
-RUN pnpm exec prisma generate \
+RUN --mount=type=cache,id=echohoard-pnpm-store,target=/pnpm/store \
+    pnpm exec prisma generate \
     && mkdir -p /opt/prisma \
     && cp node_modules/.pnpm/@prisma+engines@*/node_modules/@prisma/engines/schema-engine-debian-openssl-3.0.x /opt/prisma/schema-engine \
     && pnpm prune --prod
@@ -39,8 +41,8 @@ RUN rm -f tsconfig.worker.tsbuildinfo && pnpm build
 
 FROM python:${PYTHON_VERSION} AS worker-dependencies
 COPY container/worker-requirements.txt /tmp/worker-requirements.txt
-RUN python -m pip install \
-      --no-cache-dir \
+RUN --mount=type=cache,id=echohoard-pip-cache,target=/root/.cache/pip \
+    python -m pip install \
       --disable-pip-version-check \
       --require-hashes \
       --target /opt/worker-python \

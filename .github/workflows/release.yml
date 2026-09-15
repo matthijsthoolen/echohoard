@@ -69,6 +69,10 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Reuse build layers across release tags. The image remains
+          # immutable because only the finished digest is deployed.
+          cache-from: type=gha,scope=echohoard-image
+          cache-to: type=gha,mode=max,scope=echohoard-image
           provenance: true
           sbom: true
 
