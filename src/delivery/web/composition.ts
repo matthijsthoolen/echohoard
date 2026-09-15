@@ -55,6 +55,7 @@ function createProductionWebRuntime(): WebRuntime {
     ),
     reads: {
       listConversations: (query) => reads.listConversations(query),
+      listPeople: (query) => reads.listPeople(query),
       listMessages: (query) => reads.listMessages(query),
       search: (query) => reads.search(query),
       archiveHealth: (query) =>

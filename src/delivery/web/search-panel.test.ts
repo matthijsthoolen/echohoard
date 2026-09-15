@@ -54,7 +54,7 @@ describe("bounded global search delivery", () => {
       parseSearchPage({ items: [{ id: "m1", kind: "message", score: "bad" }], hasMore: false }),
     ).toThrow("invalid search score");
     expect(resultContextHref({ id: "m1", kind: "message", conversationId: "chat/1" })).toBe(
-      "/?conversation=chat%2F1&message=m1#message-m1",
+      "/?view=chats&conversation=chat%2F1&message=m1#message-m1",
     );
   });
 });

@@ -152,6 +152,7 @@ function parseSearchResult(value: unknown): SearchResultRead {
 
 export function resultContextHref(result: SearchResultRead): string {
   const query = new URLSearchParams();
+  query.set("view", "chats");
   if (result.conversationId) query.set("conversation", result.conversationId);
   query.set("message", result.id);
   return `/?${query.toString()}#message-${encodeURIComponent(result.id)}`;
@@ -214,8 +215,10 @@ export function SearchPanel({ endpoint = "/api/search" }: { readonly endpoint?: 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const query = searchParamsFromFilters(filters);
-    const url = query.toString() ? `/?${query.toString()}` : "/";
+    query.set("view", "search");
+    const url = `/?${query.toString()}`;
     window.history.pushState({}, "", url);
+    window.dispatchEvent(new PopStateEvent("popstate"));
     setActiveFilters(filters);
     setState({ kind: "loading" });
     void load(filters);

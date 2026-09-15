@@ -5,7 +5,10 @@ import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
 import { productionWebRuntime } from "./composition";
 
-export type WebReadServices = Pick<ReadPorts, "listConversations" | "listMessages" | "search"> & {
+export type WebReadServices = Pick<
+  ReadPorts,
+  "listConversations" | "listPeople" | "listMessages" | "search"
+> & {
   readonly archiveHealth?: (query: { readonly archiveId: string }) => Promise<ArchiveHealthRead>;
   readonly archiveStatistics?: (query: {
     readonly archiveId: string;

@@ -144,7 +144,7 @@ export function ConversationList({ endpoint = "/api/conversations" }: { endpoint
           <li key={conversation.id}>
             <a
               className="conversation-row"
-              href={`/?conversation=${encodeURIComponent(conversation.id)}`}
+              href={`/?view=chats&conversation=${encodeURIComponent(conversation.id)}`}
             >
               <span className="avatar" aria-hidden="true">
                 {initials(conversation.title)}
