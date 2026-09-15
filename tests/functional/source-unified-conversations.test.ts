@@ -2,6 +2,11 @@ import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { createPrismaPersistence } from "../../src/infrastructure/db/prisma-persistence.js";
+import {
+  ConversationGroupingService,
+  type ConversationGroupingRequest,
+} from "../../src/application/conversation-grouping.js";
+import { PrismaConversationGroupingPersistence } from "../../src/infrastructure/db/conversation-grouping.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -190,5 +195,98 @@ describe("source and unified conversation persistence", () => {
       }),
     ).rejects.toThrow();
     expect(await ports.sourceConversations.list(archiveTwoId)).toHaveLength(0);
+  });
+
+  it("merges and reverses exact sources without rewriting messages", async () => {
+    const accountId = randomUUID();
+    const targetId = randomUUID();
+    const sourceId = randomUUID();
+    const messageId = randomUUID();
+    await prisma.ownedAccount.create({
+      data: { id: accountId, archiveId: archiveOneId, accountKey: `merge-${accountId}` },
+    });
+    await prisma.conversation.createMany({
+      data: [
+        { id: targetId, archiveId: archiveOneId, kind: "direct", stableKey: `target-${targetId}` },
+        { id: sourceId, archiveId: archiveOneId, kind: "direct", stableKey: `source-${sourceId}` },
+      ],
+    });
+    await prisma.sourceConversation.createMany({
+      data: [
+        {
+          id: targetId,
+          archiveId: archiveOneId,
+          ownedAccountId: accountId,
+          unifiedConversationId: targetId,
+          sourceNamespace: "synthetic",
+          sourceConversationKey: `target-${targetId}`,
+        },
+        {
+          id: sourceId,
+          archiveId: archiveOneId,
+          ownedAccountId: accountId,
+          unifiedConversationId: sourceId,
+          sourceNamespace: "synthetic",
+          sourceConversationKey: `source-${sourceId}`,
+        },
+      ],
+    });
+    await prisma.message.create({
+      data: {
+        id: messageId,
+        archiveId: archiveOneId,
+        conversationId: sourceId,
+        sourceConversationId: sourceId,
+        stableKey: `message-${messageId}`,
+        messageType: "text",
+        body: "synthetic merge message",
+      },
+    });
+
+    const service = new ConversationGroupingService(
+      new PrismaConversationGroupingPersistence(prisma),
+    );
+    const merge: ConversationGroupingRequest = {
+      archiveId: archiveOneId,
+      targetConversationId: targetId,
+      sourceConversationIds: [sourceId],
+      expectedVersion: 0,
+      actor: "synthetic-owner",
+      reason: "synthetic exact selection",
+      idempotencyKey: `merge-${messageId}`,
+      ownerTitle: "Owner title",
+    };
+    const merged = await service.merge(merge);
+    expect(merged.idempotent).toBe(false);
+    expect((await service.merge(merge)).idempotent).toBe(true);
+    expect((await prisma.message.findUnique({ where: { id: messageId } }))?.conversationId).toBe(
+      sourceId,
+    );
+    expect(
+      (await prisma.sourceConversation.findUnique({ where: { id: sourceId } }))
+        ?.unifiedConversationId,
+    ).toBe(targetId);
+    expect((await prisma.conversation.findUnique({ where: { id: targetId } }))?.ownerTitle).toBe(
+      "Owner title",
+    );
+
+    const undone = await service.unmerge({
+      ...merge,
+      expectedVersion: 1,
+      idempotencyKey: `unmerge-${messageId}`,
+      auditId: merged.auditId,
+    });
+    expect(undone.version).toBe(2);
+    expect(
+      (await prisma.sourceConversation.findUnique({ where: { id: sourceId } }))
+        ?.unifiedConversationId,
+    ).toBe(sourceId);
+    await expect(
+      service.merge({ ...merge, expectedVersion: 0, idempotencyKey: `stale-${messageId}` }),
+    ).rejects.toThrow("stale grouping version");
+    await prisma.conversation.update({ where: { id: targetId }, data: { groupingLocked: true } });
+    await expect(
+      service.merge({ ...merge, expectedVersion: 2, idempotencyKey: `locked-${messageId}` }),
+    ).rejects.toThrow("locked");
   });
 });

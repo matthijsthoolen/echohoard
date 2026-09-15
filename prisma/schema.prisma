@@ -34,6 +34,7 @@ model Archive {
   identities                      Identity[]
   conversations                   Conversation[]
   sourceConversations             SourceConversation[]
+  conversationMergeAudits         ConversationMergeAudit[]
   participants                    ConversationParticipant[]
   messages                        Message[]
   revisions                       MessageRevision[]
@@ -248,6 +249,10 @@ model Conversation {
   kind                         String
   stableKey                    String
   title                        String?
+  ownerTitle                   String?
+  ownerAvatar                  String?
+  groupingVersion              Int                       @default(0)
+  groupingLocked               Boolean                   @default(false)
   materialized                 Boolean                   @default(true)
   materializationRunId         String?
   materializationInputDigest   String?                   @db.VarChar(64)
@@ -262,10 +267,36 @@ model Conversation {
   participants                 ConversationParticipant[]
   messages                     Message[]
   sourceConversations          SourceConversation[]
+  mergeAudits                  ConversationMergeAudit[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
   @@index([archiveId, kind])
+}
+
+/// Append-only owner commands changing presentation grouping. Source rows and
+/// observations are never rewritten; this is the reversible evidence of the
+/// projection change.
+model ConversationMergeAudit {
+  id                           String   @id @default(uuid()) @db.Uuid
+  archiveId                    String   @db.Uuid
+  targetConversationId         String   @db.Uuid
+  action                       String
+  sourceConversationIds        Json
+  previousGroups               Json
+  resultingVersion             Int
+  expectedVersion              Int
+  actor                        String
+  reason                       String
+  idempotencyKey               String
+  metadata                     Json?
+  createdAt                    DateTime @default(now())
+  archive                      Archive  @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  targetConversation           Conversation @relation(fields: [targetConversationId, archiveId], references: [id, archiveId], onDelete: Restrict)
+
+  @@unique([archiveId, id])
+  @@unique([archiveId, idempotencyKey])
+  @@index([archiveId, targetConversationId, createdAt])
 }
 
 /// Account-specific immutable chat identity. Conversation is the existing
@@ -291,6 +322,7 @@ model SourceConversation {
   attachmentReferenceObservations AttachmentReferenceObservation[]
 
   @@unique([archiveId, id])
+  @@unique([id, archiveId])
   @@unique([archiveId, ownedAccountId, sourceNamespace, sourceConversationKey])
   @@unique([archiveId, id, unifiedConversationId])
   @@unique([id, unifiedConversationId, archiveId])
@@ -311,7 +343,7 @@ model ConversationParticipant {
   updatedAt            DateTime            @updatedAt
   archive              Archive             @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   conversation         Conversation        @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  sourceConversation   SourceConversation? @relation(fields: [sourceConversationId, conversationId, archiveId], references: [id, unifiedConversationId, archiveId], onDelete: Cascade)
+  sourceConversation   SourceConversation? @relation(fields: [sourceConversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
   person               Person              @relation(fields: [personId, archiveId], references: [id, archiveId], onDelete: Cascade)
 
   @@unique([archiveId, id])
@@ -353,7 +385,7 @@ model Message {
   updatedAt                    DateTime             @updatedAt
   archive                      Archive              @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   conversation                 Conversation         @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
-  sourceConversation           SourceConversation?  @relation(fields: [sourceConversationId, conversationId, archiveId], references: [id, unifiedConversationId, archiveId], onDelete: Restrict)
+  sourceConversation           SourceConversation?  @relation(fields: [sourceConversationId, archiveId], references: [id, archiveId], onDelete: Restrict)
   sender                       Person?              @relation(fields: [senderId, archiveId], references: [id, archiveId], onDelete: Restrict)
   replyTo                      Message?             @relation("MessageReplies", fields: [replyToId, conversationId, archiveId], references: [id, conversationId, archiveId], onDelete: Restrict)
   replies                      Message[]            @relation("MessageReplies")
