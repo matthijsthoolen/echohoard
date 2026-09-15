@@ -213,7 +213,7 @@ describe("HttpOidcProvider", () => {
       provider(mockEndpoints()).authorizationUrl("synthetic-state", nonce, "synthetic-challenge"),
     );
 
-    expect(url.pathname).toBe("/application/o/echohoard/authorize/");
+    expect(url.pathname).toBe("/application/o/authorize/");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("client_id")).toBe(clientId);
     expect(url.searchParams.get("redirect_uri")).toBe(redirectUri);

@@ -25,10 +25,10 @@ export class HttpOidcProvider implements OidcProvider {
     private readonly fetcher: typeof fetch = fetch,
   ) {}
   public authorizationUrl(state: string, nonce?: string, codeChallenge?: string): string {
-    // Authentik's provider endpoints are slash-terminated. Constructing this
-    // route without the trailing slash returns a 404 instead of an OAuth
-    // redirect on the private deployment.
-    const url = new URL(`${this.issuer.replace(/\/$/u, "")}/authorize/`);
+    // Authentik keeps the issuer provider-specific but exposes one global
+    // authorization endpoint. The provider slug belongs in discovery/JWKS,
+    // not in the authorization URL.
+    const url = new URL("/application/o/authorize/", new URL(this.issuer).origin);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", this.clientId);
     url.searchParams.set("redirect_uri", this.redirectUri);
