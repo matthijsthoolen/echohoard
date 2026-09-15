@@ -1,5 +1,5 @@
 import Image from "next/image";
-import { ECHOHOARD_VERSION } from "../../../../../config/version";
+import { ECHOHOARD_VERSION } from "../../../../../application/version";
 
 export default function LoginPage() {
   return (

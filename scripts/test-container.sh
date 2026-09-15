@@ -81,6 +81,14 @@ docker run --rm --read-only --entrypoint /bin/sh "$image" -c '
   ! test -r /run/echohoard/secrets
 '
 
+echo "Checking web Next image cache is writable by the web user"
+docker run --rm --user 10001:10001 --entrypoint /bin/sh "$image" -c '
+  test "$(id -u)" = 10001
+  test -d /app/src/delivery/web/.next/cache/images
+  touch /app/src/delivery/web/.next/cache/images/permission-sentinel
+  rm /app/src/delivery/web/.next/cache/images/permission-sentinel
+'
+
 echo "Checking web role startup"
 web_container="$(docker run --detach --read-only --tmpfs /tmp --publish 127.0.0.1::3000 --env ECHOHOARD_ROLE=web "$image")"
 web_ready=false

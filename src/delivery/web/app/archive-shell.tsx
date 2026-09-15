@@ -6,7 +6,7 @@ import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
 import { SearchPanel } from "../components/search-panel";
 import { ArchiveOverview } from "../components/archive-overview";
-import { ECHOHOARD_VERSION } from "../../../config/version";
+import { ECHOHOARD_VERSION } from "../../../application/version";
 
 export default function ArchiveShell() {
   const [conversationId, setConversationId] = useState<string | undefined>();

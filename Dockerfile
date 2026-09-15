@@ -75,12 +75,18 @@ COPY --from=build /app/src/delivery/web ./src/delivery/web
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/prisma ./prisma
 COPY container/entrypoint.sh /usr/local/bin/echohoard
+# Next's runtime image optimizer writes below this cache while the web
+# process runs as the non-root web user. Keep the writable exception inside
+# the built application cache; the rest of the image remains read-only to
+# that user.
 RUN groupadd --gid "${ECHOHOARD_WEB_GID}" echohoard-web \
     && useradd --uid "${ECHOHOARD_WEB_UID}" --gid "${ECHOHOARD_WEB_GID}" \
       --home-dir /nonexistent --shell /usr/sbin/nologin --no-create-home echohoard-web \
     && groupadd --gid "${ECHOHOARD_WORKER_GID}" echohoard-worker \
     && useradd --uid "${ECHOHOARD_WORKER_UID}" --gid "${ECHOHOARD_WORKER_GID}" \
       --home-dir /nonexistent --shell /usr/sbin/nologin --no-create-home echohoard-worker \
+    && mkdir -p /app/src/delivery/web/.next/cache/images \
+    && chown -R "${ECHOHOARD_WEB_UID}:${ECHOHOARD_WEB_GID}" /app/src/delivery/web/.next/cache \
     && mkdir -p /data /work /run/echohoard/secrets \
     && chown "${ECHOHOARD_WORKER_UID}:${ECHOHOARD_WORKER_GID}" /data /work /run/echohoard/secrets \
     && chmod 0700 /data /work /run/echohoard/secrets \

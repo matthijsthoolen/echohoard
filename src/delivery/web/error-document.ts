@@ -1,4 +1,4 @@
-import { ECHOHOARD_VERSION } from "../../config/version";
+import { ECHOHOARD_VERSION } from "../../application/version";
 import { getErrorDescriptor, type ErrorKind } from "./error-registry";
 
 function escapeHtml(value: string): string {
