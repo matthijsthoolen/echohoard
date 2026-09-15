@@ -27,8 +27,7 @@ function createProductionWebRuntime(): WebRuntime {
     !settings.OIDC_ISSUER ||
     !settings.OIDC_CLIENT_ID ||
     !settings.OIDC_REDIRECT_URI ||
-    !settings.OIDC_CLIENT_SECRET_FILE ||
-    !settings.OIDC_ARCHIVE_ID
+    !settings.OIDC_CLIENT_SECRET_FILE
   )
     throw new Error("OIDC web configuration is incomplete");
   const secret = readFileSync(settings.OIDC_CLIENT_SECRET_FILE, "utf8").trim();

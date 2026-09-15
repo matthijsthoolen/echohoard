@@ -18,7 +18,10 @@ describe("PostgreSQL OIDC identity admission", () => {
   });
 
   afterAll(async () => {
-    await prisma.user.delete({ where: { id: userId } });
+    await prisma.archiveIdentity.deleteMany({
+      where: { issuer, subject: { in: ["bootstrap-owner", "bootstrap-member"] } },
+    });
+    await prisma.user.deleteMany({ where: { id: userId } });
     await prisma.$disconnect();
   });
 
@@ -71,5 +74,31 @@ describe("PostgreSQL OIDC identity admission", () => {
     await expect(
       directory.findBySubject("https://other.example.test", "intruder"),
     ).resolves.toBeNull();
+  });
+
+  it("bootstraps the first archive when no archive is configured", async () => {
+    const directory = new PrismaPrincipalDirectory(prisma, issuer);
+    const result = await directory.findBySubject(issuer, "bootstrap-owner");
+
+    expect(result).toMatchObject({ issuer, subject: "bootstrap-owner", role: "admin" });
+    await expect(
+      prisma.archiveIdentity.findFirst({
+        where: { issuer, subject: "bootstrap-owner" },
+        select: { role: true, archive: { select: { name: true } } },
+      }),
+    ).resolves.toMatchObject({ role: "admin", archive: { name: expect.any(String) } });
+  });
+
+  it("queues a later identity in the bootstrapped archive", async () => {
+    const directory = new PrismaPrincipalDirectory(prisma, issuer);
+    const result = await directory.findBySubject(issuer, "bootstrap-member");
+
+    expect(result).toBeNull();
+    await expect(
+      prisma.archiveIdentity.findFirst({
+        where: { issuer, subject: "bootstrap-member" },
+        select: { role: true },
+      }),
+    ).resolves.toEqual({ role: "pending" });
   });
 });
