@@ -94,8 +94,10 @@ async function run(
   child.stderr.on("data", (chunk: string) => {
     if (stderr.length < maxOutputBytes) stderr += chunk.slice(0, maxOutputBytes - stderr.length);
   });
+  const stderrClosed = once(child.stderr, "end");
   const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
   const [result] = (await once(child, "close")) as [number | null];
+  await stderrClosed;
   clearTimeout(timer);
   if (result === null) throw new DecryptError("timeout", "decryption timed out");
   return { code: result, stderr: redact(stderr) };
