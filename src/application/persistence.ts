@@ -1,3 +1,9 @@
+import type {
+  ConversationPrivacyAudit,
+  ConversationPrivacyPolicy,
+  UpdateConversationPrivacyRequest,
+} from "./conversation-privacy.js";
+
 /** Values crossing the application/infrastructure boundary are deliberately
  * plain objects; ORM-generated types must not become application contracts. */
 export type ArchiveId = string;
@@ -19,6 +25,17 @@ export interface ImportJobPort extends ArchiveScopedPort {}
 export interface PersonPort extends ArchiveScopedPort {}
 export interface IdentityPort extends ArchiveScopedPort {}
 export interface ConversationPort extends ArchiveScopedPort {}
+export interface ConversationPrivacyPort {
+  list(archiveId: ArchiveId): Promise<readonly ConversationPrivacyPolicy[]>;
+  findPolicy(
+    archiveId: ArchiveId,
+    conversationId: string,
+  ): Promise<ConversationPrivacyPolicy | null>;
+  updatePolicy(request: UpdateConversationPrivacyRequest): Promise<{
+    readonly policy: ConversationPrivacyPolicy;
+    readonly audit: readonly ConversationPrivacyAudit[];
+  }>;
+}
 export interface UnifiedConversationPort extends ArchiveScopedPort {}
 export interface SourceConversationPort extends ArchiveScopedPort {}
 export interface MessagePort extends ArchiveScopedPort {}
@@ -46,6 +63,7 @@ export interface PersistencePorts {
   people: PersonPort;
   identities: IdentityPort;
   conversations: ConversationPort;
+  conversationPrivacy: ConversationPrivacyPort;
   unifiedConversations: UnifiedConversationPort;
   sourceConversations: SourceConversationPort;
   messages: MessagePort;

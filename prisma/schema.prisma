@@ -48,6 +48,7 @@ model Archive {
   attachmentReferenceObservations AttachmentReferenceObservation[]
   admittedIdentities              ArchiveIdentity[]
   authSessions                    AuthSession[]
+  privacyAudits                   ConversationPrivacyAudit[]
 
   @@unique([id, userId])
   @@unique([userId, name])
@@ -244,8 +245,8 @@ model Identity {
 }
 
 model Conversation {
-  id                           String                    @id @default(uuid()) @db.Uuid
-  archiveId                    String                    @db.Uuid
+  id                           String                     @id @default(uuid()) @db.Uuid
+  archiveId                    String                     @db.Uuid
   kind                         String
   stableKey                    String
   title                        String?
@@ -255,19 +256,23 @@ model Conversation {
   groupingLocked               Boolean                   @default(false)
   materialized                 Boolean                   @default(true)
   materializationRunId         String?
-  materializationInputDigest   String?                   @db.VarChar(64)
+  materializationInputDigest   String?                    @db.VarChar(64)
   materializationPolicyVersion String?
-  ownerDeleted                 Boolean                   @default(false)
+  ownerDeleted                 Boolean                    @default(false)
   ownerDeletedAt               DateTime?
   ownerDeletedBy               String?
   ownerDeletionReason          String?
-  createdAt                    DateTime                  @default(now())
-  updatedAt                    DateTime                  @updatedAt
-  archive                      Archive                   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  uiVisibility                 String                     @default("normal")
+  mcpAccess                    String                     @default("allowed")
+  sourceLockMetadata           Json?
+  createdAt                    DateTime                   @default(now())
+  updatedAt                    DateTime                   @updatedAt
+  archive                      Archive                    @relation(fields: [archiveId], references: [id], onDelete: Cascade)
   participants                 ConversationParticipant[]
   messages                     Message[]
   sourceConversations          SourceConversation[]
   mergeAudits                  ConversationMergeAudit[]
+  privacyAudits                ConversationPrivacyAudit[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])
@@ -297,6 +302,21 @@ model ConversationMergeAudit {
   @@unique([archiveId, id])
   @@unique([archiveId, idempotencyKey])
   @@index([archiveId, targetConversationId, createdAt])
+
+/// Identifiers and actions only. Titles, identities, content, and policy
+/// payloads are deliberately excluded from this immutable audit trail.
+model ConversationPrivacyAudit {
+  id             String       @id @default(uuid()) @db.Uuid
+  archiveId      String       @db.Uuid
+  conversationId String       @db.Uuid
+  actorId        String
+  action         String
+  createdAt      DateTime     @default(now())
+  archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
+  @@unique([archiveId, id])
+  @@index([archiveId, conversationId, createdAt])
 }
 
 /// Account-specific immutable chat identity. Conversation is the existing

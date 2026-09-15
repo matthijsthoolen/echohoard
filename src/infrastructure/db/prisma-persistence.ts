@@ -37,6 +37,13 @@ import type {
   StatisticsPersistencePort,
   StatisticsPersistenceResult,
 } from "../../application/statistics";
+import {
+  transitionConversationPrivacy,
+  type ConversationPrivacyAudit,
+  type ConversationPrivacyPersistence,
+  type ConversationPrivacyPolicy,
+  type UpdateConversationPrivacyRequest,
+} from "../../application/conversation-privacy.js";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -108,11 +115,144 @@ class PrismaObservationAdapter extends PrismaArchiveScopedAdapter implements Obs
   }
 }
 
+type PrivacyConversationRow = {
+  id: string;
+  archiveId: string;
+  uiVisibility: string;
+  mcpAccess: string;
+  sourceLockMetadata: unknown;
+};
+
+export class PrismaConversationPrivacyPersistence implements ConversationPrivacyPersistence {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async findPolicy(archiveId: string, conversationId: string) {
+    const row = await this.prisma.conversation.findUnique({
+      where: { archiveId_id: { archiveId, id: conversationId } },
+      select: {
+        id: true,
+        archiveId: true,
+        uiVisibility: true,
+        mcpAccess: true,
+        sourceLockMetadata: true,
+      },
+    });
+    return row ? privacyPolicy(row as PrivacyConversationRow) : null;
+  }
+
+  public async updatePolicy(request: UpdateConversationPrivacyRequest) {
+    const result = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.conversation.findUnique({
+        where: { archiveId_id: { archiveId: request.archiveId, id: request.conversationId } },
+        select: {
+          id: true,
+          archiveId: true,
+          uiVisibility: true,
+          mcpAccess: true,
+          sourceLockMetadata: true,
+        },
+      });
+      if (!row) throw new Error("Conversation not found in archive");
+      const current = privacyPolicy(row as PrivacyConversationRow);
+      const next = transitionConversationPrivacy(current, request);
+      const audits: ConversationPrivacyAudit[] = [];
+      if (next.uiVisibility !== current.uiVisibility) {
+        const audit = await tx.conversationPrivacyAudit.create({
+          data: {
+            archiveId: request.archiveId,
+            conversationId: request.conversationId,
+            actorId: request.actorId,
+            action: "set-ui-visibility",
+            ...(request.requestedAt ? { createdAt: request.requestedAt } : {}),
+          },
+        });
+        audits.push(toAudit(audit));
+      }
+      if (next.mcpAccess !== current.mcpAccess) {
+        const audit = await tx.conversationPrivacyAudit.create({
+          data: {
+            archiveId: request.archiveId,
+            conversationId: request.conversationId,
+            actorId: request.actorId,
+            action: "set-mcp-access",
+            ...(request.requestedAt ? { createdAt: request.requestedAt } : {}),
+          },
+        });
+        audits.push(toAudit(audit));
+      }
+      const updated = await tx.conversation.update({
+        where: { archiveId_id: { archiveId: request.archiveId, id: request.conversationId } },
+        data: { uiVisibility: next.uiVisibility, mcpAccess: next.mcpAccess },
+        select: {
+          id: true,
+          archiveId: true,
+          uiVisibility: true,
+          mcpAccess: true,
+          sourceLockMetadata: true,
+        },
+      });
+      return { policy: privacyPolicy(updated as PrivacyConversationRow), audit: audits };
+    });
+    return result;
+  }
+
+  public async list(archiveId: string) {
+    const rows = await this.prisma.conversation.findMany({
+      where: { archiveId },
+      select: {
+        id: true,
+        archiveId: true,
+        uiVisibility: true,
+        mcpAccess: true,
+        sourceLockMetadata: true,
+      },
+    });
+    return rows.map((row) => privacyPolicy(row as PrivacyConversationRow));
+  }
+
+}
+
+function privacyPolicy(row: PrivacyConversationRow): ConversationPrivacyPolicy {
+  if (
+    row.uiVisibility !== "normal" &&
+    row.uiVisibility !== "hidden" &&
+    row.uiVisibility !== "locked"
+  )
+    throw new Error("Invalid persisted conversation UI visibility");
+  if (row.mcpAccess !== "allowed" && row.mcpAccess !== "denied")
+    throw new Error("Invalid persisted conversation MCP access");
+  return {
+    archiveId: row.archiveId,
+    conversationId: row.id,
+    uiVisibility: row.uiVisibility,
+    mcpAccess: row.mcpAccess,
+    ...(isRecord(row.sourceLockMetadata) ? { sourceLockMetadata: row.sourceLockMetadata } : {}),
+  };
+}
+
+function toAudit(row: {
+  id: string;
+  archiveId: string;
+  conversationId: string;
+  actorId: string;
+  action: string;
+  createdAt: Date;
+}): ConversationPrivacyAudit {
+  if (row.action !== "set-ui-visibility" && row.action !== "set-mcp-access")
+    throw new Error("Invalid persisted privacy audit action");
+  return { ...row, action: row.action };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts => {
   const scoped = (delegate: Delegate, field = "archiveId", createField: string | null = field) =>
     new PrismaArchiveScopedAdapter(delegate, field, createField);
   const observations = (delegate: Delegate, entityField: string) =>
     new PrismaObservationAdapter(delegate, entityField);
+  const conversationPrivacy = new PrismaConversationPrivacyPersistence(prisma);
   return {
     users: scoped(prisma.user as unknown as Delegate, "id"),
     archives: scoped(prisma.archive as unknown as Delegate, "id", null),
@@ -123,6 +263,7 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     people: scoped(prisma.person as unknown as Delegate),
     identities: scoped(prisma.identity as unknown as Delegate),
     conversations: scoped(prisma.conversation as unknown as Delegate),
+    conversationPrivacy,
     unifiedConversations: scoped(prisma.conversation as unknown as Delegate),
     sourceConversations: scoped(prisma.sourceConversation as unknown as Delegate),
     messages: scoped(prisma.message as unknown as Delegate),
