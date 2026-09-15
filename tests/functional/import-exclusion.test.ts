@@ -24,6 +24,7 @@ const dates = [
 type ArchiveFixture = {
   readonly userId: string;
   readonly archiveId: string;
+  readonly accountId: string;
   readonly jobs: readonly string[];
 };
 
@@ -79,7 +80,7 @@ async function createArchive(): Promise<ArchiveFixture> {
     });
     jobs.push(jobId);
   }
-  return { userId, archiveId, jobs };
+  return { userId, archiveId, accountId, jobs };
 }
 
 function recordsFor(name: "a" | "b" | "c"): readonly ImportRecord[] {
@@ -233,6 +234,112 @@ describe("import exclusion and deterministic rematerialization", () => {
         where: { archiveId_id: { archiveId: archive.archiveId, id: archive.jobs[0] } },
       }),
     ).toMatchObject({ eligibility: "excluded" });
+    await prisma.user.delete({ where: { id: archive.userId } });
+  });
+
+  it("does not merge matching stable keys from distinct same-account source identities", async () => {
+    const archive = await createArchive();
+    const sourceId = randomUUID();
+    const snapshotId = randomUUID();
+    const jobId = randomUUID();
+    await prisma.source.create({
+      data: {
+        id: sourceId,
+        archiveId: archive.archiveId,
+        ownedAccountId: archive.accountId,
+        kind: "backup",
+        stableKey: "source-alt",
+        sha256: "d".repeat(64),
+      },
+    });
+    await prisma.snapshot.create({
+      data: {
+        id: snapshotId,
+        archiveId: archive.archiveId,
+        ownedAccountId: archive.accountId,
+        sourceId,
+        sha256: "d".repeat(64),
+      },
+    });
+    await prisma.importJob.create({
+      data: {
+        id: jobId,
+        archiveId: archive.archiveId,
+        ownedAccountId: archive.accountId,
+        sourceId,
+        snapshotId,
+        status: "queued",
+      },
+    });
+    await importer.import({
+      archiveId: archive.archiveId,
+      snapshotId,
+      importJobId: jobId,
+      observedAt: new Date("2026-01-04T00:00:00.000Z"),
+      records: [
+        {
+          kind: "conversation",
+          stableKey: "chat-1",
+          source: { namespace: "synthetic-alt", value: "chat-alt" },
+          conversationKind: "direct",
+          title: "Other source chat",
+        },
+        {
+          kind: "message",
+          stableKey: "message-1",
+          source: { namespace: "synthetic-alt", value: "message-1" },
+          conversationKey: "chat-1",
+          timestamp: "2026-01-04T12:00:00.000Z",
+          direction: "received",
+          messageKind: "text",
+          body: "other source body",
+          bodyState: "present",
+        },
+      ],
+    });
+    const sourceConversations = await prisma.sourceConversation.findMany({
+      where: { archiveId: archive.archiveId },
+    });
+    expect(sourceConversations).toHaveLength(2);
+    expect(new Set(sourceConversations.map((row) => row.sourceNamespace))).toEqual(
+      new Set(["normalized-import", "synthetic-alt"]),
+    );
+    expect(await prisma.message.count({ where: { archiveId: archive.archiveId } })).toBe(2);
+    const alternate = await prisma.message.findFirstOrThrow({
+      where: { archiveId: archive.archiveId, body: "other source body" },
+    });
+    const alternateSourceConversation = sourceConversations.find(
+      (row) => row.sourceNamespace === "synthetic-alt",
+    );
+    expect(alternateSourceConversation).toBeDefined();
+    expect(alternate.stableKey).toContain(alternateSourceConversation!.id);
+    await importer.import({
+      archiveId: archive.archiveId,
+      snapshotId,
+      importJobId: jobId,
+      observedAt: new Date("2026-01-04T00:00:00.000Z"),
+      records: [
+        {
+          kind: "conversation",
+          stableKey: "chat-1",
+          source: { namespace: "synthetic-alt", value: "chat-alt" },
+          conversationKind: "direct",
+          title: "Other source chat",
+        },
+        {
+          kind: "message",
+          stableKey: "message-1",
+          source: { namespace: "synthetic-alt", value: "message-1" },
+          conversationKey: "chat-1",
+          timestamp: "2026-01-04T12:00:00.000Z",
+          direction: "received",
+          messageKind: "text",
+          body: "other source body",
+          bodyState: "present",
+        },
+      ],
+    });
+    expect(await prisma.message.count({ where: { archiveId: archive.archiveId } })).toBe(2);
     await prisma.user.delete({ where: { id: archive.userId } });
   });
 
