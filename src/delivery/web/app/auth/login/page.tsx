@@ -2,6 +2,8 @@ import Image from "next/image";
 import { ECHOHOARD_VERSION } from "../../../../../application/version";
 import { getWebRuntime } from "../../../runtime";
 
+export const dynamic = "force-dynamic";
+
 export default async function LoginPage() {
   const runtime = getWebRuntime();
   let setupPhase = false;
