@@ -1,0 +1,42 @@
+{
+  "contractVersion": "wacli-webhook-contract.v1",
+  "accountKey": "fixture-account-a",
+  "lifecycle": [
+    {
+      "line": "{\"event\":\"auth_starting\",\"ts\":1789555200000}",
+      "expectedEvent": "auth_starting"
+    },
+    {
+      "line": "{\"event\":\"qr_code\",\"data\":{\"code\":\"fixture-qr-payload\"},\"ts\":1789555200001}",
+      "expectedEvent": "qr_code"
+    },
+    {
+      "line": "{\"event\":\"connected\",\"ts\":1789555200002}",
+      "expectedEvent": "connected"
+    },
+    {
+      "line": "{\"event\":\"history_sync\",\"data\":{\"conversations\":2},\"ts\":1789555200003}",
+      "expectedEvent": "history_sync"
+    },
+    {
+      "line": "{\"event\":\"offline_sync_preview\",\"data\":{\"total\":3,\"messages\":2,\"receipts\":1},\"ts\":1789555200004}",
+      "expectedEvent": "offline_sync_preview"
+    },
+    {
+      "line": "{\"event\":\"disconnected\",\"ts\":1789555200005}",
+      "expectedEvent": "disconnected"
+    },
+    {
+      "line": "{\"event\":\"stale\",\"data\":{\"threshold\":60,\"idle_duration\":61,\"error_count\":1,\"source\":\"fixture\"},\"ts\":1789555200006}",
+      "expectedEvent": "stale"
+    }
+  ],
+  "webhooks": {
+    "live": "{\"Chat\":\"15550000001@s.whatsapp.net\",\"ID\":\"fixture-live-1\",\"SenderJID\":\"15550000001@s.whatsapp.net\",\"Timestamp\":\"2026-09-16T12:00:00Z\",\"FromMe\":false,\"Text\":\"synthetic live message\"}",
+    "historyShaped": "{\"Chat\":\"15550000001@s.whatsapp.net\",\"ID\":\"fixture-history-1\",\"SenderJID\":\"15550000001@s.whatsapp.net\",\"Timestamp\":\"2026-09-16T11:59:00Z\",\"FromMe\":false,\"Text\":\"synthetic history message\"}",
+    "revoke": "{\"Chat\":\"15550000001@s.whatsapp.net\",\"ID\":\"fixture-revoked-1\",\"SenderJID\":\"15550000001@s.whatsapp.net\",\"Timestamp\":\"2026-09-16T12:01:00Z\",\"FromMe\":false,\"Text\":\"synthetic retained content\",\"Revoked\":true}",
+    "media": "{\"Chat\":\"120363000000000001@g.us\",\"ID\":\"fixture-media-1\",\"SenderJID\":\"15550000002@s.whatsapp.net\",\"Timestamp\":\"2026-09-16T12:02:00Z\",\"FromMe\":false,\"Media\":{\"Type\":\"image\",\"MimeType\":\"image/jpeg\",\"Filename\":\"fixture.jpg\",\"FileLength\":42}}",
+    "receipt": "{\"EventType\":\"receipt\",\"Chat\":\"120363000000000001@g.us\",\"Sender\":\"15550000002@s.whatsapp.net\",\"MessageIDs\":[\"fixture-live-1\"],\"Timestamp\":\"2026-09-16T12:03:00Z\",\"Type\":\"delivered\",\"IsFromMe\":false}",
+    "presence": "{\"EventType\":\"chat_presence\",\"Chat\":\"15550000002@s.whatsapp.net\",\"Sender\":\"15550000002@s.whatsapp.net\",\"State\":\"composing\",\"Media\":\"audio\"}"
+  }
+}

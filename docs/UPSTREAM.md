@@ -1,13 +1,13 @@
 # Upstream references and reuse boundaries
 
-Verified 2026-09-09. Re-check versions, licenses, and interfaces when implementing or upgrading.
+Verified 2026-09-16. Re-check versions, licenses, and interfaces when implementing or upgrading.
 
 | Project | V1 role | Reuse boundary |
 |---|---|---|
 | [ElDavoo/wa-crypt-tools](https://github.com/ElDavoo/wa-crypt-tools) | Pinned crypt12/14/15 decryption dependency; V1 requires crypt15 | Invoke through a bounded Python adapter. GPL-3.0 license and redistributed-image obligations must be honored. Do not copy cryptography into TypeScript. |
 | [B16f00t/whapa](https://github.com/B16f00t/whapa) | Schema research, message-type catalogue, and validation oracle | Do not make its reports/CSV the archive contract. Do not copy code until the exact file license is reviewed. Compare synthetic fixture counts and behaviors. |
 | [pedroschott/whatmcp](https://github.com/pedroschott/whatmcp) | Design reference for durable archive identity, idempotency, bounded retrieval, conversation windows, and MCP safety | V1 may adopt concepts, not source. Semantic windows are deferred. Re-check license before copying any implementation. |
-| [openclaw/wacli](https://github.com/openclaw/wacli) | Preferred V2 linked-device sidecar baseline; continuous sync, named accounts, signed webhooks, deletion metadata, and media recovery | Pin and wrap behind an EchoHoard event adapter. Never expose its send/edit/delete/react/chat-management/general CLI surface or query its SQLite schema from EchoHoard. MIT license. |
+| [openclaw/wacli](https://github.com/openclaw/wacli) | V2 linked-device sidecar baseline; continuous sync, named accounts, HMAC webhooks, deletion metadata, and media recovery | ADR-0003 pins v0.18.2 (commit `cd4370388f03e2234c5f6af14778c9649f230c81`) and the Linux amd64 release archive SHA-256 `d33e8cc4b01acbd4e1ba212e22ac9c6438221e0761112dd3e7a2cc30b3a5946f`. Wrap behind the adapter contract; never expose its send/edit/delete/react/chat-management/general CLI surface or query its SQLite schema from EchoHoard. MIT license. |
 | [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) | Reference for linked-device ingestion and the MCP prompt-injection risk | Do not use as the EchoHoard runtime: it mixes ingestion, storage, MCP, and sending that EchoHoard owns separately. MIT-licensed code still requires attribution if reused. |
 | [imbue-ai/datalib](https://github.com/imbue-ai/datalib) | Reference for source-adapter boundaries and non-root crypt15 acquisition | No runtime dependency required. WhatsApp is EchoHoard source adapter 1, not its permanent domain boundary. Re-check license before copying. |
 | [Immich](https://github.com/immich-app/immich) | Future read-only media correlation target | Never share physical ownership or query its database. Use supported APIs and hashes only in a later feature. |
