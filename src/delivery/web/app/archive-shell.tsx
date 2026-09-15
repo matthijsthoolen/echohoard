@@ -6,6 +6,7 @@ import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
 import { SearchPanel } from "../components/search-panel";
 import { ArchiveOverview } from "../components/archive-overview";
+import { ECHOHOARD_VERSION } from "../../../config/version";
 
 export default function ArchiveShell() {
   const [conversationId, setConversationId] = useState<string | undefined>();
@@ -35,7 +36,6 @@ export default function ArchiveShell() {
             priority
           />
         </a>
-        <p className="privacy-note">Private archive</p>
       </header>
       <div className="shell-body">
         <nav className="primary-nav" aria-label="Primary navigation">
@@ -54,6 +54,7 @@ export default function ArchiveShell() {
           <a className="nav-item secondary" href="/">
             <span aria-hidden="true">⚙</span>Settings
           </a>
+          <p className="app-version">v{ECHOHOARD_VERSION}</p>
         </nav>
         <div className="content-grid" id="main-content">
           <aside className="list-pane" aria-label="Conversation navigation">
@@ -80,6 +81,7 @@ export default function ArchiveShell() {
         <a className="nav-item" href="/">
           <span aria-hidden="true">⌕</span>Search
         </a>
+        <p className="app-version">v{ECHOHOARD_VERSION}</p>
       </nav>
     </main>
   );
