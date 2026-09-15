@@ -25,7 +25,10 @@ export class HttpOidcProvider implements OidcProvider {
     private readonly fetcher: typeof fetch = fetch,
   ) {}
   public authorizationUrl(state: string, nonce?: string, codeChallenge?: string): string {
-    const url = new URL(`${this.issuer.replace(/\/$/u, "")}/authorize`);
+    // Authentik's provider endpoints are slash-terminated. Constructing this
+    // route without the trailing slash returns a 404 instead of an OAuth
+    // redirect on the private deployment.
+    const url = new URL(`${this.issuer.replace(/\/$/u, "")}/authorize/`);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", this.clientId);
     url.searchParams.set("redirect_uri", this.redirectUri);
@@ -88,17 +91,26 @@ export class PrismaPrincipalDirectory implements PrincipalDirectory {
   public constructor(
     private readonly prisma: PrismaClient,
     private readonly configuredIssuer: string,
-    private readonly configuredArchiveId: string,
+    private readonly configuredArchiveId?: string,
   ) {}
   public async findBySubject(issuer: string, subject: string): Promise<ArchivePrincipal | null> {
     if (issuer !== this.configuredIssuer || !subject) return null;
     return this.prisma.$transaction(async (tx) => {
       await this.lockAdmission(tx);
-      const archive = await tx.archive.findUnique({
-        where: { id: this.configuredArchiveId },
-        select: { id: true, userId: true },
-      });
-      if (!archive) return null;
+      const archive = await this.findArchive(tx, issuer, subject);
+      if (!archive) {
+        const user = await tx.user.create({ data: {}, select: { id: true } });
+        return tx.archive
+          .create({
+            data: {
+              userId: user.id,
+              name: "EchoHoard",
+              admittedIdentities: { create: { issuer, subject, role: "admin" } },
+            },
+            select: { id: true, userId: true },
+          })
+          .then((created) => principal(created, issuer, subject, "admin"));
+      }
       const existing = await tx.archiveIdentity.findUnique({
         where: {
           archiveId_issuer_subject: {
@@ -134,7 +146,7 @@ export class PrismaPrincipalDirectory implements PrincipalDirectory {
     subject: string;
   }): Promise<boolean> {
     if (
-      input.archiveId !== this.configuredArchiveId ||
+      (this.configuredArchiveId !== undefined && input.archiveId !== this.configuredArchiveId) ||
       input.approverIssuer !== this.configuredIssuer ||
       input.issuer !== this.configuredIssuer ||
       !input.approverSubject ||
@@ -173,7 +185,7 @@ export class PrismaPrincipalDirectory implements PrincipalDirectory {
     approverSubject: string;
   }): Promise<readonly PendingIdentity[]> {
     if (
-      input.archiveId !== this.configuredArchiveId ||
+      (this.configuredArchiveId !== undefined && input.archiveId !== this.configuredArchiveId) ||
       input.approverIssuer !== this.configuredIssuer ||
       !input.approverSubject
     )
@@ -203,8 +215,31 @@ export class PrismaPrincipalDirectory implements PrincipalDirectory {
 
   private async lockAdmission(tx: Prisma.TransactionClient): Promise<void> {
     await tx.$executeRaw(
-      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.configuredArchiveId}, 0))`,
+      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${this.configuredArchiveId ?? `${this.configuredIssuer}:bootstrap`}, 0))`,
     );
+  }
+
+  private async findArchive(
+    tx: Prisma.TransactionClient,
+    issuer: string,
+    subject: string,
+  ): Promise<{ readonly id: string; readonly userId: string } | null> {
+    if (this.configuredArchiveId !== undefined) {
+      return tx.archive.findUnique({
+        where: { id: this.configuredArchiveId },
+        select: { id: true, userId: true },
+      });
+    }
+    const existingIdentity = await tx.archiveIdentity.findFirst({
+      where: { issuer, subject },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { archive: { select: { id: true, userId: true } } },
+    });
+    if (existingIdentity) return existingIdentity.archive;
+    return tx.archive.findFirst({
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, userId: true },
+    });
   }
 }
 

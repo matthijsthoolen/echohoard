@@ -26,6 +26,15 @@ const nodeFixture = async (body: string) => {
   return command;
 };
 
+const shellFixture = async (body: string) => {
+  const root = await mkdtemp(join(tmpdir(), "echohoard-shell-command-"));
+  roots.push(root);
+  const command = join(root, "command.sh");
+  await writeFile(command, `#!/bin/sh\n${body}`);
+  await chmod(command, 0o755);
+  return command;
+};
+
 afterEach(async () => {
   // Temporary files are confined to unique OS directories; test runners clean them up.
   await Promise.all(
@@ -56,9 +65,7 @@ describe("decryptCrypt15", () => {
 
   it("classifies a nonzero command and redacts its output", async () => {
     const f = await fixture();
-    const command = await nodeFixture(
-      "require('node:fs').writeSync(2, 'bad sentinel-key key\\n'); process.exit(7);",
-    );
+    const command = await shellFixture("printf '%s\\n' 'bad sentinel-key key' >&2; exit 7");
     await expect(
       decryptCrypt15(f.encrypted, f.output, f.secret, { executable: command, timeoutMs: 1000 }),
     ).rejects.toSatisfy((error: unknown) => {
