@@ -21,7 +21,10 @@ RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS production-dependencies
 COPY prisma ./prisma
-RUN pnpm exec prisma generate && pnpm prune --prod
+RUN pnpm exec prisma generate \
+    && mkdir -p /opt/prisma \
+    && cp node_modules/.pnpm/@prisma+engines@*/node_modules/@prisma/engines/schema-engine-debian-openssl-3.0.x /opt/prisma/schema-engine \
+    && pnpm prune --prod
 
 FROM node-base AS build
 COPY --from=dependencies /app/node_modules ./node_modules
@@ -58,6 +61,7 @@ ENV ECHOHOARD_SECRET_DIR=/run/echohoard/secrets
 WORKDIR /app
 COPY --from=node-base /usr/local/bin/node /usr/local/bin/node
 COPY --from=production-dependencies /app/node_modules ./node_modules
+COPY --from=production-dependencies /opt/prisma /opt/prisma
 COPY --from=worker-dependencies /opt/worker-python /opt/worker-python
 # `next build src/delivery/web` writes `.next` below that app directory; the
 # preceding copy already includes it at the path consumed by `next start`.
