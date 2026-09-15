@@ -478,7 +478,7 @@ async function rematerializeMessages(
           : {
               sourceDeletedAt: null,
               sourceDeletionObservationKey: null,
-              sourceDeletionMetadata: null,
+              sourceDeletionMetadata: Prisma.JsonNull,
             }),
         ...(first ? { firstSeenAt: first.observedAt } : {}),
         ...(last ? { lastSeenAt: last.observedAt } : {}),

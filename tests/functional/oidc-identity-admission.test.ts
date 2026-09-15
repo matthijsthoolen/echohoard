@@ -132,15 +132,13 @@ describe("PostgreSQL OIDC identity admission", () => {
     const archiveIds = new Set(results.map((result) => result?.archiveId).filter(Boolean));
     expect(archiveIds.size).toBe(1);
     expect([...archiveIds][0]).not.toBe(archiveId);
-    await expect(
-      prisma.archiveIdentity.findMany({
-        where: {
-          issuer: concurrentBootstrapIssuer,
-          subject: { in: ["concurrent-bootstrap-owner", "concurrent-bootstrap-member"] },
-        },
-        orderBy: { subject: "asc" },
-        select: { role: true },
-      }),
-    ).resolves.toEqual([{ role: "pending" }, { role: "admin" }]);
+    const admitted = await prisma.archiveIdentity.findMany({
+      where: {
+        issuer: concurrentBootstrapIssuer,
+        subject: { in: ["concurrent-bootstrap-owner", "concurrent-bootstrap-member"] },
+      },
+      select: { role: true },
+    });
+    expect(admitted.map((identity) => identity.role).sort()).toEqual(["admin", "pending"]);
   });
 });

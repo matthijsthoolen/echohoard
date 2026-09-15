@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-15T21:56:26.206Z",
+  "scope": "synthetic bounded rematerialization",
+  "messages": 250,
+  "imports": 3,
+  "logicalMessages": 250,
+  "messageObservations": 750,
+  "sourceConversations": 1,
+  "excludedImport": "live-shaped middle import",
+  "excludeMs": 412.069,
+  "reEnableMs": 421.516,
+  "inputSetDigestStable": true,
+  "bounded": true,
+  "command": "pnpm benchmark:rematerialization -- --messages 250"
+}
