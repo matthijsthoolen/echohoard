@@ -6,6 +6,7 @@ import type { ImportEligibility } from "../../application/import-exclusion";
 import type {
   ImportAttachmentAvailability,
   ImportAttachmentRecord,
+  ImportMessageRecord,
   ImportRecord,
   TextSnapshotImportInput,
   TextSnapshotImporter,
@@ -31,6 +32,242 @@ export function importTransactionOptions(options: TextSnapshotImporterOptions = 
     maxWait: options.transactionMaxWaitMilliseconds ?? DEFAULT_IMPORT_TRANSACTION_MAX_WAIT_MS,
     timeout: options.transactionTimeoutMilliseconds ?? DEFAULT_IMPORT_TRANSACTION_TIMEOUT_MS,
   };
+}
+
+const MESSAGE_BATCH_SIZE = 250;
+
+type BulkMessageRow = {
+  readonly id: string;
+  readonly archiveId: string;
+  readonly conversationId: string;
+  readonly sourceConversationId: string;
+  readonly senderId: string | null;
+  readonly replyToId: string | null;
+  readonly stableKey: string;
+  readonly sourceType: string;
+  readonly sourceKey: string;
+  readonly messageType: string;
+  readonly body: string | null;
+  readonly metadata: Record<string, unknown>;
+  readonly sourceDeleted: boolean;
+  readonly contentUnavailable: boolean;
+  readonly sourceDeletedAt: string | null;
+  readonly sourceDeletionObservationKey: string | null;
+  readonly sourceDeletionMetadata: Record<string, unknown> | null;
+  readonly sentAt: string | null;
+  readonly firstSeenAt: string;
+  readonly lastSeenAt: string;
+  readonly materialized: boolean;
+};
+
+async function bulkUpsertMessages(
+  tx: Tx,
+  rows: readonly BulkMessageRow[],
+  eligibility: ImportEligibility,
+): Promise<void> {
+  if (rows.length === 0) return;
+  const payload = JSON.stringify(
+    rows.map((row) => ({
+      id: row.id,
+      archive_id: row.archiveId,
+      conversation_id: row.conversationId,
+      source_conversation_id: row.sourceConversationId,
+      sender_id: row.senderId,
+      reply_to_id: row.replyToId,
+      stable_key: row.stableKey,
+      source_type: row.sourceType,
+      source_key: row.sourceKey,
+      message_type: row.messageType,
+      body: row.body,
+      metadata: row.metadata,
+      source_deleted: row.sourceDeleted,
+      content_unavailable: row.contentUnavailable,
+      source_deleted_at: row.sourceDeletedAt,
+      source_deletion_observation_key: row.sourceDeletionObservationKey,
+      source_deletion_metadata: row.sourceDeletionMetadata,
+      sent_at: row.sentAt,
+      first_seen_at: row.firstSeenAt,
+      last_seen_at: row.lastSeenAt,
+      materialized: row.materialized,
+    })),
+  );
+  if (eligibility === "excluded") {
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO "Message" (
+        "id", "archiveId", "conversationId", "sourceConversationId", "senderId", "replyToId",
+        "stableKey", "sourceType", "sourceKey", "messageType", "body", "metadata",
+        "sourceDeleted", "contentUnavailable", "sourceDeletedAt", "sourceDeletionObservationKey",
+        "sourceDeletionMetadata", "sentAt", "firstSeenAt", "lastSeenAt", "createdAt", "updatedAt",
+        "materialized"
+      )
+      SELECT input.id::uuid, input.archive_id::uuid, input.conversation_id::uuid,
+             input.source_conversation_id::uuid, input.sender_id::uuid, input.reply_to_id::uuid,
+             input.stable_key, input.source_type, input.source_key, input.message_type, input.body,
+             input.metadata, input.source_deleted, input.content_unavailable,
+             input.source_deleted_at::timestamp(3), input.source_deletion_observation_key,
+             input.source_deletion_metadata, input.sent_at::timestamp(3),
+             input.first_seen_at::timestamp(3), input.last_seen_at::timestamp(3),
+             CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, input.materialized
+        FROM jsonb_to_recordset(CAST(${payload} AS jsonb)) AS input(
+          id text, archive_id text, conversation_id text, source_conversation_id text,
+          sender_id text, reply_to_id text, stable_key text, source_type text, source_key text,
+          message_type text, body text, metadata jsonb, source_deleted boolean,
+          content_unavailable boolean, source_deleted_at text, source_deletion_observation_key text,
+          source_deletion_metadata jsonb, sent_at text, first_seen_at text, last_seen_at text,
+          materialized boolean
+        )
+      ON CONFLICT ("archiveId", "stableKey") DO NOTHING
+    `);
+    return;
+  }
+
+  await tx.$executeRaw(Prisma.sql`
+    INSERT INTO "Message" (
+      "id", "archiveId", "conversationId", "sourceConversationId", "senderId", "replyToId",
+      "stableKey", "sourceType", "sourceKey", "messageType", "body", "metadata",
+      "sourceDeleted", "contentUnavailable", "sourceDeletedAt", "sourceDeletionObservationKey",
+      "sourceDeletionMetadata", "sentAt", "firstSeenAt", "lastSeenAt", "createdAt", "updatedAt",
+      "materialized"
+    )
+    SELECT input.id::uuid, input.archive_id::uuid, input.conversation_id::uuid,
+           input.source_conversation_id::uuid, input.sender_id::uuid, input.reply_to_id::uuid,
+           input.stable_key, input.source_type, input.source_key, input.message_type, input.body,
+           input.metadata, input.source_deleted, input.content_unavailable,
+           input.source_deleted_at::timestamp(3), input.source_deletion_observation_key,
+           input.source_deletion_metadata, input.sent_at::timestamp(3),
+           input.first_seen_at::timestamp(3), input.last_seen_at::timestamp(3),
+           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, input.materialized
+      FROM jsonb_to_recordset(CAST(${payload} AS jsonb)) AS input(
+        id text, archive_id text, conversation_id text, source_conversation_id text,
+        sender_id text, reply_to_id text, stable_key text, source_type text, source_key text,
+        message_type text, body text, metadata jsonb, source_deleted boolean,
+        content_unavailable boolean, source_deleted_at text, source_deletion_observation_key text,
+        source_deletion_metadata jsonb, sent_at text, first_seen_at text, last_seen_at text,
+        materialized boolean
+      )
+    ON CONFLICT ("archiveId", "stableKey") DO UPDATE
+      SET "senderId" = EXCLUDED."senderId",
+          "body" = CASE WHEN EXCLUDED."body" IS NOT NULL THEN EXCLUDED."body" ELSE "Message"."body" END,
+          "messageType" = EXCLUDED."messageType",
+          "lastSeenAt" = EXCLUDED."lastSeenAt",
+          "materialized" = EXCLUDED."materialized",
+          "metadata" = jsonb_set(
+            CASE WHEN jsonb_typeof("Message"."metadata") = 'object'
+                 THEN "Message"."metadata" ELSE '{}'::jsonb END || EXCLUDED."metadata",
+            '{firstSeenSnapshotId}',
+            COALESCE("Message"."metadata"->'firstSeenSnapshotId', EXCLUDED."metadata"->'firstSeenSnapshotId'),
+            true
+          ),
+          "sourceDeleted" = "Message"."sourceDeleted" OR EXCLUDED."sourceDeleted",
+          "contentUnavailable" = CASE
+            WHEN EXCLUDED."sourceDeleted" AND EXCLUDED."body" IS NOT NULL THEN false
+            WHEN EXCLUDED."sourceDeleted" AND "Message"."body" IS NULL THEN true
+            WHEN EXCLUDED."body" IS NOT NULL THEN false
+            ELSE "Message"."contentUnavailable"
+          END,
+          "sourceDeletedAt" = CASE
+            WHEN EXCLUDED."sourceDeleted" AND (
+              "Message"."sourceDeletedAt" IS NULL OR
+              EXCLUDED."sourceDeletedAt" > "Message"."sourceDeletedAt" OR
+              (EXCLUDED."sourceDeletedAt" = "Message"."sourceDeletedAt" AND
+               EXCLUDED."sourceDeletionObservationKey" > COALESCE("Message"."sourceDeletionObservationKey", ''))
+            ) THEN EXCLUDED."sourceDeletedAt"
+            ELSE "Message"."sourceDeletedAt"
+          END,
+          "sourceDeletionObservationKey" = CASE
+            WHEN EXCLUDED."sourceDeleted" AND (
+              "Message"."sourceDeletedAt" IS NULL OR
+              EXCLUDED."sourceDeletedAt" > "Message"."sourceDeletedAt" OR
+              (EXCLUDED."sourceDeletedAt" = "Message"."sourceDeletedAt" AND
+               EXCLUDED."sourceDeletionObservationKey" > COALESCE("Message"."sourceDeletionObservationKey", ''))
+            ) THEN EXCLUDED."sourceDeletionObservationKey"
+            ELSE "Message"."sourceDeletionObservationKey"
+          END,
+          "sourceDeletionMetadata" = CASE
+            WHEN EXCLUDED."sourceDeleted" AND (
+              "Message"."sourceDeletedAt" IS NULL OR
+              EXCLUDED."sourceDeletedAt" > "Message"."sourceDeletedAt" OR
+              (EXCLUDED."sourceDeletedAt" = "Message"."sourceDeletedAt" AND
+               EXCLUDED."sourceDeletionObservationKey" > COALESCE("Message"."sourceDeletionObservationKey", ''))
+            ) THEN EXCLUDED."sourceDeletionMetadata"
+            ELSE "Message"."sourceDeletionMetadata"
+          END,
+          "replyToId" = COALESCE(EXCLUDED."replyToId", "Message"."replyToId"),
+          "updatedAt" = CURRENT_TIMESTAMP
+  `);
+}
+
+type BulkMessageObservationRow = {
+  readonly archiveId: string;
+  readonly ownedAccountId: string;
+  readonly sourceId: string;
+  readonly snapshotId: string;
+  readonly importJobId: string;
+  readonly sourceConversationId: string;
+  readonly messageId: string;
+  readonly sourceNamespace: string;
+  readonly sourceConversationKey: string;
+  readonly sourceEntityKey: string;
+  readonly logicalEntityKey: string;
+  readonly observationKey: string;
+  readonly observationKind: string;
+  readonly eligibility: ImportEligibility;
+  readonly valueDigest: string;
+  readonly observedValue: unknown;
+  readonly observedAt: string;
+};
+
+async function bulkInsertMessageObservations(
+  tx: Tx,
+  rows: readonly BulkMessageObservationRow[],
+): Promise<void> {
+  if (rows.length === 0) return;
+  const payload = JSON.stringify(
+    rows.map((row) => ({
+      archive_id: row.archiveId,
+      owned_account_id: row.ownedAccountId,
+      source_id: row.sourceId,
+      snapshot_id: row.snapshotId,
+      import_job_id: row.importJobId,
+      source_conversation_id: row.sourceConversationId,
+      message_id: row.messageId,
+      source_namespace: row.sourceNamespace,
+      source_conversation_key: row.sourceConversationKey,
+      source_entity_key: row.sourceEntityKey,
+      logical_entity_key: row.logicalEntityKey,
+      observation_key: row.observationKey,
+      observation_kind: row.observationKind,
+      eligibility: row.eligibility,
+      value_digest: row.valueDigest,
+      observed_value: row.observedValue,
+      observed_at: row.observedAt,
+    })),
+  );
+  await tx.$executeRaw(Prisma.sql`
+    INSERT INTO "MessageObservation" (
+      "archiveId", "ownedAccountId", "sourceId", "snapshotId", "importJobId",
+      "sourceConversationId", "messageId", "sourceNamespace", "sourceConversationKey",
+      "sourceEntityKey", "logicalEntityKey", "observationKey", "observationKind",
+      "eligibility", "valueDigest", "observedValue", "observedAt"
+    )
+    SELECT input.archive_id::uuid, input.owned_account_id::uuid, input.source_id::uuid,
+           input.snapshot_id::uuid, input.import_job_id::uuid, input.source_conversation_id::uuid,
+           input.message_id::uuid, input.source_namespace, input.source_conversation_key,
+           input.source_entity_key, input.logical_entity_key, input.observation_key,
+           input.observation_kind, input.eligibility, input.value_digest,
+           input.observed_value, input.observed_at::timestamp(3)
+      FROM jsonb_to_recordset(CAST(${payload} AS jsonb)) AS input(
+        archive_id text, owned_account_id text, source_id text, snapshot_id text,
+        import_job_id text, source_conversation_id text, message_id text, source_namespace text,
+        source_conversation_key text, source_entity_key text, logical_entity_key text,
+        observation_key text, observation_kind text, eligibility text, value_digest text,
+        observed_value jsonb, observed_at text
+      )
+    ON CONFLICT (
+      "archiveId", "importJobId", "observationKind", "sourceConversationId",
+      "sourceEntityKey", "observationKey"
+    ) DO NOTHING
+  `);
 }
 
 async function forEachRecord(
@@ -169,8 +406,221 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         throw new Error("Text snapshot import scope does not match its import job");
       const jobEligibility: ImportEligibility =
         job.eligibility === "excluded" ? "excluded" : "eligible";
+      const persistMessageBatch = async (batch: readonly ImportMessageRecord[]): Promise<void> => {
+        if (batch.length === 0) return;
+        const candidates = batch.flatMap((record) => {
+          const conversationId = conversations.get(record.conversationKey);
+          const sourceConversationId = sourceConversations.get(record.conversationKey);
+          const sourceConversation = conversationSources.get(record.conversationKey);
+          if (!conversationId || !sourceConversationId || !sourceConversation) return [];
+          return [{ record, conversationId, sourceConversationId, sourceConversation }];
+        });
+        if (candidates.length === 0) return;
+
+        const baseKeys = [...new Set(candidates.map(({ record }) => record.stableKey))];
+        const baseRows = await tx.message.findMany({
+          where: { archiveId: input.archiveId, stableKey: { in: baseKeys } },
+          select: {
+            id: true,
+            stableKey: true,
+            sourceConversationId: true,
+            body: true,
+            metadata: true,
+            sourceDeletedAt: true,
+            sourceDeletionObservationKey: true,
+          },
+        });
+        const baseByKey = new Map(baseRows.map((row) => [row.stableKey, row]));
+        const occupiedByKey = new Map(
+          baseRows.map((row) => [row.stableKey, row.sourceConversationId]),
+        );
+        const preparedKeys = candidates.map(({ record, sourceConversationId }) => {
+          const priorSourceConversationId = baseByKey.get(record.stableKey)?.sourceConversationId;
+          const occupiedSourceConversationId = occupiedByKey.get(record.stableKey);
+          const collides =
+            (priorSourceConversationId !== undefined &&
+              priorSourceConversationId !== sourceConversationId) ||
+            (occupiedSourceConversationId !== undefined &&
+              occupiedSourceConversationId !== sourceConversationId);
+          const stableKey = collides
+            ? `${ownedAccountId}:${sourceConversationId}:${record.stableKey}`
+            : record.stableKey;
+          if (!occupiedByKey.has(stableKey)) occupiedByKey.set(stableKey, sourceConversationId);
+          return { record, sourceConversationId, stableKey };
+        });
+        const missingPriorKeys = preparedKeys
+          .map(({ stableKey }) => stableKey)
+          .filter((stableKey) => !baseByKey.has(stableKey));
+        const extraRows =
+          missingPriorKeys.length > 0
+            ? await tx.message.findMany({
+                where: { archiveId: input.archiveId, stableKey: { in: missingPriorKeys } },
+                select: {
+                  id: true,
+                  stableKey: true,
+                  sourceConversationId: true,
+                  body: true,
+                  metadata: true,
+                  sourceDeletedAt: true,
+                  sourceDeletionObservationKey: true,
+                },
+              })
+            : [];
+        const priorByKey = new Map([...baseRows, ...extraRows].map((row) => [row.stableKey, row]));
+
+        const senderIdentityIds = [
+          ...new Set(
+            candidates
+              .map(({ record }) => record.senderIdentityKey)
+              .map((identityKey) => (identityKey ? identities.get(identityKey) : undefined))
+              .filter((identityId): identityId is string => identityId !== undefined),
+          ),
+        ];
+        const senderRows =
+          senderIdentityIds.length > 0
+            ? await tx.identity.findMany({
+                where: { archiveId: input.archiveId, id: { in: senderIdentityIds } },
+                select: { id: true, personId: true },
+              })
+            : [];
+        const senderByIdentityId = new Map(senderRows.map((row) => [row.id, row.personId]));
+
+        const idsBySourceKey = new Map(
+          preparedKeys.map(({ record, stableKey }) => [
+            record.stableKey,
+            priorByKey.get(stableKey)?.id ?? stableUuid(input.archiveId, stableKey),
+          ]),
+        );
+        const rows: BulkMessageRow[] = [];
+        const observations: BulkMessageObservationRow[] = [];
+        for (const candidate of candidates) {
+          const prepared = preparedKeys.find(({ record }) => record === candidate.record);
+          if (!prepared) continue;
+          const { record, sourceConversationId, stableKey } = prepared;
+          const identityId = record.senderIdentityKey
+            ? identities.get(record.senderIdentityKey)
+            : undefined;
+          const senderId = identityId ? (senderByIdentityId.get(identityId) ?? null) : null;
+          const deletion = record.sourceDeletion;
+          const deletionObservedAt = deletion?.observedAt
+            ? new Date(deletion.observedAt)
+            : input.observedAt;
+          const sourceDeletionMetadata = deletion
+            ? {
+                kind: deletion.kind,
+                eventKey: deletion.eventKey,
+                observedAt: deletion.observedAt,
+                ...(deletion.sourceMetadata ?? {}),
+              }
+            : null;
+          const messageId = priorByKey.get(stableKey)?.id ?? stableUuid(input.archiveId, stableKey);
+          const replyToId = record.replyToKey
+            ? (idsBySourceKey.get(record.replyToKey) ?? messages.get(record.replyToKey)?.id ?? null)
+            : null;
+          messages.set(record.stableKey, {
+            id: messageId,
+            conversationKey: record.conversationKey,
+          });
+          rows.push({
+            id: messageId,
+            archiveId: input.archiveId,
+            conversationId: candidate.conversationId,
+            sourceConversationId,
+            senderId,
+            replyToId,
+            stableKey,
+            sourceType: record.source.namespace,
+            sourceKey: record.source.value,
+            messageType: record.messageKind,
+            body: record.body ?? null,
+            metadata: {
+              direction: record.direction,
+              bodyState: record.bodyState,
+              ...(record.metadata ?? {}),
+              ...(record.unsupportedTypeCode === undefined
+                ? {}
+                : { unsupportedTypeCode: record.unsupportedTypeCode }),
+              firstSeenSnapshotId: input.snapshotId,
+              lastSeenSnapshotId: input.snapshotId,
+            },
+            sourceDeleted: deletion !== undefined,
+            contentUnavailable: deletion !== undefined && record.body === undefined,
+            sourceDeletedAt: deletion ? deletionObservedAt.toISOString() : null,
+            sourceDeletionObservationKey: deletion?.eventKey ?? null,
+            sourceDeletionMetadata,
+            sentAt: record.timestamp ? new Date(record.timestamp).toISOString() : null,
+            firstSeenAt: input.observedAt.toISOString(),
+            lastSeenAt: input.observedAt.toISOString(),
+            materialized: jobEligibility === "eligible",
+          });
+          observations.push({
+            archiveId: input.archiveId,
+            ownedAccountId,
+            sourceId: job.sourceId,
+            snapshotId: input.snapshotId,
+            importJobId: input.importJobId,
+            sourceConversationId,
+            messageId,
+            sourceNamespace: candidate.sourceConversation.namespace,
+            sourceConversationKey: candidate.sourceConversation.key,
+            sourceEntityKey: record.stableKey,
+            logicalEntityKey: stableKey,
+            observationKey: deletion?.eventKey ?? record.stableKey,
+            observationKind: deletion ? "source-deletion-tombstone" : "value",
+            eligibility: jobEligibility,
+            valueDigest: createHash("sha256").update(JSON.stringify(record), "utf8").digest("hex"),
+            observedValue: record,
+            observedAt: deletion?.observedAt
+              ? deletionObservedAt.toISOString()
+              : input.observedAt.toISOString(),
+          });
+        }
+        await bulkUpsertMessages(tx, rows, jobEligibility);
+        await bulkInsertMessageObservations(tx, observations);
+
+        for (const record of batch) {
+          const message = messages.get(record.stableKey);
+          if (!message) continue;
+          const waitingReplies = pendingReplies.get(record.stableKey);
+          if (!waitingReplies) continue;
+          for (const waitingReplyId of waitingReplies)
+            await tx.message.update({
+              where: { archiveId_id: { archiveId: input.archiveId, id: waitingReplyId } },
+              data: { replyToId: message.id },
+            });
+          pendingReplies.delete(record.stableKey);
+        }
+        for (const record of batch) {
+          if (!record.replyToKey) continue;
+          const message = messages.get(record.stableKey);
+          const replyTo = messages.get(record.replyToKey);
+          if (!message) continue;
+          if (replyTo)
+            await tx.message.update({
+              where: { archiveId_id: { archiveId: input.archiveId, id: message.id } },
+              data: { replyToId: replyTo.id },
+            });
+          else {
+            const waiting = pendingReplies.get(record.replyToKey) ?? [];
+            waiting.push(message.id);
+            pendingReplies.set(record.replyToKey, waiting);
+          }
+        }
+      };
+      let messageBatch: ImportMessageRecord[] = [];
+      const flushMessageBatch = async (): Promise<void> => {
+        const batch = messageBatch;
+        messageBatch = [];
+        await persistMessageBatch(batch);
+      };
       await forEachRecord(records, async (record) => {
         importedCount += 1;
+        if (record.kind === "message") {
+          messageBatch.push(record);
+          if (messageBatch.length >= MESSAGE_BATCH_SIZE) await flushMessageBatch();
+          return;
+        }
+        await flushMessageBatch();
         if (record.kind === "person") {
           const existing = await tx.person.upsert({
             where: {
@@ -346,176 +796,6 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           });
         }
 
-        if (record.kind === "message") {
-          const conversationId = conversations.get(record.conversationKey);
-          const sourceConversationId = sourceConversations.get(record.conversationKey);
-          if (!conversationId || !sourceConversationId) return;
-          const senderId = record.senderIdentityKey
-            ? await identityPersonId(input.archiveId, identities.get(record.senderIdentityKey), tx)
-            : null;
-          const sentAt = record.timestamp ? new Date(record.timestamp) : null;
-          const sourceConversation = conversationSources.get(record.conversationKey);
-          if (!sourceConversation) return;
-          const stableKey = await messageStableKey(
-            tx,
-            input.archiveId,
-            ownedAccountId,
-            sourceConversationId,
-            record.stableKey,
-          );
-          const deletion = record.sourceDeletion;
-          const deletionObservedAt = deletion?.observedAt
-            ? new Date(deletion.observedAt)
-            : input.observedAt;
-          const prior = await tx.message.findUnique({
-            where: {
-              archiveId_stableKey: { archiveId: input.archiveId, stableKey },
-            },
-            select: {
-              metadata: true,
-              body: true,
-              sourceDeletedAt: true,
-              sourceDeletionObservationKey: true,
-            },
-          });
-          const existing = await tx.message.upsert({
-            where: {
-              archiveId_stableKey: { archiveId: input.archiveId, stableKey },
-            },
-            create: {
-              id: stableUuid(input.archiveId, stableKey),
-              archiveId: input.archiveId,
-              conversationId,
-              sourceConversationId,
-              senderId,
-              stableKey,
-              sourceType: record.source.namespace,
-              sourceKey: record.source.value,
-              messageType: record.messageKind,
-              body: record.body,
-              metadata: json({
-                direction: record.direction,
-                bodyState: record.bodyState,
-                ...(record.metadata ?? {}),
-                ...(record.unsupportedTypeCode === undefined
-                  ? {}
-                  : { unsupportedTypeCode: record.unsupportedTypeCode }),
-                firstSeenSnapshotId: input.snapshotId,
-                lastSeenSnapshotId: input.snapshotId,
-              }),
-              ...(deletion
-                ? {
-                    sourceDeleted: true,
-                    contentUnavailable: record.body === undefined,
-                    sourceDeletedAt: deletionObservedAt,
-                    sourceDeletionObservationKey: deletion.eventKey,
-                    sourceDeletionMetadata: json({
-                      kind: deletion.kind,
-                      eventKey: deletion.eventKey,
-                      observedAt: deletion.observedAt,
-                      ...(deletion.sourceMetadata ?? {}),
-                    }),
-                  }
-                : {}),
-              sentAt,
-              firstSeenAt: input.observedAt,
-              lastSeenAt: input.observedAt,
-              materialized: jobEligibility === "eligible",
-            },
-            update:
-              jobEligibility === "eligible"
-                ? {
-                    senderId,
-                    ...(record.body !== undefined ? { body: record.body } : {}),
-                    messageType: record.messageKind,
-                    lastSeenAt: input.observedAt,
-                    materialized: true,
-                    metadata: json({
-                      ...(asObject(prior?.metadata) ?? {}),
-                      direction: record.direction,
-                      bodyState: record.bodyState,
-                      ...(record.metadata ?? {}),
-                      ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
-                    }),
-                    ...(deletion
-                      ? {
-                          sourceDeleted: true,
-                          ...(record.body !== undefined
-                            ? { contentUnavailable: false }
-                            : prior?.body == null
-                              ? { contentUnavailable: true }
-                              : {}),
-                          ...(isLaterDeletion(
-                            deletionObservedAt,
-                            deletion.eventKey,
-                            prior?.sourceDeletedAt,
-                            prior?.sourceDeletionObservationKey,
-                          )
-                            ? {
-                                sourceDeletedAt: deletionObservedAt,
-                                sourceDeletionObservationKey: deletion.eventKey,
-                                sourceDeletionMetadata: json({
-                                  kind: deletion.kind,
-                                  eventKey: deletion.eventKey,
-                                  observedAt: deletion.observedAt,
-                                  ...(deletion.sourceMetadata ?? {}),
-                                }),
-                              }
-                            : {}),
-                        }
-                      : record.body !== undefined
-                        ? { contentUnavailable: false }
-                        : {}),
-                  }
-                : {},
-          });
-          messages.set(record.stableKey, {
-            id: existing.id,
-            conversationKey: record.conversationKey,
-          });
-          const waitingReplies = pendingReplies.get(record.stableKey);
-          if (waitingReplies) {
-            for (const waitingReplyId of waitingReplies)
-              await tx.message.update({
-                where: { archiveId_id: { archiveId: input.archiveId, id: waitingReplyId } },
-                data: { replyToId: existing.id },
-              });
-            pendingReplies.delete(record.stableKey);
-          }
-          await upsertObservation(tx.messageObservation, {
-            archiveId: input.archiveId,
-            ownedAccountId,
-            sourceId: job.sourceId,
-            snapshotId: input.snapshotId,
-            importJobId: input.importJobId,
-            sourceConversationId,
-            sourceConversationKey: sourceConversation.key,
-            sourceNamespace: sourceConversation.namespace,
-            sourceEntityKey: record.stableKey,
-            logicalEntityKey: stableKey,
-            observationKey: record.sourceDeletion?.eventKey ?? record.stableKey,
-            messageId: existing.id,
-            value: record,
-            eligibility: jobEligibility,
-            observationKind: record.sourceDeletion ? "source-deletion-tombstone" : "value",
-            observedAt: deletion?.observedAt ? deletionObservedAt : input.observedAt,
-          });
-
-          if (record.replyToKey) {
-            const id = messages.get(record.stableKey)?.id,
-              replyToId = messages.get(record.replyToKey)?.id;
-            if (id && replyToId)
-              await tx.message.update({
-                where: { archiveId_id: { archiveId: input.archiveId, id } },
-                data: { replyToId },
-              });
-            else if (id) {
-              const waiting = pendingReplies.get(record.replyToKey) ?? [];
-              waiting.push(id);
-              pendingReplies.set(record.replyToKey, waiting);
-            }
-          }
-        }
         if (record.kind === "revision") {
           const messageId = messages.get(record.messageKey)?.id;
           if (!messageId) return;
@@ -644,6 +924,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             observedAt: input.observedAt,
           });
       });
+      await flushMessageBatch();
       try {
         await tx.snapshot.update({
           where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
@@ -839,18 +1120,6 @@ function mergeSnapshotProvenance(value: unknown, snapshotId: string): Record<str
   };
 }
 
-function isLaterDeletion(
-  observedAt: Date,
-  eventKey: string,
-  priorObservedAt: Date | null | undefined,
-  priorEventKey: string | null | undefined,
-): boolean {
-  if (!priorObservedAt) return true;
-  const observed = observedAt.getTime();
-  const prior = priorObservedAt.getTime();
-  return observed > prior || (observed === prior && eventKey > (priorEventKey ?? ""));
-}
-
 function stableUuid(archiveId: string, key: string): string {
   const hex = createHash("sha256")
     .update(`${archiveId}\0${key}`, "utf8")
@@ -953,21 +1222,5 @@ async function conversationStableKey(
         row.sourceConversationKey !== sourceConversationKey,
     )
     ? `${ownedAccountId}:${sourceNamespace}:${sourceConversationKey}:${sourceKey}`
-    : sourceKey;
-}
-
-async function messageStableKey(
-  tx: Tx,
-  archiveId: string,
-  ownedAccountId: string,
-  sourceConversationId: string,
-  sourceKey: string,
-): Promise<string> {
-  const existing = await tx.message.findUnique({
-    where: { archiveId_stableKey: { archiveId, stableKey: sourceKey } },
-    select: { sourceConversationId: true },
-  });
-  return existing && existing.sourceConversationId !== sourceConversationId
-    ? `${ownedAccountId}:${sourceConversationId}:${sourceKey}`
     : sourceKey;
 }
