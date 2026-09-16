@@ -70,6 +70,16 @@ export class InvalidTransitionError extends Error {
   }
 }
 
+/** A conditional persistence operation was rejected because this runner no
+ * longer owns the job lease. Callers must abandon the job rather than trying
+ * to classify the rejection as a job failure. */
+export class LeaseFenceError extends Error {
+  public constructor(message = "job lease is no longer active") {
+    super(message);
+    this.name = "LeaseFenceError";
+  }
+}
+
 const deliveryTransitions: Record<DeliveryStatus, readonly DeliveryStatus[]> = {
   discovered: ["settling", "failed"],
   settling: ["discovered", "claimed", "failed"],
@@ -280,9 +290,11 @@ export interface HashingPort {
 }
 export interface LeasePort {
   acquire(jobId: ImportJobId, owner: string, expiresAt: Date): Promise<LeaseId | null>;
-  renew(leaseId: LeaseId, expiresAt: Date): Promise<boolean>;
-  release(leaseId: LeaseId): Promise<void>;
-  recoverExpired(now: Date): Promise<readonly ImportJobId[]>;
+  renew(leaseId: LeaseId, expiresAt: Date, now: Date): Promise<boolean>;
+  release(leaseId: LeaseId, now: Date): Promise<void>;
+  recoverExpired(
+    now: Date,
+  ): Promise<readonly { readonly jobId: ImportJobId; readonly leaseId: LeaseId }[]>;
 }
 export interface DecryptPort {
   decrypt(

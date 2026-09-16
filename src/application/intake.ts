@@ -1,3 +1,4 @@
+import { LeaseFenceError } from "./echohoard.js";
 import type {
   ClockPort,
   DecryptPort,
@@ -21,13 +22,19 @@ export interface JobStorePort {
   /** Return a bounded batch of jobs which may be attempted by this worker. */
   listEligible?(limit: number): Promise<readonly ImportJobId[]>;
   markLeased(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void>;
-  markDecrypting(jobId: ImportJobId, updatedAt: Date): Promise<void>;
-  markAdapting(jobId: ImportJobId, updatedAt: Date): Promise<void>;
-  markImporting(jobId: ImportJobId, adapterVersion: string, updatedAt: Date): Promise<void>;
-  markFinalizing(jobId: ImportJobId, updatedAt: Date): Promise<void>;
-  markCompleted(jobId: ImportJobId, updatedAt: Date): Promise<void>;
+  markDecrypting(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void>;
+  markAdapting(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void>;
+  markImporting(
+    jobId: ImportJobId,
+    lease: LeaseId,
+    adapterVersion: string,
+    updatedAt: Date,
+  ): Promise<void>;
+  markFinalizing(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void>;
+  markCompleted(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void>;
   markFailed(
     jobId: ImportJobId,
+    lease: LeaseId,
     failure: {
       readonly class: JobFailureClass;
       readonly retryable: boolean;
@@ -35,15 +42,17 @@ export interface JobStorePort {
     },
     updatedAt: Date,
   ): Promise<void>;
-  requeue(jobId: ImportJobId, updatedAt: Date): Promise<void>;
 }
 
 export interface JobWorkPort {
-  /** Creates an isolated directory. Implementations may remove an abandoned
-   * directory and recreate it, but must never return another job's path. */
-  prepare(jobId: ImportJobId): Promise<{ readonly path: string; readonly restarted: boolean }>;
-  cleanup(jobId: ImportJobId, path: string): Promise<void>;
-  cleanupStale(jobId: ImportJobId): Promise<void>;
+  /** Creates an isolated directory for this lease. A replacement lease must
+   * never reuse a stale runner's work path. */
+  prepare(
+    jobId: ImportJobId,
+    lease: LeaseId,
+  ): Promise<{ readonly path: string; readonly restarted: boolean }>;
+  cleanup(jobId: ImportJobId, lease: LeaseId, path: string): Promise<void>;
+  cleanupStale(jobId: ImportJobId, lease: LeaseId): Promise<void>;
 }
 
 export interface SnapshotPathPort {
@@ -81,15 +90,14 @@ export class DecryptJobRunner {
     private readonly importer?: TextSnapshotImporter,
   ) {}
 
-  /** Requeues only jobs whose database lease has expired, cleaning their work
-   * first. The database lease operation remains the source of truth. */
+  /** Atomically requeues expired jobs, then removes only the expired lease's
+   * work directory. The database lease operation remains authoritative. */
   public async recoverStaleJobs(): Promise<readonly ImportJobId[]> {
     const stale = await this.leases.recoverExpired(this.clock.now());
-    for (const jobId of stale) {
-      await this.work.cleanupStale(jobId);
-      await this.jobs.requeue(jobId, this.clock.now());
+    for (const recovered of stale) {
+      await this.work.cleanupStale(recovered.jobId, recovered.leaseId);
     }
-    return stale;
+    return stale.map(({ jobId }) => jobId);
   }
 
   public async run(jobId: ImportJobId): Promise<boolean> {
@@ -101,37 +109,43 @@ export class DecryptJobRunner {
     if (!lease) return false;
     let workPath = "";
     let phase: "decryption" | "adaptation" | "import" | "finalization" = "decryption";
-    const heartbeat = setInterval(() => {
-      void this.leases.renew(lease, this.expiry());
-    }, this.options.heartbeatMilliseconds);
+    const monitor = new LeaseMonitor(this.leases, lease, this.clock, () => this.expiry());
+    const heartbeat = setInterval(() => void monitor.renew(), this.options.heartbeatMilliseconds);
     try {
-      await this.jobs.markLeased(jobId, lease, this.clock.now());
-      const prepared = await this.work.prepare(jobId);
+      await monitor.run(() => this.jobs.markLeased(jobId, lease, this.clock.now()));
+      const prepared = await monitor.run(() => this.work.prepare(jobId, lease));
       workPath = prepared.path;
-      await this.jobs.markDecrypting(jobId, this.clock.now());
+      await monitor.run(() => this.jobs.markDecrypting(jobId, lease, this.clock.now()));
       if (!job.snapshotId) throw new Error("decryption job has no snapshot");
-      const decrypted = await this.decrypt.decrypt(
-        await this.snapshots.path(job.snapshotId),
-        workPath,
-        this.options.decryptTimeoutMilliseconds,
+      const decrypted = await monitor.run(async () =>
+        this.decrypt.decrypt(
+          await this.snapshots.path(job.snapshotId as string),
+          workPath,
+          this.options.decryptTimeoutMilliseconds,
+        ),
       );
       if (!this.adapter || !this.importer) {
         if (this.adapter || this.importer) throw new Error("worker import pipeline is incomplete");
-        await this.jobs.markCompleted(jobId, this.clock.now());
+        await monitor.run(() => this.jobs.markCompleted(jobId, lease, this.clock.now()));
         return true;
       }
       phase = "adaptation";
-      await this.jobs.markAdapting(jobId, this.clock.now());
+      await monitor.run(() => this.jobs.markAdapting(jobId, lease, this.clock.now()));
       if (!job.ownedAccountId) throw new Error("import job has no owned account");
-      const adapted = await this.adapter.adapt({
-        decryptedPath: decrypted.outputPath,
-        snapshotId: job.snapshotId,
-        accountScope: job.ownedAccountId,
-      });
+      const adapted = await monitor.run(
+        () =>
+          this.adapter?.adapt({
+            decryptedPath: decrypted.outputPath,
+            snapshotId: job.snapshotId as string,
+            accountScope: job.ownedAccountId as string,
+          }) ?? Promise.reject(new Error("worker import pipeline is incomplete")),
+      );
       phase = "import";
-      await this.jobs.markImporting(jobId, adapted.adapterVersion, this.clock.now());
+      await monitor.run(() =>
+        this.jobs.markImporting(jobId, lease, adapted.adapterVersion, this.clock.now()),
+      );
       phase = "finalization";
-      await this.jobs.markFinalizing(jobId, this.clock.now());
+      await monitor.run(() => this.jobs.markFinalizing(jobId, lease, this.clock.now()));
       phase = "import";
       if (!job.archiveId || !job.sourceId)
         throw new Error("import job has incomplete archive scope");
@@ -142,22 +156,91 @@ export class DecryptJobRunner {
         importJobId: job.id,
         observedAt: job.observedAt ?? this.clock.now(),
         records: adapted.records,
+        leaseId: lease,
+        leaseCheckedAt: this.clock.now(),
       };
-      await this.importer.import(input);
+      await monitor.run(
+        () =>
+          this.importer?.import(input) ??
+          Promise.reject(new Error("worker import pipeline is incomplete")),
+      );
       return true;
     } catch (error) {
+      if (monitor.isLost || error instanceof LeaseFenceError) return false;
       const failure = toFailure(error, phase);
-      await this.jobs.markFailed(jobId, failure, this.clock.now());
+      try {
+        await monitor.run(() => this.jobs.markFailed(jobId, lease, failure, this.clock.now()));
+      } catch (failureError) {
+        if (!(failureError instanceof LeaseFenceError)) throw failureError;
+      }
       return false;
     } finally {
       clearInterval(heartbeat);
-      if (workPath) await this.work.cleanup(jobId, workPath);
-      await this.leases.release(lease);
+      try {
+        if (workPath) await this.work.cleanup(jobId, lease, workPath);
+        else if (monitor.isLost) await this.work.cleanupStale(jobId, lease);
+      } finally {
+        await this.leases.release(lease, this.clock.now());
+      }
     }
   }
 
   private expiry(): Date {
     return new Date(this.clock.now().getTime() + this.options.leaseDurationMilliseconds);
+  }
+}
+
+class LeaseMonitor {
+  private lostError: LeaseFenceError | undefined;
+  private renewal: Promise<void> | undefined;
+  private readonly rejectLost: (error: LeaseFenceError) => void;
+  public readonly lost: Promise<never>;
+
+  public constructor(
+    private readonly leases: LeasePort,
+    private readonly lease: LeaseId,
+    private readonly clock: ClockPort,
+    private readonly expiry: () => Date,
+  ) {
+    let rejectLost: (error: LeaseFenceError) => void = () => undefined;
+    this.lost = new Promise<never>((_, reject) => {
+      rejectLost = reject;
+    });
+    this.rejectLost = (error) => rejectLost(error);
+  }
+
+  public get isLost(): boolean {
+    return this.lostError !== undefined;
+  }
+
+  public async renew(): Promise<void> {
+    if (this.lostError || this.renewal) return this.renewal ?? Promise.resolve();
+    this.renewal = (async () => {
+      try {
+        const renewed = await this.leases.renew(this.lease, this.expiry(), this.clock.now());
+        if (!renewed) this.lose();
+      } catch {
+        this.lose();
+      } finally {
+        this.renewal = undefined;
+      }
+    })();
+    return this.renewal;
+  }
+
+  public async run<T>(operation: () => Promise<T>): Promise<T> {
+    this.assert();
+    return Promise.race([operation(), this.lost]);
+  }
+
+  private assert(): void {
+    if (this.lostError) throw this.lostError;
+  }
+
+  private lose(): void {
+    if (this.lostError) return;
+    this.lostError = new LeaseFenceError();
+    this.rejectLost(this.lostError);
   }
 }
 

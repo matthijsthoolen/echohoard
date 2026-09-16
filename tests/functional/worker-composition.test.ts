@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import {
   type JobStorePort,
   type SnapshotAdapterPort,
 } from "../../src/application/intake.js";
+import { LeaseFenceError } from "../../src/application/echohoard.js";
 import type { ImportRecord, TextSnapshotImporter } from "../../src/application/text-import.js";
 import {
   PrismaDecryptJobStore,
@@ -118,8 +119,10 @@ describe("PostgreSQL worker job composition", () => {
   it("recovers an expired lease before requeueing", async () => {
     const jobs = new PrismaDecryptJobStore(prisma);
     const leases = new PrismaImportJobLeases(prisma);
-    await expect(leases.recoverExpired(now)).resolves.toContain(staleJobId);
-    await jobs.requeue(staleJobId, now);
+    await expect(leases.recoverExpired(now)).resolves.toContainEqual({
+      jobId: staleJobId,
+      leaseId: expect.any(String),
+    });
     await expect(prisma.importJob.findUnique({ where: { id: staleJobId } })).resolves.toMatchObject(
       {
         status: "queued",
@@ -127,6 +130,83 @@ describe("PostgreSQL worker job composition", () => {
         leaseOwner: null,
       },
     );
+  });
+
+  it("fences every stale transition and cleanup after an atomic takeover", async () => {
+    const takeoverJobId = randomUUID();
+    await prisma.importJob.create({
+      data: {
+        id: takeoverJobId,
+        archiveId,
+        ownedAccountId,
+        sourceId,
+        snapshotId,
+        status: "queued",
+      },
+    });
+    const oldLeaseStore = new PrismaImportJobLeases(prisma);
+    const oldLease = await oldLeaseStore.acquire(
+      takeoverJobId,
+      "old-worker",
+      new Date(now.getTime() + 1_000),
+    );
+    expect(oldLease).not.toBeNull();
+    const jobs = new PrismaDecryptJobStore(prisma);
+    const work = new LocalJobWork(workRoot);
+    const oldWork = await work.prepare(takeoverJobId, oldLease!);
+    await writeFile(join(oldWork.path, "stale"), "old");
+    await jobs.markLeased(takeoverJobId, oldLease!, now);
+
+    await prisma.importJob.update({
+      where: { id: takeoverJobId },
+      data: { leaseExpiresAt: new Date(now.getTime() - 1_000) },
+    });
+    const recovered = await oldLeaseStore.recoverExpired(now);
+    expect(recovered).toEqual([{ jobId: takeoverJobId, leaseId: oldLease }]);
+
+    const replacementLeaseStore = new PrismaImportJobLeases(prisma);
+    const replacementLease = await replacementLeaseStore.acquire(
+      takeoverJobId,
+      "new-worker",
+      new Date(now.getTime() + 10_000),
+    );
+    expect(replacementLease).not.toBeNull();
+    const replacementWork = await work.prepare(takeoverJobId, replacementLease!);
+    await writeFile(join(replacementWork.path, "active"), "replacement");
+    await jobs.markLeased(takeoverJobId, replacementLease!, now);
+    await work.cleanup(takeoverJobId, oldLease!, oldWork.path);
+    await expect(readFile(join(replacementWork.path, "active"), "utf8")).resolves.toBe(
+      "replacement",
+    );
+
+    await expect(jobs.markDecrypting(takeoverJobId, oldLease!, now)).rejects.toBeInstanceOf(
+      LeaseFenceError,
+    );
+    await expect(
+      jobs.markFailed(
+        takeoverJobId,
+        oldLease!,
+        {
+          class: "internal",
+          retryable: true,
+          diagnostic: "stale runner",
+        },
+        now,
+      ),
+    ).rejects.toBeInstanceOf(LeaseFenceError);
+    await oldLeaseStore.release(oldLease!, now);
+    await expect(
+      prisma.importJob.findUnique({ where: { id: takeoverJobId } }),
+    ).resolves.toMatchObject({
+      status: "leased",
+      leaseId: replacementLease,
+    });
+    await expect(jobs.markCompleted(takeoverJobId, oldLease!, now)).rejects.toBeInstanceOf(
+      LeaseFenceError,
+    );
+    await jobs.markDecrypting(takeoverJobId, replacementLease!, now);
+    await replacementLeaseStore.release(replacementLease!, now);
+    await work.cleanup(takeoverJobId, replacementLease!, replacementWork.path);
   });
 
   it("records an invalid-key failure using only the sanitized classification", async () => {
@@ -287,7 +367,6 @@ describe("PostgreSQL worker job composition", () => {
         Promise.reject(Object.assign(new Error("finalization details"), { kind: "internal" })),
       markCompleted: base.markCompleted.bind(base),
       markFailed: base.markFailed.bind(base),
-      requeue: base.requeue.bind(base),
     };
     const runner = createPipelineRunner(seeded.jobId, adapter, importer, jobs);
 

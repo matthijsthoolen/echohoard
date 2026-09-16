@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient, Prisma } from "@prisma/client";
+import { LeaseFenceError } from "../../application/echohoard.js";
 import { reconcileAttachmentAvailability } from "../../application/text-import";
 import type { ImportEligibility } from "../../application/import-exclusion";
 import type {
@@ -531,10 +532,26 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
           data: { lifecycle: "completed", completedAt: input.observedAt },
         });
-        await tx.importJob.update({
-          where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
-          data: { status: "completed", finishedAt: input.observedAt, retryable: false },
-        });
+        if (input.leaseId || input.leaseCheckedAt) {
+          if (!input.leaseId || !input.leaseCheckedAt)
+            throw new LeaseFenceError("import lease context is incomplete");
+          const result = await tx.importJob.updateMany({
+            where: {
+              archiveId: input.archiveId,
+              id: input.importJobId,
+              leaseId: input.leaseId,
+              leaseExpiresAt: { gt: input.leaseCheckedAt },
+              status: "finalizing",
+            },
+            data: { status: "completed", finishedAt: input.observedAt, retryable: false },
+          });
+          if (result.count !== 1) throw new LeaseFenceError("job lease changed during import");
+        } else {
+          await tx.importJob.update({
+            where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
+            data: { status: "completed", finishedAt: input.observedAt, retryable: false },
+          });
+        }
       } catch {
         throw Object.assign(new Error("snapshot import finalization failed"), {
           kind: "internal",

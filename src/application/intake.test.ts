@@ -25,13 +25,9 @@ function setup(decrypt: (path: string) => Promise<void> = async () => {}) {
       events.push("completed");
       stored = { ...stored, status: "completed" };
     },
-    markFailed: async (_id, failure) => {
+    markFailed: async (_id, _lease, failure) => {
       events.push(`${failure.retryable ? "retryable" : "terminal"}:${failure.class}`);
       stored = { ...stored, status: "failed" };
-    },
-    requeue: async () => {
-      events.push("requeued");
-      stored = { ...stored, status: "queued" };
     },
   };
   const work: JobWorkPort = {
@@ -39,7 +35,7 @@ function setup(decrypt: (path: string) => Promise<void> = async () => {}) {
       events.push("prepare");
       return { path: "/data/work/job", restarted: true };
     },
-    cleanup: async (_id, path) => events.push(`cleanup:${path}`),
+    cleanup: async (_id, _lease, path) => events.push(`cleanup:${path}`),
     cleanupStale: async () => events.push("cleanup-stale"),
   };
   const leases = {
@@ -116,7 +112,7 @@ describe("decrypt job recovery", () => {
       acquire: async () => "lease",
       renew: async () => true,
       release: async () => {},
-      recoverExpired: async () => ["job"],
+      recoverExpired: async () => [{ jobId: "job", leaseId: "lease" }],
     };
     const runner = new DecryptJobRunner(
       fixture.jobs,
@@ -137,7 +133,7 @@ describe("decrypt job recovery", () => {
       },
     );
     await expect(runner.recoverStaleJobs()).resolves.toEqual(["job"]);
-    expect(fixture.events).toEqual(["cleanup-stale", "requeued"]);
+    expect(fixture.events).toEqual(["cleanup-stale"]);
   });
 
   it("does not run jobs without an available lease", async () => {
@@ -170,6 +166,69 @@ describe("decrypt job recovery", () => {
     expect(fixture.events).toEqual([]);
   });
 
+  it("aborts the current phase when renewal is rejected and never enters the next phase", async () => {
+    let releaseDecrypt: (() => void) | undefined;
+    let decryptStarted = false;
+    const events: string[] = [];
+    const jobs: JobStorePort = {
+      get: async () => ({
+        ...job,
+        archiveId: "archive",
+        ownedAccountId: "account",
+        sourceId: "source",
+      }),
+      markLeased: async () => events.push("leased"),
+      markDecrypting: async () => events.push("decrypting"),
+      markAdapting: async () => events.push("adapting"),
+      markImporting: async () => events.push("importing"),
+      markFinalizing: async () => events.push("finalizing"),
+      markCompleted: async () => events.push("completed"),
+      markFailed: async () => events.push("failed"),
+    };
+    const runner = new DecryptJobRunner(
+      jobs,
+      {
+        acquire: async () => "lease",
+        renew: async () => decryptStarted === false,
+        release: async () => events.push("release"),
+        recoverExpired: async () => [],
+      },
+      {
+        prepare: async () => ({ path: "/work/job/lease", restarted: false }),
+        cleanup: async () => events.push("cleanup"),
+        cleanupStale: async () => {},
+      },
+      { path: async () => "/snapshots/snapshot.db" },
+      {
+        decrypt: async () => {
+          decryptStarted = true;
+          await new Promise<void>((resolve) => {
+            releaseDecrypt = resolve;
+          });
+          return { outputPath: "/work/job/lease/msgstore.db" };
+        },
+      },
+      { now: () => now, sleep: async () => {} },
+      {
+        owner: "worker-a",
+        leaseDurationMilliseconds: 10_000,
+        heartbeatMilliseconds: 1,
+        decryptTimeoutMilliseconds: 5_000,
+      },
+      { adapt: async () => ({ adapterVersion: "unused", records: [] }) },
+      { import: async () => ({ imported: 0 }) },
+    );
+
+    const running = runner.run(job.id);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(decryptStarted).toBe(true);
+    releaseDecrypt?.();
+    await expect(running).resolves.toBe(false);
+    expect(events).not.toContain("adapting");
+    expect(events).not.toContain("failed");
+    expect(events).toContain("cleanup");
+  });
+
   it("runs adaptation, transactional import, and finalization before completion", async () => {
     const events: string[] = [];
     let stored: ImportJob = {
@@ -187,7 +246,7 @@ describe("decrypt job recovery", () => {
         events.push("adapting");
         stored = { ...stored, status: "adapting" };
       },
-      markImporting: async (_id, version) => {
+      markImporting: async (_id, _lease, version) => {
         events.push(`importing:${version}`);
         stored = { ...stored, status: "importing" };
       },
@@ -199,11 +258,10 @@ describe("decrypt job recovery", () => {
       markFailed: async () => {
         stored = { ...stored, status: "failed" };
       },
-      requeue: async () => {},
     };
     const work: JobWorkPort = {
       prepare: async () => ({ path: "/work/job", restarted: false }),
-      cleanup: async (_id, path) => events.push(`cleanup:${path}`),
+      cleanup: async (_id, _lease, path) => events.push(`cleanup:${path}`),
       cleanupStale: async () => {},
     };
     const records: readonly ImportRecord[] = [{ kind: "person", stableKey: "person" }];

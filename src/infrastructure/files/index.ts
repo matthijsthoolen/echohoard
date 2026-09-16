@@ -1,4 +1,14 @@
-import { copyFile, mkdir, readdir, rename, stat, writeFile, readFile, rm } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  rename,
+  stat,
+  writeFile,
+  readFile,
+  rm,
+  rmdir,
+} from "node:fs/promises";
 import { join } from "node:path";
 import type {
   DeliveryFile,
@@ -8,7 +18,7 @@ import type {
   SnapshotManifest,
   SnapshotStorePort,
 } from "../../application/echohoard.js";
-import type { ImportJobId } from "../../application/echohoard.js";
+import type { ImportJobId, LeaseId } from "../../application/echohoard.js";
 import type { JobWorkPort } from "../../application/intake.js";
 
 /** Disposable plaintext workspace. Job ids are treated as opaque path
@@ -16,8 +26,11 @@ import type { JobWorkPort } from "../../application/intake.js";
 export class LocalJobWork implements JobWorkPort {
   public constructor(private readonly root: string) {}
 
-  public async prepare(jobId: ImportJobId): Promise<{ path: string; restarted: boolean }> {
-    const path = this.pathFor(jobId);
+  public async prepare(
+    jobId: ImportJobId,
+    lease: LeaseId,
+  ): Promise<{ path: string; restarted: boolean }> {
+    const path = this.pathFor(jobId, lease);
     let restarted = false;
     try {
       await stat(path);
@@ -26,22 +39,38 @@ export class LocalJobWork implements JobWorkPort {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    await mkdir(join(this.root, this.validateComponent(jobId)), { recursive: true });
     await mkdir(path, { recursive: false });
     return { path, restarted };
   }
 
-  public async cleanup(jobId: ImportJobId, path: string): Promise<void> {
-    if (path !== this.pathFor(jobId)) throw new Error("work path is not owned by job");
+  public async cleanup(jobId: ImportJobId, lease: LeaseId, path: string): Promise<void> {
+    if (path !== this.pathFor(jobId, lease)) throw new Error("work path is not owned by lease");
     await rm(path, { recursive: true, force: true });
+    await this.removeEmptyJobDirectory(jobId);
   }
 
-  public async cleanupStale(jobId: ImportJobId): Promise<void> {
-    await rm(this.pathFor(jobId), { recursive: true, force: true });
+  public async cleanupStale(jobId: ImportJobId, lease: LeaseId): Promise<void> {
+    await rm(this.pathFor(jobId, lease), { recursive: true, force: true });
+    await this.removeEmptyJobDirectory(jobId);
   }
 
-  private pathFor(jobId: ImportJobId): string {
-    if (!/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error("invalid job identifier");
-    return join(this.root, jobId);
+  private pathFor(jobId: ImportJobId, lease: LeaseId): string {
+    return join(this.root, this.validateComponent(jobId), this.validateComponent(lease));
+  }
+
+  private validateComponent(value: string): string {
+    if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error("invalid work identifier");
+    return value;
+  }
+
+  private async removeEmptyJobDirectory(jobId: ImportJobId): Promise<void> {
+    try {
+      await rmdir(join(this.root, this.validateComponent(jobId)));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTEMPTY") throw error;
+    }
   }
 }
 

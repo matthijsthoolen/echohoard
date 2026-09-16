@@ -32,7 +32,6 @@ describe("production decrypt queue composition", () => {
       markFinalizing: async () => {},
       markCompleted: async () => {},
       markFailed: async () => {},
-      requeue: async () => {},
     };
     const runner = fakeRunner();
     const queue = new DecryptQueueLoop(jobs, runner, 60_000, 4);
@@ -59,7 +58,6 @@ describe("production decrypt queue composition", () => {
       markFinalizing: async () => {},
       markCompleted: async () => {},
       markFailed: async () => {},
-      requeue: async () => {},
     };
     const runner = fakeRunner();
     const queue = new DecryptQueueLoop(jobs, runner, 60_000, 4, (message) => errors.push(message));

@@ -84,14 +84,11 @@ class MemoryJobs implements JobStorePort {
   }
   public async markFailed(
     _id: string,
+    _lease: LeaseId,
     failure: { class: JobFailureClass; retryable: boolean },
   ): Promise<void> {
     this.events.push(`${failure.retryable ? "retryable" : "terminal"}:${failure.class}`);
     this.job = { ...this.job, status: "failed" };
-  }
-  public async requeue(): Promise<void> {
-    this.events.push("requeued");
-    this.job = { ...this.job, status: "queued", lease: undefined };
   }
 }
 
@@ -109,8 +106,8 @@ class MemoryLease implements LeasePort {
   public async release(): Promise<void> {
     this.available = true;
   }
-  public async recoverExpired(): Promise<readonly string[]> {
-    const result = this.stale;
+  public async recoverExpired(): Promise<readonly { jobId: string; leaseId: LeaseId }[]> {
+    const result = this.stale.map((jobId) => ({ jobId, leaseId: "lease-1" }));
     this.stale = [];
     return result;
   }
@@ -262,7 +259,7 @@ describe("complete intake and decryption lifecycle", () => {
     expect(fixture.jobs.job.status).toBe("completed");
   });
 
-  it("recovers stale work before requeue and never completes unsupported output", async () => {
+  it("recovers stale work after the database atomically requeues its lease", async () => {
     const fixture = await scenario("unsupported");
     await ingest(fixture);
     await fixture.runner.run("job-1");
@@ -270,6 +267,6 @@ describe("complete intake and decryption lifecycle", () => {
     expect(await readdir(fixture.work)).toEqual([]);
     fixture.lease.stale = ["job-1"];
     await expect(fixture.runner.recoverStaleJobs()).resolves.toEqual(["job-1"]);
-    expect(fixture.jobs.events.at(-1)).toBe("requeued");
+    expect(fixture.jobs.events).not.toContain("requeued");
   });
 });

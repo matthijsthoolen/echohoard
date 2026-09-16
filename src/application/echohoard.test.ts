@@ -46,6 +46,20 @@ describe("snapshot intake transitions", () => {
     const j = { id: "j", snapshotId: "s", status: "leased" as const, lease: "l", updatedAt: date };
     expect(transitionImportJob(j, "queued").lease).toBeUndefined();
   });
+
+  it("keeps the terminal transition in the lease-owned state machine", () => {
+    const j = {
+      id: "j",
+      snapshotId: "s",
+      status: "finalizing" as const,
+      lease: "l",
+      updatedAt: date,
+    };
+    expect(transitionImportJob(j, "completed")).toMatchObject({
+      status: "completed",
+      lease: "l",
+    });
+  });
 });
 
 describe("stable inbox batch claiming", () => {
