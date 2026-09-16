@@ -25,7 +25,15 @@ export interface Delivery {
 
 export type DeliveryStatus = "discovered" | "settling" | "claimed" | "completed" | "failed";
 export type SnapshotStatus = "pending" | "ready" | "failed";
-export type ImportJobStatus = "queued" | "leased" | "decrypting" | "completed" | "failed";
+export type ImportJobStatus =
+  | "queued"
+  | "leased"
+  | "decrypting"
+  | "adapting"
+  | "importing"
+  | "finalizing"
+  | "completed"
+  | "failed";
 
 export interface Snapshot {
   readonly id: SnapshotId;
@@ -38,12 +46,16 @@ export interface Snapshot {
 
 export interface ImportJob {
   readonly id: ImportJobId;
+  readonly archiveId?: string;
+  readonly ownedAccountId?: string;
+  readonly sourceId?: string;
   readonly snapshotId?: SnapshotId;
   readonly status: ImportJobStatus;
   readonly lease?: LeaseId;
   /** Whether a failed job may be retried. Undefined is retained for
    * compatibility with jobs created before retry metadata was persisted. */
   readonly retryable?: boolean;
+  readonly observedAt?: Date;
   readonly updatedAt: Date;
 }
 
@@ -73,7 +85,10 @@ const snapshotTransitions: Record<SnapshotStatus, readonly SnapshotStatus[]> = {
 const jobTransitions: Record<ImportJobStatus, readonly ImportJobStatus[]> = {
   queued: ["leased", "failed"],
   leased: ["decrypting", "queued", "failed"],
-  decrypting: ["completed", "failed"],
+  decrypting: ["adapting", "completed", "failed"],
+  adapting: ["importing", "failed"],
+  importing: ["finalizing", "failed"],
+  finalizing: ["completed", "failed"],
   completed: [],
   failed: ["queued", "leased"],
 };

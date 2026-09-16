@@ -16,6 +16,7 @@ import {
   whatsappConversationKey,
   whatsappIdentityKey,
   whatsappRevisionKey,
+  whatsappMessageKey,
   WHATSAPP_SOURCE_NAMESPACE,
 } from "./identity.js";
 import type { WhatsAppSqliteFixture } from "./fixtures.js";

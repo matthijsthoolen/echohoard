@@ -526,14 +526,21 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             observedAt: input.observedAt,
           });
       }
-      await tx.snapshot.update({
-        where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
-        data: { lifecycle: "completed", completedAt: input.observedAt },
-      });
-      await tx.importJob.update({
-        where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
-        data: { status: "completed", finishedAt: input.observedAt },
-      });
+      try {
+        await tx.snapshot.update({
+          where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
+          data: { lifecycle: "completed", completedAt: input.observedAt },
+        });
+        await tx.importJob.update({
+          where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
+          data: { status: "completed", finishedAt: input.observedAt, retryable: false },
+        });
+      } catch {
+        throw Object.assign(new Error("snapshot import finalization failed"), {
+          kind: "internal",
+          phase: "finalization",
+        });
+      }
       if (input.liveReceipt)
         await tx.liveEventInbox.updateMany({
           where: {

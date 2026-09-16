@@ -66,6 +66,18 @@ class MemoryJobs implements JobStorePort {
     this.events.push("decrypting");
     this.job = { ...this.job, status: "decrypting" };
   }
+  public async markAdapting(): Promise<void> {
+    this.events.push("adapting");
+    this.job = { ...this.job, status: "adapting" };
+  }
+  public async markImporting(): Promise<void> {
+    this.events.push("importing");
+    this.job = { ...this.job, status: "importing" };
+  }
+  public async markFinalizing(): Promise<void> {
+    this.events.push("finalizing");
+    this.job = { ...this.job, status: "finalizing" };
+  }
   public async markCompleted(): Promise<void> {
     this.events.push("completed");
     this.job = { ...this.job, status: "completed" };

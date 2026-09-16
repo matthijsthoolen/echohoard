@@ -5,3 +5,4 @@ export * from "./fixtures.js";
 export * from "./normalize.js";
 export * from "./message-identity.js";
 export * from "./messages.js";
+export * from "./sqlite-adapter.js";

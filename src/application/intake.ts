@@ -6,6 +6,7 @@ import type {
   LeaseId,
   LeasePort,
 } from "./echohoard.js";
+import type { ImportRecord, TextSnapshotImportInput, TextSnapshotImporter } from "./text-import.js";
 
 export type JobFailureClass =
   | "io"
@@ -21,6 +22,9 @@ export interface JobStorePort {
   listEligible?(limit: number): Promise<readonly ImportJobId[]>;
   markLeased(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void>;
   markDecrypting(jobId: ImportJobId, updatedAt: Date): Promise<void>;
+  markAdapting(jobId: ImportJobId, updatedAt: Date): Promise<void>;
+  markImporting(jobId: ImportJobId, adapterVersion: string, updatedAt: Date): Promise<void>;
+  markFinalizing(jobId: ImportJobId, updatedAt: Date): Promise<void>;
   markCompleted(jobId: ImportJobId, updatedAt: Date): Promise<void>;
   markFailed(
     jobId: ImportJobId,
@@ -46,6 +50,17 @@ export interface SnapshotPathPort {
   path(snapshotId: string): Promise<string>;
 }
 
+export interface SnapshotAdapterPort {
+  adapt(input: {
+    readonly decryptedPath: string;
+    readonly snapshotId: string;
+    readonly accountScope: string;
+  }): Promise<{
+    readonly adapterVersion: string;
+    readonly records: readonly ImportRecord[];
+  }>;
+}
+
 export interface DecryptJobRunnerOptions {
   readonly leaseDurationMilliseconds: number;
   readonly heartbeatMilliseconds: number;
@@ -62,6 +77,8 @@ export class DecryptJobRunner {
     private readonly decrypt: DecryptPort,
     private readonly clock: ClockPort,
     private readonly options: DecryptJobRunnerOptions,
+    private readonly adapter?: SnapshotAdapterPort,
+    private readonly importer?: TextSnapshotImporter,
   ) {}
 
   /** Requeues only jobs whose database lease has expired, cleaning their work
@@ -83,6 +100,7 @@ export class DecryptJobRunner {
     const lease = await this.leases.acquire(jobId, this.options.owner, expiresAt);
     if (!lease) return false;
     let workPath = "";
+    let phase: "decryption" | "adaptation" | "import" | "finalization" = "decryption";
     const heartbeat = setInterval(() => {
       void this.leases.renew(lease, this.expiry());
     }, this.options.heartbeatMilliseconds);
@@ -92,15 +110,43 @@ export class DecryptJobRunner {
       workPath = prepared.path;
       await this.jobs.markDecrypting(jobId, this.clock.now());
       if (!job.snapshotId) throw new Error("decryption job has no snapshot");
-      await this.decrypt.decrypt(
+      const decrypted = await this.decrypt.decrypt(
         await this.snapshots.path(job.snapshotId),
         workPath,
         this.options.decryptTimeoutMilliseconds,
       );
-      await this.jobs.markCompleted(jobId, this.clock.now());
+      if (!this.adapter || !this.importer) {
+        if (this.adapter || this.importer) throw new Error("worker import pipeline is incomplete");
+        await this.jobs.markCompleted(jobId, this.clock.now());
+        return true;
+      }
+      phase = "adaptation";
+      await this.jobs.markAdapting(jobId, this.clock.now());
+      if (!job.ownedAccountId) throw new Error("import job has no owned account");
+      const adapted = await this.adapter.adapt({
+        decryptedPath: decrypted.outputPath,
+        snapshotId: job.snapshotId,
+        accountScope: job.ownedAccountId,
+      });
+      phase = "import";
+      await this.jobs.markImporting(jobId, adapted.adapterVersion, this.clock.now());
+      phase = "finalization";
+      await this.jobs.markFinalizing(jobId, this.clock.now());
+      phase = "import";
+      if (!job.archiveId || !job.sourceId)
+        throw new Error("import job has incomplete archive scope");
+      const input: TextSnapshotImportInput = {
+        archiveId: job.archiveId,
+        ownedAccountId: job.ownedAccountId,
+        snapshotId: job.snapshotId,
+        importJobId: job.id,
+        observedAt: job.observedAt ?? this.clock.now(),
+        records: adapted.records,
+      };
+      await this.importer.import(input);
       return true;
     } catch (error) {
-      const failure = toFailure(error);
+      const failure = toFailure(error, phase);
       await this.jobs.markFailed(jobId, failure, this.clock.now());
       return false;
     } finally {
@@ -115,7 +161,10 @@ export class DecryptJobRunner {
   }
 }
 
-function toFailure(error: unknown): {
+function toFailure(
+  error: unknown,
+  phase: "decryption" | "adaptation" | "import" | "finalization",
+): {
   readonly class: JobFailureClass;
   readonly retryable: boolean;
   readonly diagnostic: string;
@@ -124,6 +173,16 @@ function toFailure(error: unknown): {
     typeof error === "object" && error !== null && "kind" in error && typeof error.kind === "string"
       ? error.kind
       : "internal";
+  const reportedPhase =
+    typeof error === "object" &&
+    error !== null &&
+    "phase" in error &&
+    (error.phase === "decryption" ||
+      error.phase === "adaptation" ||
+      error.phase === "import" ||
+      error.phase === "finalization")
+      ? error.phase
+      : phase;
   const valid: JobFailureClass[] = [
     "io",
     "invalid-key",
@@ -140,6 +199,6 @@ function toFailure(error: unknown): {
   return {
     class: failureClass,
     retryable,
-    diagnostic: `decryption ${retryable ? "retryable" : "terminal"} failure (${failureClass})`,
+    diagnostic: `${reportedPhase} ${retryable ? "retryable" : "terminal"} failure (${failureClass})`,
   };
 }

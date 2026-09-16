@@ -3,7 +3,16 @@ import { randomUUID } from "node:crypto";
 import type { ImportJob, ImportJobId, LeaseId, LeasePort } from "../../application/echohoard.js";
 import type { JobFailureClass, JobStorePort } from "../../application/intake.js";
 
-const JOB_STATUSES = ["queued", "leased", "decrypting", "completed", "failed"] as const;
+const JOB_STATUSES = [
+  "queued",
+  "leased",
+  "decrypting",
+  "adapting",
+  "importing",
+  "finalizing",
+  "completed",
+  "failed",
+] as const;
 type PersistedJobStatus = (typeof JOB_STATUSES)[number];
 
 /** PostgreSQL-backed queue state. The lease columns are deliberately kept on
@@ -16,11 +25,15 @@ export class PrismaDecryptJobStore implements JobStorePort {
       where: { id: jobId },
       select: {
         id: true,
+        archiveId: true,
+        ownedAccountId: true,
+        sourceId: true,
         snapshotId: true,
         status: true,
         leaseId: true,
         retryable: true,
         updatedAt: true,
+        snapshot: { select: { capturedAt: true } },
       },
     });
     return row ? toImportJob(row) : null;
@@ -60,6 +73,34 @@ export class PrismaDecryptJobStore implements JobStorePort {
     if (result.count !== 1) throw new Error("job lease state changed during decryption");
   }
 
+  public async markAdapting(jobId: ImportJobId, updatedAt: Date): Promise<void> {
+    const result = await this.prisma.importJob.updateMany({
+      where: { id: jobId, status: "decrypting" },
+      data: { status: "adapting", updatedAt },
+    });
+    if (result.count !== 1) throw new Error("job state changed before adaptation");
+  }
+
+  public async markImporting(
+    jobId: ImportJobId,
+    adapterVersion: string,
+    updatedAt: Date,
+  ): Promise<void> {
+    const result = await this.prisma.importJob.updateMany({
+      where: { id: jobId, status: "adapting" },
+      data: { status: "importing", adapterVersion, updatedAt },
+    });
+    if (result.count !== 1) throw new Error("job state changed before import");
+  }
+
+  public async markFinalizing(jobId: ImportJobId, updatedAt: Date): Promise<void> {
+    const result = await this.prisma.importJob.updateMany({
+      where: { id: jobId, status: "importing" },
+      data: { status: "finalizing", updatedAt },
+    });
+    if (result.count !== 1) throw new Error("job state changed before finalization");
+  }
+
   public async markCompleted(jobId: ImportJobId, updatedAt: Date): Promise<void> {
     const result = await this.prisma.importJob.updateMany({
       where: { id: jobId, status: "decrypting" },
@@ -85,7 +126,10 @@ export class PrismaDecryptJobStore implements JobStorePort {
     updatedAt: Date,
   ): Promise<void> {
     const result = await this.prisma.importJob.updateMany({
-      where: { id: jobId, status: { in: ["leased", "decrypting"] } },
+      where: {
+        id: jobId,
+        status: { in: ["leased", "decrypting", "adapting", "importing", "finalizing"] },
+      },
       data: {
         status: "failed",
         errorClass: failure.class,
@@ -102,7 +146,10 @@ export class PrismaDecryptJobStore implements JobStorePort {
 
   public async requeue(jobId: ImportJobId, updatedAt: Date): Promise<void> {
     await this.prisma.importJob.updateMany({
-      where: { id: jobId, status: { in: ["leased", "decrypting"] } },
+      where: {
+        id: jobId,
+        status: { in: ["leased", "decrypting", "adapting", "importing", "finalizing"] },
+      },
       data: {
         status: "queued",
         updatedAt,
@@ -176,20 +223,28 @@ export class PrismaImportJobLeases implements LeasePort {
 
 function toImportJob(row: {
   id: string;
+  archiveId: string;
+  ownedAccountId: string;
+  sourceId: string;
   snapshotId: string | null;
   status: string;
   leaseId: string | null;
   retryable: boolean | null;
   updatedAt: Date;
+  snapshot: { capturedAt: Date } | null;
 }): ImportJob | null {
   if (!JOB_STATUSES.includes(row.status as PersistedJobStatus)) return null;
   const status = row.status as ImportJob["status"];
   return {
     id: row.id,
+    archiveId: row.archiveId,
+    ownedAccountId: row.ownedAccountId,
+    sourceId: row.sourceId,
     ...(row.snapshotId ? { snapshotId: row.snapshotId } : {}),
     status,
     ...(row.leaseId ? { lease: row.leaseId } : {}),
     ...(row.retryable !== null ? { retryable: row.retryable } : {}),
+    ...(row.snapshot ? { observedAt: row.snapshot.capturedAt } : {}),
     updatedAt: row.updatedAt,
   };
 }

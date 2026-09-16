@@ -10,10 +10,12 @@ import {
 import { PrismaLiveEventNormalizer } from "../infrastructure/db/prisma-persistence.js";
 import { PrismaSnapshotPath } from "../infrastructure/db/worker-snapshot-path.js";
 import { LocalJobWork } from "../infrastructure/files/index.js";
+import { PrismaTextSnapshotImporter } from "../infrastructure/db/text-import.js";
 import type { ClockPort } from "../application/echohoard.js";
 import type { JobStorePort } from "../application/intake.js";
 import { parseWacliWebhookEvent, type WacliWebhookEvent } from "../adapters/wacli/contract.js";
 import { normalizeWacliEvent } from "../adapters/wacli/normalize.js";
+import { WhatsAppSnapshotAdapter } from "../adapters/whatsapp/sqlite-adapter.js";
 
 export interface WorkerErrorSink {
   (message: string): void;
@@ -191,6 +193,8 @@ export function createProductionWorker(
       heartbeatMilliseconds: settings.ECHOHOARD_WORKER_HEARTBEAT_MS,
       decryptTimeoutMilliseconds: settings.ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS,
     },
+    new WhatsAppSnapshotAdapter(),
+    new PrismaTextSnapshotImporter(prisma),
   );
   const queue = new DecryptQueueLoop(
     jobs,
