@@ -16,7 +16,10 @@ import type { ClockPort } from "../application/echohoard.js";
 import type { JobStorePort } from "../application/intake.js";
 import { parseWacliWebhookEvent, type WacliWebhookEvent } from "../adapters/wacli/contract.js";
 import { normalizeWacliEvent } from "../adapters/wacli/normalize.js";
-import { WhatsAppSnapshotAdapter } from "../adapters/whatsapp/sqlite-adapter.js";
+import {
+  PythonSqliteDatabaseReader,
+  WhatsAppSnapshotAdapter,
+} from "../adapters/whatsapp/sqlite-adapter.js";
 
 export interface WorkerErrorSink {
   (message: string): void;
@@ -211,7 +214,14 @@ export function createProductionWorker(
       heartbeatMilliseconds: settings.ECHOHOARD_WORKER_HEARTBEAT_MS,
       decryptTimeoutMilliseconds: settings.ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS,
     },
-    new WhatsAppSnapshotAdapter(),
+    new WhatsAppSnapshotAdapter(
+      new PythonSqliteDatabaseReader("python3", {
+        timeoutMs: settings.ECHOHOARD_WORKER_SQLITE_TIMEOUT_MS,
+        maxRowBytes: settings.ECHOHOARD_WORKER_SQLITE_MAX_ROW_BYTES,
+        maxRows: settings.ECHOHOARD_WORKER_SQLITE_MAX_ROWS,
+        maxOutputBytes: settings.ECHOHOARD_WORKER_SQLITE_MAX_OUTPUT_BYTES,
+      }),
+    ),
     new PrismaTextSnapshotImporter(prisma),
   );
   const queue = new DecryptQueueLoop(

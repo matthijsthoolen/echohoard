@@ -7,7 +7,11 @@ import type {
   LeaseId,
   LeasePort,
 } from "./echohoard.js";
-import type { ImportRecord, TextSnapshotImportInput, TextSnapshotImporter } from "./text-import.js";
+import type {
+  ImportRecordSource,
+  TextSnapshotImportInput,
+  TextSnapshotImporter,
+} from "./text-import.js";
 
 export type JobFailureClass =
   | "io"
@@ -15,6 +19,7 @@ export type JobFailureClass =
   | "corrupt-source"
   | "unsupported-format"
   | "timeout"
+  | "resource-limit"
   | "internal";
 
 export interface JobStorePort {
@@ -66,7 +71,7 @@ export interface SnapshotAdapterPort {
     readonly accountScope: string;
   }): Promise<{
     readonly adapterVersion: string;
-    readonly records: readonly ImportRecord[];
+    readonly records: ImportRecordSource;
   }>;
 }
 
@@ -274,6 +279,7 @@ function toFailure(
     "corrupt-source",
     "unsupported-format",
     "timeout",
+    "resource-limit",
     "internal",
   ];
   const failureClass = valid.includes(kind as JobFailureClass)

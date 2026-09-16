@@ -23,6 +23,10 @@ import type { WhatsAppSqliteFixture } from "./fixtures.js";
 
 type Row = Readonly<Record<string, unknown>>;
 
+export interface WhatsAppMessageRowSource {
+  streamRows(table: string, columns: readonly string[]): AsyncIterable<Row>;
+}
+
 export interface MessageMappingOptions {
   /** Stable provenance supplied by the importer; fixtures default to this value. */
   readonly snapshotId?: string;
@@ -160,6 +164,172 @@ export function normalizeWhatsAppMessages(
 
 /** Compatibility name for callers describing this operation as text history. */
 export const normalizeWhatsAppTextHistory = normalizeWhatsAppMessages;
+
+/**
+ * Normalize a source through repeatable, bounded passes. The first pass keeps
+ * only the small row-reference/identity index needed for replies and
+ * reactions; message bodies are emitted from the second pass in batches.
+ * SQLite extraction is therefore never represented as one large JS object.
+ */
+export async function* streamNormalizedWhatsAppMessages(
+  source: WhatsAppMessageRowSource,
+  version: WhatsAppAdapterVersion,
+  metadataRows: Pick<WhatsAppSqliteFixture, "rows">,
+  columns: ReadonlyMap<string, readonly string[]>,
+  options: MessageMappingOptions & { readonly batchSize?: number } = {},
+): AsyncGenerator<readonly NormalizedRecord[]> {
+  const snapshotId = options.snapshotId ?? "fixture";
+  const accountScope = options.accountScope ?? "default";
+  const messageTable = version === "android-current.v1" ? "message" : "messages";
+  const editTable = version === "android-current.v1" ? "message_edit" : "message_edits";
+  const registry = new MessageIdentityRegistry();
+  const byRow = new Map<number, PreparedMessage>();
+  const jidByRow = new Map<number, string>();
+  const chatByRow = new Map<number, string>();
+  const batchSize = boundedBatchSize(options.batchSize);
+
+  if (version === "android-current.v1") {
+    for (const row of rows(metadataRows, "jid")) {
+      const id = number(row._id);
+      const raw = stringValue(row.raw_string);
+      if (id !== undefined && raw) jidByRow.set(id, raw);
+    }
+    for (const row of rows(metadataRows, "chat")) {
+      const id = number(row._id);
+      const jid = jidByRow.get(number(row.jid_row_id) ?? -1);
+      if (id !== undefined && jid) chatByRow.set(id, jid);
+    }
+  }
+
+  for await (const row of source.streamRows(messageTable, columns.get(messageTable) ?? [])) {
+    const prepared = prepareMessage(version, row, chatByRow, jidByRow, accountScope, registry);
+    byRow.set(number(row._id) ?? -1, prepared);
+  }
+
+  let messageBatch: NormalizedRecord[] = [];
+  for await (const row of source.streamRows(messageTable, columns.get(messageTable) ?? [])) {
+    const prepared = byRow.get(number(row._id) ?? -1);
+    if (!prepared) continue;
+    messageBatch.push(
+      messageRecord(row, prepared, byRow, version, chatByRow, jidByRow, accountScope),
+    );
+    if (messageBatch.length >= batchSize) {
+      yield messageBatch;
+      messageBatch = [];
+    }
+  }
+  if (messageBatch.length > 0) yield messageBatch;
+
+  let revisionBatch: NormalizedRecord[] = [];
+  if (columns.has(editTable)) {
+    for await (const row of source.streamRows(editTable, columns.get(editTable)!)) {
+      const message = byRow.get(number(row.message_id) ?? -1);
+      const ordinal = number(row.edit_version);
+      if (!message || ordinal === undefined || ordinal < 1) continue;
+      const body = bodyFor(row.text_data ?? row.data);
+      revisionBatch.push({
+        kind: "revision",
+        stableKey: whatsappRevisionKey(message.stableKey, ordinal),
+        messageKey: message.stableKey,
+        revisionOrdinal: ordinal,
+        ...(body.value !== undefined ? { body: body.value } : {}),
+        bodyState: body.state,
+        firstSeenSnapshotId: snapshotId,
+      });
+      if (revisionBatch.length >= batchSize) {
+        yield revisionBatch;
+        revisionBatch = [];
+      }
+    }
+  }
+  if (revisionBatch.length > 0) yield revisionBatch;
+}
+
+interface PreparedMessage {
+  readonly stableKey: string;
+  readonly messageKind: NormalizedMessageKind;
+  readonly collision: boolean;
+}
+
+function prepareMessage(
+  version: WhatsAppAdapterVersion,
+  row: Row,
+  chatByRow: ReadonlyMap<number, string>,
+  jidByRow: ReadonlyMap<number, string>,
+  accountScope: string,
+  registry: MessageIdentityRegistry,
+): PreparedMessage {
+  const conversation = conversationFor(version, row, chatByRow, accountScope);
+  const sender = senderFor(version, row, jidByRow, accountScope);
+  const timestamp = timestampFor(row.timestamp);
+  const nativeCode = number(row.message_type ?? row.media_wa_type);
+  const messageKind = kindFor(nativeCode);
+  const registration = registry.register({
+    adapterVersion: version,
+    accountScope,
+    conversationKey: conversation,
+    sourceConversationKey: conversationSourceFor(row, chatByRow),
+    ...(sender ? { senderIdentityKey: sender } : {}),
+    timestamp,
+    direction: directionFor(version, row),
+    messageKind,
+    ...sourceIdFor(version, row),
+  });
+  return {
+    stableKey:
+      registration.kind === "accepted"
+        ? registration.identity.stableKey
+        : `whatsapp:message:collision:${whatsappMessageKey(accountScope, conversation, JSON.stringify([timestamp, conversation]))}`,
+    messageKind,
+    collision: registration.kind === "collision",
+  };
+}
+
+function messageRecord(
+  row: Row,
+  prepared: PreparedMessage,
+  byRow: ReadonlyMap<number, PreparedMessage>,
+  version: WhatsAppAdapterVersion,
+  chatByRow: ReadonlyMap<number, string>,
+  jidByRow: ReadonlyMap<number, string>,
+  accountScope: string,
+): NormalizedMessageRecord {
+  const sender = senderFor(version, row, jidByRow, accountScope);
+  const timestamp = timestampFor(row.timestamp);
+  const nativeCode = number(row.message_type ?? row.media_wa_type);
+  const body = bodyFor(row.text_data ?? row.data);
+  const quoted = number(row.quoted_message_id ?? row.quoted_row_id);
+  const target =
+    number(row.reaction_target_id) === undefined
+      ? undefined
+      : byRow.get(number(row.reaction_target_id)!);
+  const replyTarget = quoted === undefined ? undefined : byRow.get(quoted);
+  return {
+    kind: "message",
+    stableKey: prepared.stableKey,
+    source: source(sourceIdFor(version, row).sourceMessageId ?? "unknown"),
+    conversationKey: conversationFor(version, row, chatByRow, accountScope),
+    ...(sender ? { senderIdentityKey: sender } : {}),
+    timestamp,
+    direction: directionFor(version, row),
+    messageKind: prepared.collision ? "unsupported" : prepared.messageKind,
+    ...(body.value !== undefined ? { body: body.value } : {}),
+    bodyState: body.state,
+    ...metadataFor(row),
+    ...(replyTarget ? { replyToKey: replyTarget.stableKey } : {}),
+    ...(prepared.messageKind === "unsupported" && nativeCode !== undefined
+      ? { unsupportedTypeCode: nativeCode }
+      : {}),
+    ...(target
+      ? { metadata: { ...metadataFor(row).metadata, reactsToKey: target.stableKey } }
+      : {}),
+    ...sourceDeletionFor(row),
+  };
+}
+
+function boundedBatchSize(value: number | undefined): number {
+  return Math.max(1, Math.min(1_000, Math.trunc(value ?? 500)));
+}
 
 function rows(fixture: Pick<WhatsAppSqliteFixture, "rows">, table: string): readonly Row[] {
   return (fixture.rows[table] ?? []) as readonly Row[];

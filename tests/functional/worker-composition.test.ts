@@ -279,6 +279,33 @@ describe("PostgreSQL worker job composition", () => {
     expect(await readdir(workRoot)).toEqual([]);
   });
 
+  it("imports replayable normalized batches without collecting the source", async () => {
+    const seeded = await seedPipelineJob("stream");
+    const records = pipelineRecords(seeded.snapshotId);
+    const adapter: SnapshotAdapterPort = {
+      adapt: async () => ({
+        adapterVersion: "synthetic-whatsapp.v1",
+        records: replayableRecordBatches(records),
+      }),
+    };
+    const runner = createPipelineRunner(
+      seeded.jobId,
+      adapter,
+      new PrismaTextSnapshotImporter(prisma),
+    );
+
+    await expect(runner.run(seeded.jobId)).resolves.toBe(true);
+    await expect(
+      prisma.importJob.findUnique({ where: { id: seeded.jobId } }),
+    ).resolves.toMatchObject({
+      status: "completed",
+    });
+    expect(
+      await prisma.message.count({ where: { archiveId, stableKey: "worker-pipeline-message" } }),
+    ).toBe(1);
+    expect(await readdir(workRoot)).toEqual([]);
+  });
+
   it("rolls back an import when its lease expires while finalization is in flight", async () => {
     const seeded = await seedPipelineJob("lease-expiry");
     const leaseId = randomUUID();
@@ -599,6 +626,17 @@ function pipelineRecords(snapshotId: string): readonly ImportRecord[] {
       firstSeenSnapshotId: snapshotId,
     },
   ];
+}
+
+function replayableRecordBatches(
+  records: readonly ImportRecord[],
+): AsyncIterable<readonly ImportRecord[]> {
+  return {
+    [Symbol.asyncIterator]: async function* () {
+      for (let offset = 0; offset < records.length; offset += 2)
+        yield records.slice(offset, offset + 2);
+    },
+  };
 }
 
 function leaseRegressionRecords(label: string): readonly ImportRecord[] {

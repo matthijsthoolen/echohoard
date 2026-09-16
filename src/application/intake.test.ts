@@ -106,6 +106,43 @@ describe("decrypt job recovery", () => {
     expect(events.join(" ")).not.toContain("sentinel");
   });
 
+  it("maps configured extraction limits to terminal failures", async () => {
+    const fixture = setup();
+    fixture.setJob({
+      ...job,
+      archiveId: "archive",
+      ownedAccountId: "account",
+      sourceId: "source",
+    });
+    const runner = new DecryptJobRunner(
+      fixture.jobs,
+      {
+        acquire: async () => "lease",
+        renew: async () => true,
+        release: async () => fixture.events.push("release"),
+        recoverExpired: async () => [],
+      },
+      fixture.work,
+      fixture.snapshotPath,
+      { decrypt: async () => ({ outputPath: "/data/work/job/db" }) },
+      { now: () => now, sleep: async () => {} },
+      {
+        owner: "worker-a",
+        leaseDurationMilliseconds: 10_000,
+        heartbeatMilliseconds: 1_000,
+        decryptTimeoutMilliseconds: 5_000,
+      },
+      {
+        adapt: async () => {
+          throw Object.assign(new Error("row limit"), { kind: "resource-limit" });
+        },
+      },
+      { import: async () => ({ imported: 0 }) },
+    );
+    await expect(runner.run("job")).resolves.toBe(false);
+    expect(fixture.events).toContain("terminal:resource-limit");
+  });
+
   it("requeues expired leases only after cleaning stale work", async () => {
     const fixture = setup();
     const leases = {

@@ -6,7 +6,6 @@ import type { ImportEligibility } from "../../application/import-exclusion";
 import type {
   ImportAttachmentAvailability,
   ImportAttachmentRecord,
-  ImportMessageRecord,
   ImportRecord,
   TextSnapshotImportInput,
   TextSnapshotImporter,
@@ -16,6 +15,32 @@ type Tx = Prisma.TransactionClient;
 const uuid = () => randomUUID();
 const json = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
 
+async function forEachRecord(
+  source: TextSnapshotImportInput["records"],
+  callback: (record: ImportRecord) => Promise<void>,
+): Promise<number> {
+  let count = 0;
+  if (!isAsyncRecordSource(source)) {
+    for (const record of source as readonly ImportRecord[]) {
+      count += 1;
+      await callback(record);
+    }
+    return count;
+  }
+  for await (const batch of source)
+    for (const record of batch) {
+      count += 1;
+      await callback(record);
+    }
+  return count;
+}
+
+function isAsyncRecordSource(
+  source: TextSnapshotImportInput["records"],
+): source is AsyncIterable<readonly ImportRecord[]> {
+  return typeof source === "object" && Symbol.asyncIterator in source;
+}
+
 /** Writes adapter-neutral records and only makes a snapshot visible after all
  * rows have succeeded. Existing rows are updated with last-seen provenance;
  * retries therefore converge on the same logical result. */
@@ -23,12 +48,16 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
   public constructor(private readonly prisma: PrismaClient) {}
 
   public async import(input: TextSnapshotImportInput): Promise<{ readonly imported: number }> {
+    const records = input.records;
     return this.prisma.$transaction(async (tx) => {
       const people = new Map<string, string>();
       const identities = new Map<string, string>();
       const conversations = new Map<string, string>();
       const sourceConversations = new Map<string, string>();
       const messages = new Map<string, string>();
+      const conversationSources = new Map<string, { namespace: string; key: string }>();
+      const messageConversations = new Map<string, string>();
+      let importedCount = 0;
       const accounts = await tx.ownedAccount.findMany({
         where: { archiveId: input.archiveId },
         select: { id: true },
@@ -93,7 +122,8 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         throw new Error("Text snapshot import scope does not match its import job");
       const jobEligibility: ImportEligibility =
         job.eligibility === "excluded" ? "excluded" : "eligible";
-      for (const record of input.records) {
+      await forEachRecord(records, async (record) => {
+        importedCount += 1;
         if (record.kind === "person") {
           const existing = await tx.person.upsert({
             where: {
@@ -111,11 +141,11 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           });
           people.set(record.stableKey, existing.id);
         }
-      }
-      for (const record of input.records) {
+      });
+      await forEachRecord(records, async (record) => {
         if (record.kind === "identity") {
           const personId = record.personKey ? people.get(record.personKey) : undefined;
-          if (!personId) continue;
+          if (!personId) return;
           const rawIdentity = await tx.identity.findUnique({
             where: {
               archiveId_kind_value: {
@@ -171,6 +201,10 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         if (record.kind === "conversation") {
           const sourceNamespace = record.source?.namespace ?? "normalized-import";
           const sourceConversationKey = record.source?.value ?? record.stableKey;
+          conversationSources.set(record.stableKey, {
+            namespace: sourceNamespace,
+            key: sourceConversationKey,
+          });
           const stableKey = await conversationStableKey(
             tx,
             input.archiveId,
@@ -237,8 +271,8 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             observedAt: input.observedAt,
           });
         }
-      }
-      for (const record of input.records) {
+      });
+      await forEachRecord(records, async (record) => {
         if (record.kind === "participant") {
           const conversationId = conversations.get(record.conversationKey);
           const sourceConversationId = sourceConversations.get(record.conversationKey);
@@ -247,7 +281,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             identities.get(record.identityKey),
             tx,
           );
-          if (!conversationId || !sourceConversationId || !personId) continue;
+          if (!conversationId || !sourceConversationId || !personId) return;
           await tx.conversationParticipant.upsert({
             where: {
               archiveId_conversationId_personId: {
@@ -267,20 +301,18 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             update: { role: record.role },
           });
         }
-      }
-      for (const record of input.records) {
-        if (record.kind !== "message") continue;
+      });
+      await forEachRecord(records, async (record) => {
+        if (record.kind !== "message") return;
         const conversationId = conversations.get(record.conversationKey);
         const sourceConversationId = sourceConversations.get(record.conversationKey);
-        if (!conversationId || !sourceConversationId) continue;
+        if (!conversationId || !sourceConversationId) return;
         const senderId = record.senderIdentityKey
           ? await identityPersonId(input.archiveId, identities.get(record.senderIdentityKey), tx)
           : null;
         const sentAt = record.timestamp ? new Date(record.timestamp) : null;
-        const sourceConversation = conversationSourceIdentity(
-          input.records,
-          record.conversationKey,
-        );
+        const sourceConversation = conversationSources.get(record.conversationKey);
+        if (!sourceConversation) return;
         const stableKey = await messageStableKey(
           tx,
           input.archiveId,
@@ -381,6 +413,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               : {},
         });
         messages.set(record.stableKey, existing.id);
+        messageConversations.set(record.stableKey, record.conversationKey);
         await upsertObservation(tx.messageObservation, {
           archiveId: input.archiveId,
           ownedAccountId,
@@ -399,8 +432,8 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           observationKind: record.sourceDeletion ? "source-deletion-tombstone" : "value",
           observedAt: deletion?.observedAt ? deletionObservedAt : input.observedAt,
         });
-      }
-      for (const record of input.records) {
+      });
+      await forEachRecord(records, async (record) => {
         if (record.kind === "message" && record.replyToKey) {
           const id = messages.get(record.stableKey),
             replyToId = messages.get(record.replyToKey);
@@ -412,7 +445,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         }
         if (record.kind === "revision") {
           const messageId = messages.get(record.messageKey);
-          if (!messageId) continue;
+          if (!messageId) return;
           const priorRevision = await tx.messageRevision.findUnique({
             where: {
               archiveId_messageId_revisionKey: {
@@ -454,15 +487,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
                   }
                 : {},
           });
-          const messageRecord = input.records.find(
-            (candidate): candidate is ImportMessageRecord =>
-              candidate.kind === "message" && candidate.stableKey === record.messageKey,
-          );
-          const revisionSourceIdentity = messageRecord
-            ? conversationSourceIdentity(input.records, messageRecord.conversationKey)
+          const messageConversationKey = messageConversations.get(record.messageKey);
+          const revisionSourceIdentity = messageConversationKey
+            ? conversationSources.get(messageConversationKey)
             : undefined;
-          const revisionSourceConversationId = messageRecord
-            ? (sourceConversations.get(messageRecord.conversationKey) ??
+          const revisionSourceConversationId = messageConversationKey
+            ? (sourceConversations.get(messageConversationKey) ??
               (revisionSourceIdentity
                 ? (
                     await tx.sourceConversation.findUnique({
@@ -479,7 +509,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
                   )?.id
                 : undefined))
             : undefined;
-          if (revisionSourceConversationId)
+          if (revisionSourceConversationId && revisionSourceIdentity)
             await upsertObservation(tx.revisionObservation, {
               archiveId: input.archiveId,
               ownedAccountId,
@@ -487,12 +517,8 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               snapshotId: input.snapshotId,
               importJobId: input.importJobId,
               sourceConversationId: revisionSourceConversationId,
-              sourceNamespace: messageRecord
-                ? conversationSourceIdentity(input.records, messageRecord.conversationKey).namespace
-                : "normalized-import",
-              sourceConversationKey: messageRecord
-                ? conversationSourceIdentity(input.records, messageRecord.conversationKey).key
-                : "unknown",
+              sourceNamespace: revisionSourceIdentity.namespace,
+              sourceConversationKey: revisionSourceIdentity.key,
               sourceEntityKey: record.stableKey,
               logicalEntityKey: record.stableKey,
               // The revision key is shared across adapters; the observation
@@ -506,17 +532,14 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               observedAt: input.observedAt,
             });
         }
-      }
-      for (const record of input.records) {
-        if (record.kind !== "attachment") continue;
+      });
+      await forEachRecord(records, async (record) => {
+        if (record.kind !== "attachment") return;
         const messageId = messages.get(record.messageKey);
-        if (!messageId) continue;
-        const messageRecord = input.records.find(
-          (candidate): candidate is ImportMessageRecord =>
-            candidate.kind === "message" && candidate.stableKey === record.messageKey,
-        );
-        const sourceConversationId = messageRecord
-          ? sourceConversations.get(messageRecord.conversationKey)
+        if (!messageId) return;
+        const messageConversationKey = messageConversations.get(record.messageKey);
+        const sourceConversationId = messageConversationKey
+          ? sourceConversations.get(messageConversationKey)
           : undefined;
         const link = await importAttachment(
           tx,
@@ -534,11 +557,11 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             snapshotId: input.snapshotId,
             importJobId: input.importJobId,
             sourceConversationId,
-            sourceNamespace: messageRecord
-              ? conversationSourceIdentity(input.records, messageRecord.conversationKey).namespace
+            sourceNamespace: messageConversationKey
+              ? (conversationSources.get(messageConversationKey)?.namespace ?? "normalized-import")
               : "normalized-import",
-            sourceConversationKey: messageRecord
-              ? conversationSourceIdentity(input.records, messageRecord.conversationKey).key
+            sourceConversationKey: messageConversationKey
+              ? (conversationSources.get(messageConversationKey)?.key ?? "unknown")
               : "unknown",
             sourceEntityKey: record.stableKey,
             logicalEntityKey: record.stableKey,
@@ -548,7 +571,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             eligibility: jobEligibility,
             observedAt: input.observedAt,
           });
-      }
+      });
       try {
         await tx.snapshot.update({
           where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
@@ -600,7 +623,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         });
         if (result.count !== 1) throw new LeaseFenceError("live event claim changed during import");
       }
-      return { imported: input.records.length };
+      return { imported: importedCount };
     });
   }
 }
@@ -863,18 +886,4 @@ async function messageStableKey(
   return existing && existing.sourceConversationId !== sourceConversationId
     ? `${ownedAccountId}:${sourceConversationId}:${sourceKey}`
     : sourceKey;
-}
-
-function conversationSourceIdentity(
-  records: readonly ImportRecord[],
-  conversationKey: string,
-): { readonly namespace: string; readonly key: string } {
-  const conversation = records.find(
-    (record): record is Extract<ImportRecord, { kind: "conversation" }> =>
-      record.kind === "conversation" && record.stableKey === conversationKey,
-  );
-  return {
-    namespace: conversation?.source?.namespace ?? "normalized-import",
-    key: conversation?.source?.value ?? conversationKey,
-  };
 }

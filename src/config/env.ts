@@ -32,6 +32,30 @@ const schema = z.object({
     .min(1_000)
     .max(86_400_000)
     .default(120_000),
+  ECHOHOARD_WORKER_SQLITE_TIMEOUT_MS: z.coerce
+    .number()
+    .int()
+    .min(1_000)
+    .max(86_400_000)
+    .default(600_000),
+  ECHOHOARD_WORKER_SQLITE_MAX_ROW_BYTES: z.coerce
+    .number()
+    .int()
+    .min(1_024)
+    .max(64 * 1024 * 1024)
+    .default(1 * 1024 * 1024),
+  ECHOHOARD_WORKER_SQLITE_MAX_ROWS: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(50_000_000)
+    .default(10_000_000),
+  ECHOHOARD_WORKER_SQLITE_MAX_OUTPUT_BYTES: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(64 * 1024 * 1024 * 1024)
+    .default(0),
   ECHOHOARD_WACLI_CONTROL_URL: z.string().url().default("http://wacli-control:8080/"),
   ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(10_000),
   ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE: z.string().min(1).optional(),
@@ -85,6 +109,10 @@ export function parseEnv(input: NodeJS.ProcessEnv = process.env): EchohoardEnv {
     ECHOHOARD_WORKER_LEASE_MS: input.ECHOHOARD_WORKER_LEASE_MS,
     ECHOHOARD_WORKER_HEARTBEAT_MS: input.ECHOHOARD_WORKER_HEARTBEAT_MS,
     ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS: input.ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS,
+    ECHOHOARD_WORKER_SQLITE_TIMEOUT_MS: input.ECHOHOARD_WORKER_SQLITE_TIMEOUT_MS,
+    ECHOHOARD_WORKER_SQLITE_MAX_ROW_BYTES: input.ECHOHOARD_WORKER_SQLITE_MAX_ROW_BYTES,
+    ECHOHOARD_WORKER_SQLITE_MAX_ROWS: input.ECHOHOARD_WORKER_SQLITE_MAX_ROWS,
+    ECHOHOARD_WORKER_SQLITE_MAX_OUTPUT_BYTES: input.ECHOHOARD_WORKER_SQLITE_MAX_OUTPUT_BYTES,
     ECHOHOARD_WACLI_CONTROL_URL: input.ECHOHOARD_WACLI_CONTROL_URL,
     ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS: input.ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS,
     ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE:

@@ -6,6 +6,11 @@ export type ImportRecord =
   | ImportMessageRecord
   | ImportRevisionRecord
   | ImportAttachmentRecord;
+
+/** Records may be supplied in bounded batches so adapters never need to
+ * materialize an entire source database before persistence starts. Async
+ * sources are replayable: the importer makes ordered relationship passes. */
+export type ImportRecordSource = readonly ImportRecord[] | AsyncIterable<readonly ImportRecord[]>;
 export interface ImportPersonRecord {
   readonly kind: "person";
   readonly stableKey: string;
@@ -111,7 +116,7 @@ export interface TextSnapshotImportInput {
   readonly snapshotId: string;
   readonly importJobId: string;
   readonly observedAt: Date;
-  readonly records: readonly ImportRecord[];
+  readonly records: ImportRecordSource;
   /** Backup imports must carry the lease that fenced their job transition.
    * Live receipts do not use the backup job lease path. */
   readonly leaseId?: string;

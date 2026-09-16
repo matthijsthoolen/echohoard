@@ -1,5 +1,5 @@
 import { readFile, stat, open } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 
 export type DecryptFailureKind =
@@ -85,6 +85,7 @@ async function run(
   maxOutputBytes: number,
 ): Promise<{ code: number; stderr: string }> {
   const child = spawn(command, args, {
+    detached: process.platform !== "win32",
     shell: false,
     stdio: ["ignore", "ignore", "pipe"],
     windowsHide: true,
@@ -95,15 +96,52 @@ async function run(
     if (stderr.length < maxOutputBytes) stderr += chunk.slice(0, maxOutputBytes - stderr.length);
   });
   const stderrClosed = once(child.stderr, "end");
-  const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-  const [result] = (await once(child, "close")) as [number | null];
-  await stderrClosed;
-  clearTimeout(timer);
-  if (result === null) throw new DecryptError("timeout", "decryption timed out");
-  // Keep stderr inside this adapter until the failure kind is classified.
-  // DecryptError redacts the eventual user-facing message; redacting here
-  // first would hide key/decrypt markers from classify().
-  return { code: result, stderr };
+  const close = once(child, "close") as Promise<[number | null, NodeJS.Signals | null]>;
+  let timedOut = false;
+  let termination: Promise<void> | undefined;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    termination ??= terminate(child, close);
+  }, timeoutMs);
+  try {
+    const [result] = await close;
+    await stderrClosed;
+    if (timedOut) throw new DecryptError("timeout", "decryption timed out");
+    // Keep stderr inside this adapter until the failure kind is classified.
+    // DecryptError redacts the eventual user-facing message; redacting here
+    // first would hide key/decrypt markers from classify().
+    return { code: result ?? -1, stderr };
+  } finally {
+    clearTimeout(timer);
+    await (termination ??= terminate(child, close));
+  }
+}
+
+async function terminate(
+  child: ChildProcess,
+  close: Promise<[number | null, NodeJS.Signals | null]>,
+): Promise<void> {
+  if (child.exitCode !== null) return;
+  signalProcessGroup(child, "SIGTERM");
+  const completed = await Promise.race([close.then(() => true), delay(250).then(() => false)]);
+  if (!completed && child.exitCode === null) signalProcessGroup(child, "SIGKILL");
+  await close;
+}
+
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (process.platform !== "win32" && child.pid !== undefined) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process may have exited between the check and the group signal.
+    }
+  }
+  child.kill(signal);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 async function validateSqlite(path: string): Promise<DecryptResult> {
