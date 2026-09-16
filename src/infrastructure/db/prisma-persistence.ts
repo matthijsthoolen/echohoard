@@ -48,7 +48,7 @@ import {
   type UpdateConversationPrivacyRequest,
 } from "../../application/conversation-privacy";
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
-import { PrismaTextSnapshotImporter } from "./text-import.js";
+import { PrismaTextSnapshotImporter } from "./text-import";
 import { createHash } from "node:crypto";
 
 type Delegate = {
@@ -210,8 +210,13 @@ export class PrismaLiveEventNormalizer {
 
   public constructor(
     private readonly prisma: PrismaClient,
-    private readonly parseEvent: (payload: Uint8Array, accountKey: string) => unknown,
-    private readonly normalizeEvent: (event: unknown) => readonly ImportRecord[],
+    private readonly parseEvent: (
+      payload: Uint8Array,
+      accountKey: string,
+    ) => unknown = parseGenericEvent,
+    private readonly normalizeEvent: (
+      event: unknown,
+    ) => readonly ImportRecord[] = normalizeGenericEvent,
   ) {
     this.importer = new PrismaTextSnapshotImporter(prisma);
   }
@@ -256,6 +261,39 @@ export class PrismaLiveEventNormalizer {
 function stableUuid(archiveId: string, key: string): string {
   const hex = createHash("sha256").update(`${archiveId}\0${key}`).digest("hex").slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
+}
+
+function parseGenericEvent(payload: Uint8Array): unknown {
+  return JSON.parse(new TextDecoder().decode(payload)) as unknown;
+}
+
+function normalizeGenericEvent(event: unknown): readonly ImportRecord[] {
+  if (!event || typeof event !== "object" || Array.isArray(event))
+    throw new Error("live event payload is invalid");
+  const value = event as Record<string, unknown>;
+  const chat = typeof value.Chat === "string" ? value.Chat : undefined;
+  const id = typeof value.ID === "string" ? value.ID : undefined;
+  if (!chat || !id) throw new Error("live event message identity is missing");
+  const text = typeof value.Text === "string" ? value.Text : undefined;
+  return [
+    {
+      kind: "conversation",
+      stableKey: `conversation:${chat}`,
+      source: { namespace: "whatsapp-chat", value: chat },
+      conversationKind: "direct",
+    },
+    {
+      kind: "message",
+      stableKey: `message:${chat}:${id}`,
+      source: { namespace: "whatsapp-message", value: id },
+      conversationKey: `conversation:${chat}`,
+      timestamp: typeof value.Timestamp === "string" ? value.Timestamp : null,
+      direction: value.FromMe === true ? "sent" : "received",
+      messageKind: "text",
+      ...(text === undefined ? {} : { body: text }),
+      bodyState: text === undefined ? "missing" : "present",
+    },
+  ];
 }
 
 export class PrismaLiveAccountHealthPersistence {
@@ -641,7 +679,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const where = {
       archiveId: input.archiveId,
       materialized: true,
-      uiVisibility: input.uiMode,
+      uiVisibility: uiVisibilityValue(input.uiMode),
       ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
       ...(input.search
         ? {
@@ -692,14 +730,20 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   ): Promise<readonly PersonPersistenceRow[]> {
     const where = {
       archiveId: input.archiveId,
-      participants: {
-        some: {
-          conversation: {
-            uiVisibility: input.uiMode,
-            ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
-          },
-        },
-      },
+      ...(input.uiMode === "ordinary"
+        ? {}
+        : {
+            participants: {
+              some: {
+                conversation: {
+                  uiVisibility: uiVisibilityValue(input.uiMode),
+                  ...(input.uiMode === "locked"
+                    ? { id: { in: input.authorizedConversationIds } }
+                    : {}),
+                },
+              },
+            },
+          }),
       ...(input.search ? { displayName: { contains: input.search, mode: "insensitive" } } : {}),
       ...cursorWhere(input.after, input.direction, "displayName"),
     };
@@ -936,7 +980,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         materialized: true,
         message: {
           conversation: {
-            uiVisibility: input.uiMode,
+            uiVisibility: uiVisibilityValue(input.uiMode),
             ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
           },
         },
@@ -1345,12 +1389,16 @@ function uiConversationPredicate(
   alias: string,
   input: { readonly uiMode: UiReadMode; readonly authorizedConversationIds: readonly string[] },
 ): Prisma.Sql {
-  const visibility = Prisma.sql`${Prisma.raw(alias)}."uiVisibility" = ${input.uiMode}`;
+  const visibility = Prisma.sql`${Prisma.raw(alias)}."uiVisibility" = ${input.uiMode === "ordinary" ? "normal" : input.uiMode}`;
   if (input.uiMode !== "locked") return visibility;
   if (input.authorizedConversationIds.length === 0) return Prisma.sql`FALSE`;
   return Prisma.sql`${visibility} AND ${Prisma.raw(alias)}.id IN (${Prisma.join(
     input.authorizedConversationIds.map((id) => Prisma.sql`${id}::uuid`),
   )})`;
+}
+
+function uiVisibilityValue(mode: UiReadMode): "normal" | "hidden" | "locked" {
+  return mode === "ordinary" ? "normal" : mode;
 }
 
 function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): Prisma.Sql {

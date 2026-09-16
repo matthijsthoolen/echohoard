@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient, Prisma } from "@prisma/client";
-import { reconcileAttachmentAvailability } from "../../application/text-import.js";
-import type { ImportEligibility } from "../../application/import-exclusion.js";
+import { reconcileAttachmentAvailability } from "../../application/text-import";
+import type { ImportEligibility } from "../../application/import-exclusion";
 import type {
   ImportAttachmentAvailability,
   ImportAttachmentRecord,
@@ -9,7 +9,7 @@ import type {
   ImportRecord,
   TextSnapshotImportInput,
   TextSnapshotImporter,
-} from "../../application/text-import.js";
+} from "../../application/text-import";
 
 type Tx = Prisma.TransactionClient;
 const uuid = () => randomUUID();
