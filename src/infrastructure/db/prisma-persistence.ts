@@ -813,6 +813,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         participant_count: bigint | number;
         last_message_at: Date | null;
         created_at: Date;
+        source_count: bigint | number;
       }>
     >(Prisma.sql`
       WITH group_sources AS (
@@ -847,8 +848,9 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       SELECT c.id,
              COALESCE(c."ownerTitle", c.title) AS title,
              COUNT(DISTINCT participant.id)::bigint AS participant_count,
-             MAX(COALESCE(message."sentAt", message."createdAt")) AS last_message_at,
-             c."createdAt" AS created_at
+              MAX(COALESCE(message."sentAt", message."createdAt")) AS last_message_at,
+              c."createdAt" AS created_at,
+              COUNT(DISTINCT members.source_id)::bigint AS source_count
       FROM "Conversation" c
       JOIN (SELECT DISTINCT group_id FROM group_sources) active_group
         ON active_group.group_id = c.id
@@ -879,6 +881,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       createdAt: row.created_at.toISOString(),
       participantCount: countValue(row.participant_count),
       lastMessageAt: iso(row.last_message_at),
+      sourceCount: countValue(row.source_count),
     }));
   }
 
@@ -961,10 +964,11 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       Prisma.sql`
          SELECT m.id, COALESCE(m."sentAt", m."createdAt") AS sort_sent_at
          FROM "Message" m
-         JOIN "Conversation" conversation
-           ON conversation.id = m."conversationId" AND conversation."archiveId" = m."archiveId"
-         LEFT JOIN "SourceConversation" sc
-          ON sc.id = m."sourceConversationId" AND sc."archiveId" = m."archiveId"
+          LEFT JOIN "SourceConversation" sc
+           ON sc.id = m."sourceConversationId" AND sc."archiveId" = m."archiveId"
+          JOIN "Conversation" conversation
+            ON conversation.id = COALESCE(sc."unifiedConversationId", m."conversationId")
+           AND conversation."archiveId" = m."archiveId"
         WHERE m."archiveId" = ${input.archiveId}::uuid
           AND m."materialized" = true
            AND (m."conversationId"::text = ${input.conversationId}
@@ -1032,6 +1036,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         sourceConversation: {
           select: {
             id: true,
+            unifiedConversationId: true,
             sourceNamespace: true,
             sourceConversationKey: true,
             ownedAccountId: true,
@@ -1074,6 +1079,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         messageObservations: Array<{ importJobId: string }>;
         sourceConversation: {
           id: string;
+          unifiedConversationId: string;
           sourceNamespace: string;
           sourceConversationKey: string;
           ownedAccountId: string;
@@ -1090,7 +1096,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       })
       .map((row) => ({
         id: row.id,
-        conversationId: row.conversationId,
+        conversationId: row.sourceConversation?.unifiedConversationId ?? row.conversationId,
         senderPersonId: row.senderId ?? undefined,
         sentAt: iso(row.sentAt),
         sortSentAt: sortAt.get(row.id)?.toISOString() ?? row.sentAt?.toISOString() ?? "",
@@ -1155,6 +1161,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
               },
             }
           : {}),
+        sourceCount: row.sourceConversation ? 1 : 0,
       }));
   }
 
@@ -1265,31 +1272,40 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         kind: "message" | "media";
         cursor_id: string;
         occurred_at: Date;
+        conversation_id: string;
       }>
     >(Prisma.sql`
        WITH events AS (
           SELECT m."archiveId" AS archive_id, m.id, m.id AS cursor_id, 'message'::text AS kind,
+                 COALESCE(message_source."unifiedConversationId", m."conversationId") AS conversation_id,
                  COALESCE(m."sentAt", m."createdAt") AS occurred_at
-         FROM "Message" m
-         JOIN "Conversation" message_conversation
-           ON message_conversation.id = m."conversationId"
-          AND message_conversation."archiveId" = m."archiveId"
+          FROM "Message" m
+          LEFT JOIN "SourceConversation" message_source
+            ON message_source.id = m."sourceConversationId"
+           AND message_source."archiveId" = m."archiveId"
+          JOIN "Conversation" message_conversation
+            ON message_conversation.id = COALESCE(message_source."unifiedConversationId", m."conversationId")
+           AND message_conversation."archiveId" = m."archiveId"
          WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
-            AND ${conversationPrivacyPredicate("message_conversation", input)}
-         UNION ALL
-         SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id,
-                ma.id AS cursor_id, 'media'::text AS kind,
-                 ma."createdAt" AS occurred_at
+             AND ${conversationPrivacyPredicate("message_conversation", input)}
+          UNION ALL
+          SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id,
+                 ma.id AS cursor_id, 'media'::text AS kind,
+                 COALESCE(media_source."unifiedConversationId", media_message."conversationId") AS conversation_id,
+                  ma."createdAt" AS occurred_at
          FROM "MessageAttachment" ma
          JOIN "Message" media_message
            ON media_message.id = ma."messageId" AND media_message."archiveId" = ma."archiveId"
-         JOIN "Conversation" media_conversation
-           ON media_conversation.id = media_message."conversationId"
-          AND media_conversation."archiveId" = media_message."archiveId"
+           LEFT JOIN "SourceConversation" media_source
+             ON media_source.id = media_message."sourceConversationId"
+            AND media_source."archiveId" = media_message."archiveId"
+           JOIN "Conversation" media_conversation
+             ON media_conversation.id = COALESCE(media_source."unifiedConversationId", media_message."conversationId")
+            AND media_conversation."archiveId" = media_message."archiveId"
          WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
             AND ${conversationPrivacyPredicate("media_conversation", input)}
       )
-       SELECT events.id, events.kind, events.cursor_id, events.occurred_at
+       SELECT events.id, events.kind, events.cursor_id, events.occurred_at, events.conversation_id
       FROM events
       WHERE ${where}
       ${afterPredicate}
@@ -1301,6 +1317,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       kind: row.kind,
       cursorId: row.cursor_id,
       occurredAt: row.occurred_at.toISOString(),
+      conversationId: row.conversation_id,
     }));
   }
 }

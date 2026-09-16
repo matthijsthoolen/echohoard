@@ -288,6 +288,34 @@ describe("bounded private MCP conversation and search tools", () => {
     await app.close();
   });
 
+  it("passes the bounded source-account filter without exposing source identifiers", async () => {
+    const search = vi.fn(async () => ({
+      items: [
+        {
+          id: "message-a",
+          kind: "message" as const,
+          score: 1,
+          conversationId: "unified-a",
+        },
+      ],
+      hasMore: false,
+    }));
+    const { app, sessionId } = await connectedApp(fakeReads({ search }));
+    const result = await callTool(app, sessionId, "search_messages", {
+      query: "needle",
+      sourceAccountId: "account-a",
+    });
+    expect(result.body.result.structuredContent.items[0]).toMatchObject({
+      id: "message-a",
+      conversationId: "unified-a",
+    });
+    expect(search).toHaveBeenCalledWith(
+      expect.objectContaining({ archiveId: "archive-a", sourceAccountId: "account-a" }),
+    );
+    expect(JSON.stringify(result.body)).not.toContain("sourceConversationId");
+    await app.close();
+  });
+
   it("rejects schema oversize, invalid date ranges, archive selection, and hostile oversized payloads", async () => {
     const search = vi.fn(async () => ({
       items: [

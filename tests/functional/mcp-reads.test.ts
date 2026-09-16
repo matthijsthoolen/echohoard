@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ArchiveHealthService } from "../../src/application/health-reads.js";
 import { ArchiveReadService, CursorCodec } from "../../src/application/reads.js";
+import { ConversationGroupingService } from "../../src/application/conversation-grouping.js";
+import { PrismaConversationGroupingPersistence } from "../../src/infrastructure/db/conversation-grouping.js";
 import { McpCredentialAuthenticator, PrivateMcpServer } from "../../src/delivery/mcp/index.js";
 import { createMcpRoute } from "../../src/delivery/web/app/mcp/route-handler.js";
 import { MCP_ALLOWED_TOOL_NAMES, type McpAuditRecord } from "../../src/delivery/mcp/tools.js";
@@ -354,6 +356,129 @@ describe("PostgreSQL private MCP read traversal", () => {
     });
     expect(otherArchive.result.structuredContent.items).toEqual([]);
     expect(JSON.stringify(otherArchive)).not.toContain(otherMessageId);
+  });
+
+  it("exposes a merged conversation once and switches back after unmerge", async () => {
+    const sourceConversationId = randomUUID();
+    const sourceMessageId = randomUUID();
+    const grouping = new ConversationGroupingService(
+      new PrismaConversationGroupingPersistence(prisma),
+    );
+    await prisma.conversation.create({
+      data: {
+        id: sourceConversationId,
+        archiveId,
+        kind: "direct",
+        stableKey: `mcp-unified-source-${sourceConversationId}`,
+        title: "MCP unified source",
+        mcpAccess: "allowed",
+      },
+    });
+    await prisma.sourceConversation.createMany({
+      data: [
+        {
+          id: conversationId,
+          archiveId,
+          ownedAccountId: (await prisma.ownedAccount.findFirstOrThrow({ where: { archiveId } })).id,
+          unifiedConversationId: conversationId,
+          sourceNamespace: "synthetic",
+          sourceConversationKey: `mcp-unified-target-${conversationId}`,
+        },
+        {
+          id: sourceConversationId,
+          archiveId,
+          ownedAccountId: (await prisma.ownedAccount.findFirstOrThrow({ where: { archiveId } })).id,
+          unifiedConversationId: sourceConversationId,
+          sourceNamespace: "synthetic",
+          sourceConversationKey: `mcp-unified-source-${sourceConversationId}`,
+        },
+      ],
+    });
+    await prisma.message.create({
+      data: {
+        id: sourceMessageId,
+        archiveId,
+        conversationId: sourceConversationId,
+        sourceConversationId,
+        senderId: personOneId,
+        stableKey: `mcp-unified-message-${sourceMessageId}`,
+        messageType: "text",
+        body: "synthetic unified MCP message",
+        sentAt: new Date("2026-01-05T00:00:00.000Z"),
+      },
+    });
+    const merged = await grouping.merge({
+      archiveId,
+      targetConversationId: conversationId,
+      sourceConversationIds: [sourceConversationId],
+      expectedVersion: 0,
+      actor: "synthetic-owner",
+      reason: "MCP unified read regression",
+      idempotencyKey: `mcp-unified-merge-${sourceMessageId}`,
+      uiAccess: { authorizedConversationIds: [] },
+    });
+
+    const listed = await call("tools/call", {
+      name: "list_conversations",
+      arguments: { limit: 10 },
+    });
+    const listedIds = listed.result.structuredContent.items.map((item: { id: string }) => item.id);
+    expect(
+      listedIds.filter((id: string) => id === conversationId || id === sourceConversationId),
+    ).toEqual([conversationId]);
+    expect(
+      listed.result.structuredContent.items.find(
+        (item: { id: string }) => item.id === conversationId,
+      ),
+    ).toMatchObject({ sourceCount: 2 });
+
+    const messages = await call("tools/call", {
+      name: "get_conversation",
+      arguments: { conversationId, limit: 10 },
+    });
+    expect(
+      messages.result.structuredContent.items.map((item: { id: string }) => item.id),
+    ).toContain(sourceMessageId);
+    expect(messages.result.structuredContent.items[0].conversationId).toBe(conversationId);
+    expect(JSON.stringify(messages)).not.toContain(sourceConversationId);
+
+    const searched = await call("tools/call", {
+      name: "search_messages",
+      arguments: { query: "synthetic unified MCP message" },
+    });
+    expect(searched.result.structuredContent.items).toEqual([
+      expect.objectContaining({ id: sourceMessageId, conversationId }),
+    ]);
+
+    const timeline = await call("tools/call", {
+      name: "get_timeline",
+      arguments: { from: "2026-01-05T00:00:00.000Z", to: "2026-01-06T00:00:00.000Z" },
+    });
+    expect(timeline.result.structuredContent.items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: sourceMessageId, conversationId })]),
+    );
+
+    await grouping.unmerge({
+      archiveId,
+      targetConversationId: conversationId,
+      sourceConversationIds: [sourceConversationId],
+      expectedVersion: 1,
+      actor: "synthetic-owner",
+      reason: "MCP unified read regression undo",
+      idempotencyKey: `mcp-unified-unmerge-${sourceMessageId}`,
+      auditId: merged.auditId,
+      uiAccess: { authorizedConversationIds: [] },
+    });
+    const afterUnmerge = await call("tools/call", {
+      name: "list_conversations",
+      arguments: { limit: 10 },
+    });
+    const afterIds = afterUnmerge.result.structuredContent.items.map(
+      (item: { id: string }) => item.id,
+    );
+    expect(
+      afterIds.filter((id: string) => id === conversationId || id === sourceConversationId).sort(),
+    ).toEqual([conversationId, sourceConversationId].sort());
   });
 });
 

@@ -325,6 +325,8 @@ export interface ConversationRead {
   readonly title: string;
   readonly participantCount: number;
   readonly lastMessageAt?: string;
+  /** Number of source chats represented by this presentation conversation. */
+  readonly sourceCount?: number;
 }
 export interface PersonRead {
   readonly id: string;
@@ -348,6 +350,8 @@ export interface MessageRead {
   readonly revisions: readonly MessageRevisionRead[];
   readonly reactions: readonly MessageReactionRead[];
   readonly provenance?: MessageProvenanceRead;
+  /** Bounded provenance summary; source identifiers stay internal. */
+  readonly sourceCount?: number;
   /** Source deletion is an evidence state, not an owner deletion request. */
   readonly sourceDeleted?: boolean;
   readonly contentUnavailable?: boolean;
@@ -405,6 +409,7 @@ export interface TimelineRead {
   readonly id: string;
   readonly kind: "message" | "media";
   readonly occurredAt: string;
+  readonly conversationId?: string;
 }
 export interface SearchResultRead {
   readonly id: string;
@@ -545,6 +550,7 @@ export interface ConversationPersistenceRow {
   readonly participantCount: number;
   readonly lastMessageAt?: string;
   readonly createdAt: string;
+  readonly sourceCount?: number;
 }
 export interface PersonPersistenceRow {
   readonly id: string;
@@ -579,6 +585,7 @@ export interface MessagePersistenceRow {
   readonly revisions?: readonly MessageRevisionRead[];
   readonly reactions?: readonly MessageReactionRead[];
   readonly provenance?: MessageProvenanceRead;
+  readonly sourceCount?: number;
   readonly sourceDeleted?: boolean;
   readonly contentUnavailable?: boolean;
   readonly sourceDeletedAt?: string;
@@ -603,6 +610,7 @@ export interface TimelinePersistenceRow {
   readonly occurredAt: string;
   /** The unique event row used by pagination; media id remains the attachment handle. */
   readonly cursorId: string;
+  readonly conversationId?: string;
 }
 
 export class ArchiveReadService {
@@ -638,6 +646,7 @@ export class ArchiveReadService {
       title: row.title ?? "",
       participantCount: row.participantCount,
       ...(row.lastMessageAt ? { lastMessageAt: row.lastMessageAt } : {}),
+      ...(row.sourceCount === undefined ? {} : { sourceCount: row.sourceCount }),
     }));
     return this.page(
       items,
@@ -731,6 +740,7 @@ export class ArchiveReadService {
       revisions: row.revisions ?? [],
       reactions: row.reactions ?? [],
       ...(row.provenance ? { provenance: row.provenance } : {}),
+      ...(row.sourceCount === undefined ? {} : { sourceCount: row.sourceCount }),
       ...(row.sourceDeleted
         ? { sourceDeleted: true, contentUnavailable: row.contentUnavailable ?? false }
         : {}),
@@ -836,6 +846,7 @@ export class ArchiveReadService {
       id: row.id,
       kind: row.kind,
       occurredAt: row.occurredAt,
+      ...(row.conversationId ? { conversationId: row.conversationId } : {}),
     }));
     return this.page(
       items,

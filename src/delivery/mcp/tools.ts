@@ -81,6 +81,7 @@ export const searchMessagesInputSchema = z
     text: boundedSearchText.optional(),
     conversationId: boundedId.optional(),
     personId: boundedId.optional(),
+    sourceAccountId: boundedId.optional(),
     senderDirection: z.enum(["sent", "received", "unknown"]).optional(),
     from: boundedDate.optional(),
     to: boundedDate.optional(),
@@ -164,6 +165,7 @@ const conversationOutputSchema = z
             id: z.string(),
             title: z.string().max(MCP_MAX_OUTPUT_TEXT),
             participantCount: z.number().int().nonnegative(),
+            sourceCount: z.number().int().nonnegative().optional(),
             lastMessageAt: z.string().optional(),
             provenance: provenanceSchema,
             evidence: evidenceEnvelopeSchema,
@@ -188,6 +190,9 @@ const messageOutputSchema = z
     messageType: z.string().max(100),
     sourceDeleted: z.boolean().optional(),
     contentUnavailable: z.boolean().optional(),
+    sourceCount: z.number().int().nonnegative().optional(),
+    importCount: z.number().int().nonnegative().optional(),
+    importsTruncated: z.boolean().optional(),
     sourceDeletedAt: z.string().max(MCP_MAX_DATE_LENGTH).optional(),
     sourceDeletionKind: z.enum(["revoke", "delete"]).optional(),
     replyTo: z
@@ -241,6 +246,7 @@ const searchOutputSchema = z
           .object({
             id: z.string(),
             kind: z.enum(["message", "person", "conversation"]),
+            conversationId: z.string().optional(),
             score: z.number().optional(),
             provenance: provenanceSchema,
             evidence: evidenceEnvelopeSchema,
@@ -310,6 +316,7 @@ const timelineOutputSchema = z
             id: z.string().max(MCP_MAX_ID_LENGTH),
             kind: z.enum(["message", "media"]),
             occurredAt: z.string().max(MCP_MAX_DATE_LENGTH),
+            conversationId: z.string().optional(),
             provenance: provenanceSchema,
             evidence: evidenceEnvelopeSchema,
           })
@@ -433,6 +440,7 @@ export function registerConversationReadTools(
             ...(validated.text !== undefined ? { query: validated.text } : {}),
             ...(validated.conversationId ? { conversationId: validated.conversationId } : {}),
             ...(validated.personId ? { personId: validated.personId } : {}),
+            ...(validated.sourceAccountId ? { sourceAccountId: validated.sourceAccountId } : {}),
             ...(validated.senderDirection ? { senderDirection: validated.senderDirection } : {}),
             ...(validated.from ? { from: validated.from } : {}),
             ...(validated.to ? { to: validated.to } : {}),
@@ -648,6 +656,7 @@ function resultForConversations(
       id: safeIdentifier(item.id),
       title: boundedText(item.title),
       participantCount: safeCount(item.participantCount),
+      ...(item.sourceCount === undefined ? {} : { sourceCount: safeCount(item.sourceCount) }),
       ...(item.lastMessageAt
         ? { lastMessageAt: boundedText(item.lastMessageAt, MCP_MAX_DATE_LENGTH) }
         : {}),
@@ -680,6 +689,13 @@ function resultForMessages(
       messageType: boundedText(item.messageType, 100),
       ...(item.sourceDeleted
         ? { sourceDeleted: true, contentUnavailable: item.contentUnavailable ?? false }
+        : {}),
+      ...(item.sourceCount === undefined ? {} : { sourceCount: safeCount(item.sourceCount) }),
+      ...(item.provenance
+        ? {
+            importCount: safeCount(item.provenance.importCount),
+            importsTruncated: item.provenance.importsTruncated === true,
+          }
         : {}),
       ...(item.sourceDeletedAt
         ? { sourceDeletedAt: boundedText(item.sourceDeletedAt, MCP_MAX_DATE_LENGTH) }
@@ -725,6 +741,7 @@ function resultForSearch(
     items: result.items.slice(0, MAX_READ_LIMIT).map((item) => ({
       id: safeIdentifier(item.id),
       kind: item.kind,
+      ...(item.conversationId ? { conversationId: safeIdentifier(item.conversationId) } : {}),
       ...(typeof item.score === "number" && Number.isFinite(item.score)
         ? { score: item.score }
         : {}),
@@ -806,6 +823,7 @@ function resultForTimeline(
       id: safeIdentifier(item.id),
       kind: item.kind,
       occurredAt: boundedText(item.occurredAt, MCP_MAX_DATE_LENGTH),
+      ...(item.conversationId ? { conversationId: safeIdentifier(item.conversationId) } : {}),
       provenance,
       evidence: evidenceFor(provenance),
     })),
