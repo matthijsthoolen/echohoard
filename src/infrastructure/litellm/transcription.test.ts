@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -420,4 +421,120 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
     });
     expect(fetcher).not.toHaveBeenCalled();
   });
+
+  it("pins the validated address when DNS changes before the request", async () => {
+    const f = await fixture();
+    const derivative = {
+      prepare: vi.fn(async ({ destinationPath }) => {
+        await writeFile(destinationPath, Buffer.from("RIFF derivative"));
+        return { bytes: 10, durationMs: 2_000 };
+      }),
+    };
+    let dnsAnswer: readonly string[] = ["127.0.0.1"];
+    const endpointLookup = vi.fn(async () => dnsAnswer);
+    const connectedAddresses: string[] = [];
+    const transport = vi.fn(async (_endpoint: string, address: string) => {
+      dnsAnswer = ["203.0.113.7"];
+      connectedAddresses.push(address);
+      return new Response(JSON.stringify({ text: "pinned result" }));
+    });
+    const adapter = new LiteLlmTranscriptionAdapter(
+      "http://service.internal:4000",
+      "sentinel-provider-key",
+      new Set(["synthetic/audio"]),
+      f.casRoot,
+      f.workRoot,
+      { derivative, endpointLookup, transport },
+    );
+
+    await expect(adapter.transcribe(input(f.casPath))).resolves.toMatchObject({
+      text: "pinned result",
+    });
+    expect(endpointLookup).toHaveBeenCalledTimes(1);
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(connectedAddresses).toEqual(["127.0.0.1"]);
+  });
+
+  it("rejects mixed private and public DNS answers before transport", async () => {
+    const f = await fixture();
+    const transport = vi.fn(async () => new Response(JSON.stringify({ text: "must not run" })));
+    const adapter = new LiteLlmTranscriptionAdapter(
+      "http://service.internal:4000",
+      "sentinel-provider-key",
+      new Set(["synthetic/audio"]),
+      f.casRoot,
+      f.workRoot,
+      {
+        derivative: {
+          prepare: vi.fn(async ({ destinationPath }) => {
+            await writeFile(destinationPath, Buffer.from("RIFF derivative"));
+            return { bytes: 10, durationMs: 2_000 };
+          }),
+        },
+        endpointLookup: async () => ["127.0.0.1", "203.0.113.7"],
+        transport,
+      },
+    );
+
+    await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
+      kind: "configuration",
+      retryable: false,
+    });
+    expect(transport).not.toHaveBeenCalled();
+  });
+
+  it("connects to the pinned address while retaining the endpoint Host header", async () => {
+    const f = await fixture();
+    let receivedHost: string | undefined;
+    let receivedBody = "";
+    const server = createServer((request, response) => {
+      receivedHost = request.headers.host;
+      const chunks: Buffer[] = [];
+      request.on("data", (chunk: Buffer) => chunks.push(chunk));
+      request.once("end", () => {
+        receivedBody = Buffer.concat(chunks).toString("utf8");
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify({ text: "default transport result" }));
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("test server did not bind");
+    const adapter = new LiteLlmTranscriptionAdapter(
+      `http://service.internal:${address.port}`,
+      "sentinel-provider-key",
+      new Set(["synthetic/audio"]),
+      f.casRoot,
+      f.workRoot,
+      {
+        derivative: {
+          prepare: vi.fn(async ({ destinationPath }) => {
+            await writeFile(destinationPath, Buffer.from("RIFF derivative"));
+            return { bytes: 10, durationMs: 2_000 };
+          }),
+        },
+        endpointLookup: async () => ["127.0.0.1"],
+      },
+    );
+
+    try {
+      await expect(adapter.transcribe(input(f.casPath))).resolves.toMatchObject({
+        text: "default transport result",
+      });
+      expect(receivedHost).toBe(`service.internal:${address.port}`);
+      expect(receivedBody).toContain('name="model"');
+      expect(receivedBody).toContain("synthetic/audio");
+    } finally {
+      await closeServer(server);
+    }
+  });
 });
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}

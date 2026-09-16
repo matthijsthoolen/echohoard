@@ -4,21 +4,45 @@ import {
   type TranscriptionCatalogPort,
   type TranscriptionModel,
 } from "../../application/transcription-catalog";
+import {
+  requestPinnedEndpoint,
+  type EndpointLookup,
+  type LiteLlmEndpointTransport,
+  resolveEndpointAddresses,
+  validatePrivateEndpoint,
+} from "./transcription";
 
 type UnknownRecord = Record<string, unknown>;
 
+export interface LiteLlmCatalogOptions {
+  readonly endpointLookup?: EndpointLookup;
+  readonly transport?: LiteLlmEndpointTransport;
+}
+
 export class HttpLiteLlmCatalog implements TranscriptionCatalogPort {
+  private readonly transport: LiteLlmEndpointTransport;
+  private readonly endpointLookup: EndpointLookup;
+
   public constructor(
     private readonly endpoint: string,
     private readonly secret: string,
     private readonly allowedIds: ReadonlySet<string>,
-    private readonly fetcher: typeof fetch = fetch,
-  ) {}
+    fetcher?: typeof fetch,
+    options: LiteLlmCatalogOptions = {},
+  ) {
+    this.endpointLookup = options.endpointLookup ?? resolveEndpointAddresses;
+    this.transport =
+      options.transport ??
+      (fetcher ? (endpoint, _address, init) => fetcher(endpoint, init) : requestPinnedEndpoint);
+  }
 
   public async discover(): Promise<readonly TranscriptionModel[]> {
-    const response = await this.fetcher(this.endpoint, {
+    const signal = AbortSignal.timeout(10_000);
+    const address = await validatePrivateEndpoint(this.endpoint, this.endpointLookup, signal);
+    const response = await this.transport(this.endpoint, address, {
       headers: { Accept: "application/json", Authorization: `Bearer ${this.secret}` },
-      signal: AbortSignal.timeout(10_000),
+      signal,
+      redirect: "error",
     });
     if (!response.ok) throw new Error("catalog unavailable");
     const body: unknown = await response.json();

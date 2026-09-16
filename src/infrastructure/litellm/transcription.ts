@@ -3,6 +3,8 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { lstat, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { spawn } from "node:child_process";
+import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
@@ -166,6 +168,7 @@ export interface LiteLlmTranscriptionLimits {
 
 export interface LiteLlmTranscriptionAdapterOptions extends LiteLlmTranscriptionLimits {
   readonly fetcher?: typeof fetch;
+  readonly transport?: LiteLlmEndpointTransport;
   readonly derivative?: AudioDerivativePort;
   readonly derivativeExecutable?: string;
   readonly endpointLookup?: EndpointLookup;
@@ -173,6 +176,14 @@ export interface LiteLlmTranscriptionAdapterOptions extends LiteLlmTranscription
 }
 
 export type EndpointLookup = (hostname: string) => Promise<readonly string[]>;
+
+/** Request transport seam.  The address is selected by the private endpoint
+ * validator and must be used for connection establishment, not resolved again. */
+export type LiteLlmEndpointTransport = (
+  endpoint: string,
+  address: string,
+  init: RequestInit,
+) => Promise<Response>;
 
 /** Bounded, private LiteLLM transcription adapter.  The endpoint is derived
  * from configuration once; per-request URLs are not accepted. */
@@ -184,7 +195,7 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
   private readonly derivativeTimeoutMs: number;
   private readonly maxTranscriptChars: number;
   private readonly maxResponseBytes: number;
-  private readonly fetcher: typeof fetch;
+  private readonly transport: LiteLlmEndpointTransport;
   private readonly derivative: AudioDerivativePort;
   private readonly allowedModelIds: ReadonlySet<string>;
   private readonly casRoot: string;
@@ -212,7 +223,11 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
       options.maxTranscriptChars ?? DEFAULT_MAX_TRANSCRIPT_CHARS,
     );
     this.maxResponseBytes = positiveLimit(options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES);
-    this.fetcher = options.fetcher ?? fetch;
+    this.transport =
+      options.transport ??
+      (options.fetcher
+        ? (endpoint, _address, init) => options.fetcher!(endpoint, init)
+        : requestPinnedEndpoint);
     this.derivative =
       options.derivative ?? new FfmpegAudioDerivative({ executable: options.derivativeExecutable });
     this.endpointLookup = options.endpointLookup ?? resolveEndpointAddresses;
@@ -325,9 +340,9 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
     signal: AbortSignal,
     mediaDurationMs: number,
   ): Promise<ParsedTranscriptionResponse> {
-    await assertPrivateEndpoint(this.endpoint, this.endpointLookup, signal);
+    const address = await validatePrivateEndpoint(this.endpoint, this.endpointLookup, signal);
     if (signal.aborted) throw new TranscriptionError("timeout");
-    const response = await this.fetcher(this.endpoint, {
+    const response = await this.transport(this.endpoint, address, {
       method: "POST",
       redirect: "error",
       headers: { Accept: "application/json", Authorization: `Bearer ${this.secret}` },
@@ -392,21 +407,22 @@ export function transcriptionEndpoint(baseUrl: string): string {
   return url.toString();
 }
 
-async function assertPrivateEndpoint(
+export async function validatePrivateEndpoint(
   endpoint: string,
   endpointLookup: EndpointLookup,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<string> {
   const url = new URL(endpoint);
   const hostname = normalizeHostname(url.hostname);
+  if (signal.aborted) throw new TranscriptionError("timeout");
   if (!isPrivateHostname(hostname)) throw new TranscriptionError("configuration");
   if (isIP(hostname)) {
     if (!isPrivateAddress(hostname)) throw new TranscriptionError("configuration");
-    return;
+    return hostname;
   }
   let addresses: readonly string[];
   try {
-    addresses = await endpointLookup(hostname);
+    addresses = await abortable(endpointLookup(hostname), signal);
   } catch {
     if (signal.aborted) throw new TranscriptionError("timeout");
     throw new TranscriptionError("provider-unavailable");
@@ -414,6 +430,162 @@ async function assertPrivateEndpoint(
   if (signal.aborted) throw new TranscriptionError("timeout");
   if (addresses.length === 0 || addresses.some((address) => !isPrivateAddress(address)))
     throw new TranscriptionError("configuration");
+  return normalizeHostname(addresses[0]!);
+}
+
+export async function requestPinnedEndpoint(
+  endpoint: string,
+  address: string,
+  init: RequestInit,
+): Promise<Response> {
+  const url = new URL(endpoint);
+  const normalizedAddress = normalizeHostname(address);
+  if (
+    (url.protocol !== "http:" && url.protocol !== "https:") ||
+    !isPrivateAddress(normalizedAddress)
+  )
+    throw new TranscriptionError("configuration");
+  const body = await encodeMultipartForm(init.body);
+  const originalHostname = normalizeHostname(url.hostname);
+  const host = formatHostHeader(originalHostname, url.port, url.protocol);
+  const headers = new Headers(init.headers);
+  if (body.contentType) headers.set("content-type", body.contentType);
+  if (body.bytes.length > 0) headers.set("content-length", String(body.bytes.length));
+  headers.set("host", host);
+  const requestHeaders: Record<string, string> = {};
+  headers.forEach((value, name) => {
+    requestHeaders[name] = value;
+  });
+  const requestOptions = {
+    protocol: url.protocol,
+    hostname: normalizedAddress,
+    family: isIP(normalizedAddress),
+    port: url.port || undefined,
+    path: `${url.pathname}${url.search}`,
+    method: init.method ?? "GET",
+    headers: requestHeaders,
+    ...(url.protocol === "https:" ? { servername: originalHostname } : {}),
+  };
+  const requestFunction = url.protocol === "https:" ? httpsRequest : httpRequest;
+  const signal = init.signal;
+
+  return new Promise<Response>((resolveResponse, rejectResponse) => {
+    let responseStarted = false;
+    const onAbort = (): void => {
+      request.destroy();
+      if (!responseStarted) rejectResponse(new Error("request aborted"));
+    };
+    let request: ReturnType<typeof httpRequest>;
+    try {
+      request = requestFunction(requestOptions, (response) => {
+        responseStarted = true;
+        resolveResponse(
+          new Response(
+            createResponseBody(response, () => signal?.removeEventListener("abort", onAbort)),
+            {
+              status: response.statusCode ?? 502,
+              headers: responseHeaders(response),
+            },
+          ),
+        );
+      });
+    } catch (error) {
+      rejectResponse(error);
+      return;
+    }
+    request.once("error", (error) => {
+      if (!responseStarted) rejectResponse(error);
+    });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+    request.end(body.bytes);
+  });
+}
+
+async function encodeMultipartForm(body: BodyInit | null | undefined): Promise<{
+  readonly bytes: Buffer;
+  readonly contentType?: string;
+}> {
+  if (body === null || body === undefined) return { bytes: Buffer.alloc(0) };
+  if (!(body instanceof FormData)) throw new Error("unsupported request body");
+  const boundary = `----EchoHoard-${randomUUID()}`;
+  const chunks: Buffer[] = [];
+  for (const [name, value] of body.entries()) {
+    chunks.push(Buffer.from(`--${boundary}\r\n`));
+    if (typeof value === "string") {
+      chunks.push(
+        Buffer.from(`Content-Disposition: form-data; name="${headerValue(name)}"\r\n\r\n`),
+      );
+      chunks.push(Buffer.from(value));
+    } else {
+      chunks.push(
+        Buffer.from(
+          `Content-Disposition: form-data; name="${headerValue(name)}"; filename="${headerValue(value.name)}"\r\nContent-Type: ${headerValue(value.type || "application/octet-stream")}\r\n\r\n`,
+        ),
+      );
+      chunks.push(Buffer.from(await value.arrayBuffer()));
+    }
+    chunks.push(Buffer.from("\r\n"));
+  }
+  chunks.push(Buffer.from(`--${boundary}--\r\n`));
+  return {
+    bytes: Buffer.concat(chunks),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
+
+function headerValue(value: string): string {
+  return value.replace(/[\r\n"]/gu, "_");
+}
+
+function formatHostHeader(hostname: string, port: string, protocol: string): string {
+  const host = isIP(hostname) === 6 ? `[${hostname}]` : hostname;
+  const defaultPort = protocol === "https:" ? "443" : "80";
+  return port && port !== defaultPort ? `${host}:${port}` : host;
+}
+
+function createResponseBody(
+  response: IncomingMessage,
+  onComplete: () => void,
+): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      response.on("data", (chunk: Buffer | string) => {
+        controller.enqueue(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      });
+      response.once("end", () => {
+        onComplete();
+        controller.close();
+      });
+      response.once("aborted", () => {
+        onComplete();
+        controller.error(new Error("response aborted"));
+      });
+      response.once("error", (error) => {
+        onComplete();
+        controller.error(error);
+      });
+    },
+    cancel() {
+      onComplete();
+      response.destroy();
+    },
+  });
+}
+
+function responseHeaders(response: IncomingMessage): Headers {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(response.headers)) {
+    if (Array.isArray(value)) {
+      for (const entry of value) headers.append(name, entry);
+    } else if (value !== undefined) {
+      headers.set(name, value);
+    }
+  }
+  return headers;
 }
 
 async function parseTranscriptionResponse(
@@ -560,7 +732,8 @@ async function readResponseText(
   const contentLengthBytes = contentLength === null ? null : Number(contentLength);
   if (
     contentLength !== null &&
-    (!Number.isSafeInteger(contentLengthBytes) ||
+    (contentLengthBytes === null ||
+      !Number.isSafeInteger(contentLengthBytes) ||
       contentLengthBytes < 0 ||
       contentLengthBytes > maxBytes)
   )
@@ -716,7 +889,7 @@ function isPrivateAddress(address: string): boolean {
   );
 }
 
-async function resolveEndpointAddresses(hostname: string): Promise<readonly string[]> {
+export async function resolveEndpointAddresses(hostname: string): Promise<readonly string[]> {
   const results = await dnsLookup(hostname, { all: true, verbatim: true });
   return results.map((result) => result.address);
 }
