@@ -12,6 +12,7 @@ import {
   type ReadPorts,
   type SearchResultRead,
   type TimelineRead,
+  type McpReadAccess,
 } from "../../application/reads";
 import type { ArchiveHealthRead } from "../../application/health-reads";
 
@@ -422,6 +423,7 @@ export function registerConversationReadTools(
             throw new InvalidReadRequestError("query and text cannot both be supplied");
           const result = await reads.search({
             archiveId,
+            mcpAccess: "allowed",
             ...pageArgs(validated),
             ...(validated.query !== undefined ? { query: validated.query } : {}),
             ...(validated.text !== undefined ? { query: validated.text } : {}),
@@ -457,6 +459,7 @@ export function registerConversationReadTools(
           const validated = getConversationInputSchema.parse(input);
           const result = await reads.listMessages({
             archiveId,
+            mcpAccess: "allowed",
             conversationId: validated.conversationId,
             ...pageArgs(validated),
           });
@@ -483,6 +486,7 @@ export function registerConversationReadTools(
           const validated = listConversationsInputSchema.parse(input);
           const result = await reads.listConversations({
             archiveId,
+            mcpAccess: "allowed",
             ...pageArgs(validated),
             ...(validated.search !== undefined ? { search: validated.search } : {}),
           });
@@ -510,6 +514,7 @@ export function registerConversationReadTools(
           const search = validated.query ?? validated.name!;
           const result = await reads.listPeople({
             archiveId,
+            mcpAccess: "allowed",
             ...pageArgs(validated),
             search,
           });
@@ -536,6 +541,7 @@ export function registerConversationReadTools(
           const validated = findMediaInputSchema.parse(input);
           const result = await reads.listMedia({
             archiveId,
+            mcpAccess: "allowed",
             ...pageArgs(validated),
             ...(validated.messageId ? { messageId: validated.messageId } : {}),
             ...(validated.attachmentId ? { attachmentId: validated.attachmentId } : {}),
@@ -565,6 +571,7 @@ export function registerConversationReadTools(
           validateDateRange(validated.from, validated.to);
           const result = await reads.listTimeline({
             archiveId,
+            mcpAccess: "allowed",
             ...pageArgs(validated),
             ...(validated.from ? { from: validated.from } : {}),
             ...(validated.to ? { to: validated.to } : {}),
@@ -578,7 +585,10 @@ export function registerConversationReadTools(
 }
 
 export interface McpHealthService {
-  getHealth(query: { readonly archiveId: string }): Promise<ArchiveHealthRead>;
+  getHealth(query: {
+    readonly archiveId: string;
+    readonly mcpAccess?: McpReadAccess;
+  }): Promise<ArchiveHealthRead>;
 }
 
 /** Register the non-conversation read tools. Health is injected as an
@@ -604,7 +614,7 @@ export function registerArchiveReadTools(
         try {
           archiveStatusInputSchema.parse(input);
           if (!health) throw new Error("Archive health is unavailable");
-          const result = await health.getHealth({ archiveId });
+          const result = await health.getHealth({ archiveId, mcpAccess: "allowed" });
           return resultForHealth(result, provenanceFor(archiveId));
         } catch (error) {
           throw safeToolError(error);

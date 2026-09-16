@@ -313,5 +313,16 @@ describe("archive read services", () => {
         uiMode: "locked",
         authorizedConversationIds: ["conversation-a"],
       });
+
+    await service.listMessages({
+      archiveId: "archive-a",
+      conversationId: "conversation-a",
+      mcpAccess: "allowed",
+    });
+    expect(received.messages).toMatchObject({
+      mcpAccess: "allowed",
+      uiMode: "ordinary",
+      authorizedConversationIds: [],
+    });
   });
 });

@@ -127,4 +127,55 @@ describe("private MCP Streamable HTTP transport", () => {
     expect(await crossArchiveProbe.text()).not.toContain("archive-b");
     await app.close();
   });
+
+  it("evicts deterministically at the strict session maximum and idle TTL", async () => {
+    const root = await mkdtemp(join(tmpdir(), "echohoard-mcp-"));
+    const secretFile = join(root, "credential");
+    await writeFile(secretFile, "sentinel-read-token\n", { mode: 0o600 });
+    let now = 1_000;
+    const app = new PrivateMcpServer({
+      authenticator: new McpCredentialAuthenticator(secretFile, principal),
+      reads,
+      maxSessions: 1,
+      sessionIdleTtlMs: 100,
+      now: () => now,
+    });
+
+    const first = await app.handleRequest(initialize("sentinel-read-token"));
+    const firstSessionId = first.headers.get(MCP_SESSION_HEADER)!;
+    expect(firstSessionId).toBeTruthy();
+
+    now += 25;
+    const active = await app.handleRequest(sessionRequest("sentinel-read-token", firstSessionId));
+    expect(active.status).toBe(200);
+
+    now += 25;
+    const second = await app.handleRequest(initialize("sentinel-read-token"));
+    const secondSessionId = second.headers.get(MCP_SESSION_HEADER)!;
+    expect(second.status).toBe(200);
+    expect(secondSessionId).not.toBe(firstSessionId);
+
+    const evictedByMaximum = await app.handleRequest(
+      initialize("sentinel-read-token", firstSessionId),
+    );
+    expect(evictedByMaximum.status).toBe(404);
+
+    now += 100;
+    const expired = await app.handleRequest(sessionRequest("sentinel-read-token", secondSessionId));
+    expect(expired.status).toBe(404);
+    await app.close();
+  });
 });
+
+function sessionRequest(credential: string, sessionId: string): Request {
+  return new Request("http://localhost/mcp", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${credential}`,
+      accept: "application/json, text/event-stream",
+      "content-type": "application/json",
+      [MCP_SESSION_HEADER]: sessionId,
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }),
+  });
+}

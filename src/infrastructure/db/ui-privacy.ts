@@ -1,9 +1,39 @@
 import { Prisma } from "@prisma/client";
-import type { UiReadMode } from "../../application/reads.js";
+import type { McpReadAccess, UiReadMode } from "../../application/reads.js";
 
 export interface UiPrivacyQueryInput {
   readonly uiMode: UiReadMode;
   readonly authorizedConversationIds: readonly string[];
+  readonly mcpAccess?: McpReadAccess;
+}
+
+export interface ConversationPrivacyQueryInput {
+  readonly uiMode: UiReadMode;
+  readonly authorizedConversationIds: readonly string[];
+  readonly mcpAccess?: McpReadAccess;
+}
+
+/** Select the independent policy used by the caller's disclosure surface. */
+export function conversationPrivacyPredicate(
+  alias: string,
+  input: ConversationPrivacyQueryInput,
+): Prisma.Sql {
+  return input.mcpAccess === "allowed"
+    ? mcpConversationPredicate(alias)
+    : uiConversationPredicate(alias, input);
+}
+
+/** MCP disclosure ignores UI hidden/locked state and denies a group when any
+ * source policy in that presentation group explicitly denies MCP access. */
+export function mcpConversationPredicate(alias: string): Prisma.Sql {
+  const groupId = presentationConversationId(alias);
+  return Prisma.sql`NOT EXISTS (
+    SELECT 1
+    FROM "Conversation" policy
+    WHERE policy."archiveId" = ${Prisma.raw(alias)}."archiveId"
+      AND ${policyBelongsToGroup("policy", groupId)}
+      AND policy."mcpAccess" = 'denied'
+  )`;
 }
 
 /** Grouping is a normal UI operation: ordinary groups are selectable, hidden

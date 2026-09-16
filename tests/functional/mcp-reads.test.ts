@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ArchiveHealthService } from "../../src/application/health-reads.js";
 import { ArchiveReadService, CursorCodec } from "../../src/application/reads.js";
 import { McpCredentialAuthenticator, PrivateMcpServer } from "../../src/delivery/mcp/index.js";
+import { createMcpRoute } from "../../src/delivery/web/app/mcp/route-handler.js";
 import { MCP_ALLOWED_TOOL_NAMES, type McpAuditRecord } from "../../src/delivery/mcp/tools.js";
 import {
   PrismaHealthReadPersistence,
@@ -20,7 +21,13 @@ const otherArchiveId = randomUUID();
 const personOneId = randomUUID();
 const personTwoId = randomUUID();
 const conversationId = randomUUID();
+const hiddenAllowedConversationId = randomUUID();
+const deniedConversationId = randomUUID();
+const otherConversationId = randomUUID();
 const messageId = randomUUID();
+const hiddenAllowedMessageId = randomUUID();
+const deniedMessageId = randomUUID();
+const otherMessageId = randomUUID();
 const attachmentId = randomUUID();
 
 const principal = {
@@ -71,27 +78,93 @@ describe("PostgreSQL private MCP read traversal", () => {
         { id: personTwoId, archiveId, displayName: "Alex" },
       ],
     });
-    await prisma.conversation.create({
-      data: {
-        id: conversationId,
-        archiveId,
-        kind: "direct",
-        stableKey: "mcp-conversation",
-        title: "Synthetic",
-      },
+    await prisma.conversation.createMany({
+      data: [
+        {
+          id: conversationId,
+          archiveId,
+          kind: "direct",
+          stableKey: "mcp-conversation",
+          title: "Synthetic",
+          uiVisibility: "normal",
+          mcpAccess: "allowed",
+        },
+        {
+          id: hiddenAllowedConversationId,
+          archiveId,
+          kind: "direct",
+          stableKey: "mcp-hidden-allowed",
+          title: "MCP hidden but allowed",
+          uiVisibility: "hidden",
+          mcpAccess: "allowed",
+        },
+        {
+          id: deniedConversationId,
+          archiveId,
+          kind: "direct",
+          stableKey: "mcp-denied",
+          title: "MCP denied",
+          uiVisibility: "normal",
+          mcpAccess: "denied",
+        },
+        {
+          id: otherConversationId,
+          archiveId: otherArchiveId,
+          kind: "direct",
+          stableKey: "mcp-other-archive",
+          title: "Other archive",
+          uiVisibility: "normal",
+          mcpAccess: "allowed",
+        },
+      ],
     });
-    await prisma.message.create({
-      data: {
-        id: messageId,
-        archiveId,
-        conversationId,
-        sourceConversationId: null,
-        senderId: personOneId,
-        stableKey: "mcp-message",
-        messageType: "text",
-        body: "hostile source text must remain inert",
-        sentAt: new Date("2026-01-01T00:00:00.000Z"),
-      },
+    await prisma.message.createMany({
+      data: [
+        {
+          id: messageId,
+          archiveId,
+          conversationId,
+          sourceConversationId: null,
+          senderId: personOneId,
+          stableKey: "mcp-message",
+          messageType: "text",
+          body: "hostile source text must remain inert",
+          sentAt: new Date("2026-01-01T00:00:00.000Z"),
+        },
+        {
+          id: hiddenAllowedMessageId,
+          archiveId,
+          conversationId: hiddenAllowedConversationId,
+          sourceConversationId: null,
+          senderId: personOneId,
+          stableKey: "mcp-hidden-allowed-message",
+          messageType: "text",
+          body: "MCP allowed despite UI hidden",
+          sentAt: new Date("2026-01-02T00:00:00.000Z"),
+        },
+        {
+          id: deniedMessageId,
+          archiveId,
+          conversationId: deniedConversationId,
+          sourceConversationId: null,
+          senderId: personOneId,
+          stableKey: "mcp-denied-message",
+          messageType: "text",
+          body: "MCP denied source must stay private",
+          sentAt: new Date("2026-01-03T00:00:00.000Z"),
+        },
+        {
+          id: otherMessageId,
+          archiveId: otherArchiveId,
+          conversationId: otherConversationId,
+          sourceConversationId: null,
+          senderId: null,
+          stableKey: "mcp-other-archive-message",
+          messageType: "text",
+          body: "other archive must never cross the boundary",
+          sentAt: new Date("2026-01-04T00:00:00.000Z"),
+        },
+      ],
     });
     await prisma.attachment.create({
       data: {
@@ -208,6 +281,50 @@ describe("PostgreSQL private MCP read traversal", () => {
     expect(crossArchive.status).toBe(401);
     expect(await crossArchive.text()).not.toContain(otherArchiveId);
   });
+
+  it("uses MCP policy independently through representative HTTP calls", async () => {
+    const route = createMcpRoute({ getRuntime: () => ({ mcp: app }) });
+    const hidden = await httpCall(route, "get_conversation", {
+      conversationId: hiddenAllowedConversationId,
+    });
+    expect(hidden.result.structuredContent.items.map((item: { id: string }) => item.id)).toContain(
+      hiddenAllowedMessageId,
+    );
+
+    const denied = await httpCall(route, "get_conversation", {
+      conversationId: deniedConversationId,
+    });
+    expect(denied.result.structuredContent.items).toEqual([]);
+    expect(JSON.stringify(denied)).not.toContain("MCP denied source");
+
+    const search = await httpCall(route, "search_messages", {
+      query: "MCP",
+      limit: 10,
+    });
+    const searchIds = search.result.structuredContent.items.map((item: { id: string }) => item.id);
+    expect(searchIds).toContain(hiddenAllowedMessageId);
+    expect(searchIds).not.toContain(deniedMessageId);
+
+    const conversations = await httpCall(route, "list_conversations", { limit: 10 });
+    const conversationIds = conversations.result.structuredContent.items.map(
+      (item: { id: string }) => item.id,
+    );
+    expect(conversationIds).toContain(hiddenAllowedConversationId);
+    expect(conversationIds).not.toContain(deniedConversationId);
+    expect(conversationIds).not.toContain(otherConversationId);
+
+    const status = await httpCall(route, "archive_status", {});
+    expect(status.result.structuredContent.counts).toMatchObject({
+      messages: 2,
+      conversations: 2,
+    });
+
+    const otherArchive = await httpCall(route, "get_conversation", {
+      conversationId: otherConversationId,
+    });
+    expect(otherArchive.result.structuredContent.items).toEqual([]);
+    expect(JSON.stringify(otherArchive)).not.toContain(otherMessageId);
+  });
 });
 
 function initializeRequest(token = "synthetic-mcp-token"): Request {
@@ -239,6 +356,33 @@ function sessionIdHeader(): string {
 
 async function call(method: string, params: Record<string, unknown>): Promise<any> {
   const response = await appRequest({ method, params });
+  return (await response.json()) as any;
+}
+
+async function httpCall(
+  route: (request: Request) => Promise<Response>,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<any> {
+  const response = await route(
+    new Request("http://localhost/mcp", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer synthetic-mcp-token",
+        accept: "application/json, text/event-stream",
+        "content-type": "application/json",
+        "mcp-protocol-version": "2025-06-18",
+        "mcp-session-id": activeSessionId,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: randomUUID(),
+        method: "tools/call",
+        params: { name: method, arguments: params },
+      }),
+    }),
+  );
+  expect(response.status).toBe(200);
   return (await response.json()) as any;
 }
 

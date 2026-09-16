@@ -7,6 +7,7 @@ import {
   type HealthState,
   type FreshnessState,
 } from "../domain/health";
+import type { McpReadAccess } from "./reads.js";
 
 /** The largest job history exposed by a health response. Health is a bounded
  * read and must not become an unbounded import-log endpoint. */
@@ -14,6 +15,7 @@ export const MAX_HEALTH_JOBS = 20;
 
 export interface HealthReadQuery {
   readonly archiveId: string;
+  readonly mcpAccess?: McpReadAccess;
 }
 
 export type HealthSnapshotLifecycle = "completed" | "failed" | "in-progress" | "discovered";
@@ -58,6 +60,7 @@ export interface HealthReadPersistencePort {
   getHealthEvidence(input: {
     readonly archiveId: string;
     readonly jobLimit: number;
+    readonly mcpAccess?: McpReadAccess;
   }): Promise<HealthPersistenceEvidence>;
 }
 
@@ -139,6 +142,7 @@ export class ArchiveHealthService {
     const evidence = await this.persistence.getHealthEvidence({
       archiveId: query.archiveId,
       jobLimit: this.maxJobs,
+      ...(query.mcpAccess ? { mcpAccess: query.mcpAccess } : {}),
     });
     const jobs = evidence.jobs.slice(0, this.maxJobs).map((job) => toJobRead(job, this.now()));
     const latestJob = jobs[0];

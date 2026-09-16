@@ -24,6 +24,8 @@ export const MCP_SERVER_VERSION = "0.1.0";
 export const MCP_SESSION_HEADER = "mcp-session-id";
 export const MCP_MAX_CREDENTIAL_BYTES = 4096;
 export const MCP_MAX_REQUEST_BYTES = MCP_MAX_PAYLOAD_BYTES;
+export const MCP_MAX_SESSIONS = 100;
+export const MCP_SESSION_IDLE_TTL_MS = 30 * 60 * 1_000;
 
 export type McpPrincipal = Readonly<ArchivePrincipal>;
 
@@ -103,12 +105,19 @@ export interface McpServerCompositionOptions {
   readonly health?: McpHealthService;
   /** Optional content-free audit sink. It never receives tool arguments/results. */
   readonly audit?: McpAuditSink;
+  /** Hard cap for in-memory Streamable HTTP sessions. */
+  readonly maxSessions?: number;
+  /** Idle lifetime for a session before it is evicted. */
+  readonly sessionIdleTtlMs?: number;
+  /** Injectable clock for deterministic expiry tests. */
+  readonly now?: () => number;
 }
 
 type McpSession = {
   readonly principal: McpPrincipal;
   readonly server: McpServerType;
   readonly transport: WebStandardStreamableHTTPServerTransport;
+  lastActivityAt: number;
 };
 
 /**
@@ -118,8 +127,21 @@ type McpSession = {
  */
 export class PrivateMcpServer {
   private readonly sessions = new Map<string, McpSession>();
+  private readonly maxSessions: number;
+  private readonly sessionIdleTtlMs: number;
+  private readonly now: () => number;
 
-  public constructor(private readonly options: McpServerCompositionOptions) {}
+  public constructor(private readonly options: McpServerCompositionOptions) {
+    this.maxSessions = boundedPositiveInteger(
+      options.maxSessions ?? MCP_MAX_SESSIONS,
+      MCP_MAX_SESSIONS,
+    );
+    this.sessionIdleTtlMs = boundedPositiveInteger(
+      options.sessionIdleTtlMs ?? MCP_SESSION_IDLE_TTL_MS,
+      MCP_SESSION_IDLE_TTL_MS,
+    );
+    this.now = options.now ?? Date.now;
+  }
 
   public async handleRequest(request: Request, requestedArchiveId?: string): Promise<Response> {
     let principal: McpPrincipal;
@@ -136,10 +158,13 @@ export class PrivateMcpServer {
       }
     }
 
+    const now = this.now();
+    await this.evictIdleSessions(now);
     const sessionId = request.headers.get(MCP_SESSION_HEADER);
     if (sessionId) {
       const session = this.sessions.get(sessionId);
       if (!session || session.principal.archiveId !== principal.archiveId) return notFound();
+      session.lastActivityAt = now;
       return session.transport.handleRequest(request);
     }
 
@@ -159,8 +184,15 @@ export class PrivateMcpServer {
     });
     await server.connect(transport);
     const response = await transport.handleRequest(request);
-    if (transport.sessionId)
-      this.sessions.set(transport.sessionId, { principal, server, transport });
+    if (transport.sessionId) {
+      await this.ensureSessionCapacity(now);
+      this.sessions.set(transport.sessionId, {
+        principal,
+        server,
+        transport,
+        lastActivityAt: now,
+      });
+    }
     return response;
   }
 
@@ -172,6 +204,39 @@ export class PrivateMcpServer {
       }),
     );
     this.sessions.clear();
+  }
+
+  private async evictIdleSessions(now: number): Promise<void> {
+    for (const [sessionId, session] of this.sessions) {
+      if (now - session.lastActivityAt >= this.sessionIdleTtlMs)
+        await this.closeSession(sessionId, session);
+    }
+  }
+
+  private async ensureSessionCapacity(now: number): Promise<void> {
+    await this.evictIdleSessions(now);
+    while (this.sessions.size >= this.maxSessions) {
+      const oldest = [...this.sessions.entries()].sort(
+        ([leftId, left], [rightId, right]) =>
+          left.lastActivityAt - right.lastActivityAt || leftId.localeCompare(rightId),
+      )[0];
+      if (!oldest) break;
+      await this.closeSession(oldest[0], oldest[1]);
+    }
+  }
+
+  private async closeSession(sessionId: string, session: McpSession): Promise<void> {
+    this.sessions.delete(sessionId);
+    try {
+      await session.transport.close();
+    } catch {
+      // Eviction is best-effort cleanup; the bounded map remains authoritative.
+    }
+    try {
+      await session.server.close();
+    } catch {
+      // The SDK may already have closed the server through the transport.
+    }
   }
 }
 
@@ -217,6 +282,12 @@ function isPrincipal(value: McpPrincipal): boolean {
       typeof value.issuer === "string" &&
       value.issuer.trim(),
   );
+}
+
+function boundedPositiveInteger(value: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum)
+    throw new Error("invalid MCP session bound");
+  return value;
 }
 
 function unauthorized(): Response {

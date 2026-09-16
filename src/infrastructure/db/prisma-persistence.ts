@@ -50,7 +50,7 @@ import {
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
 import { PrismaTextSnapshotImporter } from "./text-import";
 import { createHash } from "node:crypto";
-import { uiConversationPredicate } from "./ui-privacy";
+import { conversationPrivacyPredicate, mcpConversationPredicate } from "./ui-privacy";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -696,7 +696,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const conditions = [
       Prisma.sql`message."archiveId" = ${input.archiveId}::uuid`,
       Prisma.sql`message."materialized" = true`,
-      uiConversationPredicate("conversation", input),
+      conversationPrivacyPredicate("conversation", input),
     ];
     if (input.query.trim())
       conditions.push(
@@ -861,7 +861,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
        AND message."materialized" = true
       WHERE c."archiveId" = ${input.archiveId}::uuid
         AND c."materialized" = true
-        AND ${uiConversationPredicate("c", input)}
+         AND ${conversationPrivacyPredicate("c", input)}
         ${search}
         ${cursor}
       GROUP BY c.id, c."ownerTitle", c.title, c."createdAt"
@@ -917,7 +917,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
              AND visible_conversation.id = visible_participant."conversationId"
             WHERE visible_participant."archiveId" = p."archiveId"
               AND visible_participant."personId" = p.id
-              AND ${uiConversationPredicate("visible_conversation", input)}
+               AND ${conversationPrivacyPredicate("visible_conversation", input)}
           )
         )
         ${search}
@@ -960,7 +960,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
           AND m."materialized" = true
            AND (m."conversationId"::text = ${input.conversationId}
              OR sc."unifiedConversationId"::text = ${input.conversationId})
-           AND ${uiConversationPredicate("conversation", input)}
+            AND ${conversationPrivacyPredicate("conversation", input)}
         ${afterPredicate}
         ORDER BY COALESCE(m."sentAt", m."createdAt")
           ${input.direction === "backward" ? Prisma.sql`DESC` : Prisma.sql`ASC`},
@@ -1146,7 +1146,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       Prisma.sql`ma."archiveId" = ${input.archiveId}::uuid`,
       Prisma.sql`ma."materialized" = true`,
       Prisma.sql`message."materialized" = true`,
-      uiConversationPredicate("conversation", input),
+      conversationPrivacyPredicate("conversation", input),
     ];
     if (input.messageId) filters.push(Prisma.sql`ma."messageId"::text = ${input.messageId}`);
     if (input.attachmentId)
@@ -1256,7 +1256,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
            ON message_conversation.id = m."conversationId"
           AND message_conversation."archiveId" = m."archiveId"
          WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
-           AND ${uiConversationPredicate("message_conversation", input)}
+            AND ${conversationPrivacyPredicate("message_conversation", input)}
          UNION ALL
          SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id,
                 ma.id AS cursor_id, 'media'::text AS kind,
@@ -1268,7 +1268,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
            ON media_conversation.id = media_message."conversationId"
           AND media_conversation."archiveId" = media_message."archiveId"
          WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
-           AND ${uiConversationPredicate("media_conversation", input)}
+            AND ${conversationPrivacyPredicate("media_conversation", input)}
       )
        SELECT events.id, events.kind, events.cursor_id, events.occurred_at
       FROM events
@@ -1297,6 +1297,7 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
   public async getHealthEvidence(input: {
     readonly archiveId: string;
     readonly jobLimit: number;
+    readonly mcpAccess?: "allowed";
   }): Promise<HealthPersistenceEvidence> {
     const snapshotDelegate = this.prisma.snapshot as unknown as {
       findMany(args: unknown): Promise<unknown>;
@@ -1304,16 +1305,8 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
     const jobDelegate = this.prisma.importJob as unknown as {
       findMany(args: unknown): Promise<unknown>;
     };
-    const messageDelegate = this.prisma.message as unknown as {
-      findMany(args: unknown): Promise<unknown>;
-      count(args: unknown): Promise<number>;
-    };
-    const conversationDelegate = this.prisma.conversation as unknown as {
-      count(args: unknown): Promise<number>;
-    };
-    const personDelegate = this.prisma.person as unknown as {
-      count(args: unknown): Promise<number>;
-    };
+    const mcpPolicy =
+      input.mcpAccess === "allowed" ? mcpConversationPredicate("conversation") : Prisma.sql`TRUE`;
 
     const [
       discoveredRows,
@@ -1338,12 +1331,21 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
         take: 1,
         select: { id: true, lifecycle: true, capturedAt: true, completedAt: true },
       }),
-      messageDelegate.findMany({
-        where: { archiveId: input.archiveId, sentAt: { not: null } },
-        orderBy: [{ sentAt: "desc" }, { id: "desc" }],
-        take: 1,
-        select: { sentAt: true },
-      }),
+      this.prisma.$queryRaw<Array<{ sentAt: Date | null }>>(Prisma.sql`
+        SELECT message."sentAt" AS "sentAt"
+        FROM "Message" message
+        LEFT JOIN "SourceConversation" source
+          ON source.id = message."sourceConversationId"
+         AND source."archiveId" = message."archiveId"
+        JOIN "Conversation" conversation
+          ON conversation.id = COALESCE(source."unifiedConversationId", message."conversationId")
+         AND conversation."archiveId" = message."archiveId"
+        WHERE message."archiveId" = ${input.archiveId}::uuid
+          AND message."sentAt" IS NOT NULL
+          AND ${mcpPolicy}
+        ORDER BY message."sentAt" DESC, message.id DESC
+        LIMIT 1
+      `),
       jobDelegate.findMany({
         where: { archiveId: input.archiveId },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -1357,25 +1359,79 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
           errorClass: true,
         },
       }),
-      messageDelegate.count({ where: { archiveId: input.archiveId, materialized: true } }),
-      conversationDelegate.count({ where: { archiveId: input.archiveId, materialized: true } }),
-      personDelegate.count({ where: { archiveId: input.archiveId } }),
+      this.prisma.$queryRaw<Array<{ count: bigint | number }>>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS count
+        FROM "Message" message
+        LEFT JOIN "SourceConversation" source
+          ON source.id = message."sourceConversationId"
+         AND source."archiveId" = message."archiveId"
+        JOIN "Conversation" conversation
+          ON conversation.id = COALESCE(source."unifiedConversationId", message."conversationId")
+         AND conversation."archiveId" = message."archiveId"
+        WHERE message."archiveId" = ${input.archiveId}::uuid
+          AND message."materialized" = true
+          AND ${mcpPolicy}
+      `),
+      this.prisma.$queryRaw<Array<{ count: bigint | number }>>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS count
+        FROM "Conversation" conversation
+        WHERE conversation."archiveId" = ${input.archiveId}::uuid
+          AND conversation."materialized" = true
+          AND ${mcpPolicy}
+      `),
+      this.prisma.$queryRaw<Array<{ count: bigint | number }>>(Prisma.sql`
+        SELECT COUNT(*)::bigint AS count
+        FROM "Person" person
+        WHERE person."archiveId" = ${input.archiveId}::uuid
+          AND (
+            NOT EXISTS (
+              SELECT 1 FROM "ConversationParticipant" any_participant
+              WHERE any_participant."archiveId" = person."archiveId"
+                AND any_participant."personId" = person.id
+            )
+            OR EXISTS (
+              SELECT 1
+              FROM "ConversationParticipant" participant
+              JOIN "Conversation" conversation
+                ON conversation."archiveId" = participant."archiveId"
+               AND conversation.id = participant."conversationId"
+              WHERE participant."archiveId" = person."archiveId"
+                AND participant."personId" = person.id
+                AND ${mcpPolicy}
+            )
+          )
+      `),
       this.prisma.$queryRaw<
         Array<{ availability: string; referenced: bigint | number }>
       >(Prisma.sql`
           SELECT a.availability, COUNT(DISTINCT ma."attachmentId")::bigint AS referenced
-          FROM "MessageAttachment" ma
-          JOIN "Attachment" a
+           FROM "MessageAttachment" ma
+           JOIN "Message" message
+             ON message."archiveId" = ma."archiveId" AND message.id = ma."messageId"
+           LEFT JOIN "SourceConversation" source
+             ON source.id = message."sourceConversationId"
+            AND source."archiveId" = message."archiveId"
+           JOIN "Conversation" conversation
+             ON conversation."archiveId" = message."archiveId"
+            AND conversation.id = COALESCE(source."unifiedConversationId", message."conversationId")
+           JOIN "Attachment" a
             ON a.id = ma."attachmentId" AND a."archiveId" = ma."archiveId"
-         WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
+          WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
+            AND ${mcpPolicy}
           GROUP BY a.availability
         `),
       this.prisma.$queryRaw<Array<{ type: string; count: bigint | number }>>(Prisma.sql`
           SELECT COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown') AS type,
                  COUNT(*)::bigint AS count
-          FROM "Message" m
-           WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
+           FROM "Message" m
+           LEFT JOIN "SourceConversation" source
+             ON source.id = m."sourceConversationId" AND source."archiveId" = m."archiveId"
+           JOIN "Conversation" conversation
+             ON conversation."archiveId" = m."archiveId"
+            AND conversation.id = COALESCE(source."unifiedConversationId", m."conversationId")
+            WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
              AND m."messageType" = 'unsupported'
+             AND ${mcpPolicy}
           GROUP BY COALESCE(m.metadata->>'unsupportedTypeCode', 'unknown')
           ORDER BY type ASC
         `),
@@ -1398,7 +1454,11 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
       latestCompletedSnapshot: completedSnapshots[0],
       latestMessageAt: messageResult[0]?.sentAt,
       jobs: asHealthJobs(jobs),
-      counts: { messages, conversations, people },
+      counts: {
+        messages: countValue(messages[0]?.count ?? 0),
+        conversations: countValue(conversations[0]?.count ?? 0),
+        people: countValue(people[0]?.count ?? 0),
+      },
       media,
       unsupportedTypes: unsupportedRows.map((row) => ({
         type: row.type,
@@ -1626,7 +1686,7 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
             AND snapshot.lifecycle = 'completed'
             AND job.status = 'completed'
         )
-        AND ${uiConversationPredicate("conversation", input)}
+         AND ${conversationPrivacyPredicate("conversation", input)}
         ${datePredicates(input)}
     ),
      finalized_people AS (

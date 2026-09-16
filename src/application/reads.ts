@@ -19,6 +19,8 @@ export interface UiReadAccess {
   /** Conversation ids for which the existing step-up grant was validated. */
   readonly authorizedConversationIds?: readonly string[];
 }
+/** Explicit MCP disclosure scope. MCP policy is independent from UI policy. */
+export type McpReadAccess = "allowed";
 
 export const DEFAULT_READ_LIMIT = 50;
 export const MAX_READ_LIMIT = 100;
@@ -40,6 +42,7 @@ export interface PageRequest {
   readonly cursor?: string;
   readonly direction?: ReadDirection;
   readonly uiAccess?: UiReadAccess;
+  readonly mcpAccess?: McpReadAccess;
 }
 
 export interface ValidatedPageRequest {
@@ -118,14 +121,21 @@ export function validatePageRequest(input: PageRequest): ValidatedPageRequest {
   };
 }
 
-function uiAccess(input: UiReadAccess | undefined): {
+function readAccess(input: PageRequest): {
   readonly uiMode: UiReadMode;
   readonly authorizedConversationIds: readonly string[];
+  readonly mcpAccess?: McpReadAccess;
 } {
-  const mode = input?.mode ?? "ordinary";
+  if (input.mcpAccess !== undefined) {
+    if (input.mcpAccess !== "allowed" || input.uiAccess !== undefined)
+      throw new InvalidReadRequestError("read access scope is invalid");
+    return { mcpAccess: "allowed", uiMode: "ordinary", authorizedConversationIds: [] };
+  }
+  const inputUiAccess = input.uiAccess;
+  const mode = inputUiAccess?.mode ?? "ordinary";
   if (mode !== "ordinary" && mode !== "hidden" && mode !== "locked")
     throw new InvalidReadRequestError("ui read mode is invalid");
-  const ids = input?.authorizedConversationIds ?? [];
+  const ids = inputUiAccess?.authorizedConversationIds ?? [];
   if (ids.some((id) => !id.trim()))
     throw new InvalidReadRequestError("conversation authorization is invalid");
   return { uiMode: mode, authorizedConversationIds: ids };
@@ -487,6 +497,7 @@ export interface ReadConversationPersistenceQuery {
   readonly search?: string;
   readonly uiMode: UiReadMode;
   readonly authorizedConversationIds: readonly string[];
+  readonly mcpAccess?: McpReadAccess;
 }
 export interface ReadPersonPersistenceQuery extends ReadConversationPersistenceQuery {}
 export interface ReadMessagePersistenceQuery extends ReadConversationPersistenceQuery {
@@ -520,6 +531,7 @@ export interface ReadSearchPersistenceQuery {
   readonly fuzzyText?: string;
   readonly uiMode: UiReadMode;
   readonly authorizedConversationIds: readonly string[];
+  readonly mcpAccess?: McpReadAccess;
 }
 export interface ConversationPersistenceRow {
   readonly id: string;
@@ -593,7 +605,7 @@ export class ArchiveReadService {
     query: ConversationListQuery,
   ): Promise<ReadPage<ConversationRead>> {
     const request = validatePageRequest(query);
-    const access = uiAccess(query.uiAccess);
+    const access = readAccess(query);
     const filterKey = readContextKey({ search: query.search ?? null, ...access });
     const position = request.cursor
       ? this.cursors.decode(request.cursor, request.archiveId, {
@@ -630,7 +642,7 @@ export class ArchiveReadService {
 
   public async listPeople(query: PersonListQuery): Promise<ReadPage<PersonRead>> {
     const request = validatePageRequest(query);
-    const access = uiAccess(query.uiAccess);
+    const access = readAccess(query);
     const filterKey = readContextKey({ search: query.search ?? null, ...access });
     const position = request.cursor
       ? this.cursors.decode(request.cursor, request.archiveId, {
@@ -673,7 +685,7 @@ export class ArchiveReadService {
 
   public async listMessages(query: MessageWindowQuery): Promise<ReadPage<MessageRead>> {
     const request = validatePageRequest(query);
-    const access = uiAccess(query.uiAccess);
+    const access = readAccess(query);
     if (!query.conversationId.trim())
       throw new InvalidReadRequestError("conversationId is required");
     const filterKey = readContextKey({ ...access });
@@ -724,7 +736,7 @@ export class ArchiveReadService {
 
   public async listMedia(query: MediaListQuery): Promise<ReadPage<MediaRead>> {
     const request = validatePageRequest(query);
-    const access = uiAccess(query.uiAccess);
+    const access = readAccess(query);
     const resourceId = query.messageId ?? query.attachmentId;
     const filterKey = readContextKey({
       messageId: query.messageId ?? null,
@@ -778,7 +790,7 @@ export class ArchiveReadService {
   }
   public async listTimeline(query: TimelineQuery): Promise<ReadPage<TimelineRead>> {
     const request = validatePageRequest(query);
-    const access = uiAccess(query.uiAccess);
+    const access = readAccess(query);
     const from = parseReadDate(query.from, "from");
     const to = parseReadDate(query.to, "to");
     if (from && to && from > to) throw new InvalidReadRequestError("from must be before to");
@@ -828,7 +840,7 @@ export class ArchiveReadService {
   }
   public async search(query: SearchQuery): Promise<ReadPage<SearchResultRead>> {
     const request = validatePageRequest(query);
-    const access = uiAccess(query.uiAccess);
+    const access = readAccess(query);
     if (query.query !== undefined && typeof query.query !== "string")
       throw new InvalidReadRequestError("query must be a string");
     const textQuery = query.query?.trim() ?? "";
