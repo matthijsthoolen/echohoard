@@ -4,6 +4,7 @@ import type {
   NormalizedDirection,
   WhatsAppAdapterVersion,
 } from "./contract.js";
+import { whatsappMessageKey } from "./identity.js";
 
 /** Version of the canonical fallback input. Changing it intentionally changes keys. */
 export const MESSAGE_FALLBACK_VERSION = "v1" as const;
@@ -53,14 +54,14 @@ export function deriveMessageIdentity(input: MessageIdentityInput): DerivedMessa
   const sourceMessageId = clean(input.sourceMessageId);
   if (sourceMessageId)
     return {
-      stableKey: `whatsapp:message:${input.adapterVersion}:source:${digest(sourceMessageId)}`,
+      stableKey: whatsappMessageKey(sourceMessageId),
       usedFallback: false,
       diagnostic: "source-id",
     };
   const stanzaId = clean(input.stanzaId);
   if (stanzaId)
     return {
-      stableKey: `whatsapp:message:${input.adapterVersion}:stanza:${digest(stanzaId)}`,
+      stableKey: `whatsapp:message:stanza:${digest(stanzaId)}`,
       usedFallback: false,
       diagnostic: "stanza-id",
     };
@@ -75,7 +76,7 @@ export function deriveMessageIdentity(input: MessageIdentityInput): DerivedMessa
     input.messageKind,
   ].join("\u001f");
   return {
-    stableKey: `whatsapp:message:${input.adapterVersion}:fallback:${MESSAGE_FALLBACK_VERSION}:${digest(canonical)}`,
+    stableKey: `whatsapp:message:fallback:${MESSAGE_FALLBACK_VERSION}:${digest(canonical)}`,
     usedFallback: true,
     fallbackVersion: MESSAGE_FALLBACK_VERSION,
     diagnostic: "fallback",

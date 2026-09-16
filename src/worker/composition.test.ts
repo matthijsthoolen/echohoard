@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ImportJobId } from "../application/echohoard.js";
 import type { DecryptJobRunner, JobStorePort } from "../application/intake.js";
-import { DecryptQueueLoop } from "./composition.js";
+import { DecryptQueueLoop, LiveEventNormalizationLoop } from "./composition.js";
 
 const jobId = "00000000-0000-0000-0000-000000000001" as ImportJobId;
 
@@ -63,5 +63,38 @@ describe("production decrypt queue composition", () => {
 
     expect(errors).toEqual(["worker queue iteration failed"]);
     expect(errors.join(" ")).not.toMatch(/secret-key|private\/source/);
+  });
+});
+
+describe("production live normalization composition", () => {
+  it("retries failed normalization without finalizing the receipt", async () => {
+    const normalize = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("synthetic adaptation failure"))
+      .mockResolvedValueOnce({ imported: 1, status: "normalized" });
+    let pending = true;
+    const normalizer = {
+      listPending: vi.fn(async () =>
+        pending ? [{ archiveId: "archive", ownedAccountId: "account", receiptId: "receipt" }] : [],
+      ),
+      normalize: vi.fn(
+        async (receipt: { archiveId: string; ownedAccountId: string; receiptId: string }) => {
+          await normalize(receipt);
+          pending = false;
+        },
+      ),
+    };
+    const errors: string[] = [];
+    const loop = new LiveEventNormalizationLoop(normalizer as never, 60_000, 1, (message) =>
+      errors.push(message),
+    );
+
+    await loop.start();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await loop.stop();
+
+    expect(normalizer.normalize).toHaveBeenCalledOnce();
+    expect(errors).toEqual(["live event normalization failed"]);
+    expect(pending).toBe(true);
   });
 });

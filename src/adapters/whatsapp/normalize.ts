@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   NormalizedConversationRecord,
   NormalizedIdentityRecord,
@@ -8,18 +7,22 @@ import type {
   WhatsAppAdapterVersion,
 } from "./contract.js";
 import type { WhatsAppSqliteFixture } from "./fixtures.js";
+import {
+  whatsappConversationKey,
+  whatsappIdentityKey,
+  whatsappPersonKey,
+  WHATSAPP_SOURCE_NAMESPACE,
+} from "./identity.js";
 
 type Row = Readonly<Record<string, boolean | number | string | null>>;
 
 const text = (value: unknown): string | undefined =>
   typeof value === "string" && value.length > 0 ? value : undefined;
 
-const identityKey = (value: string): string =>
-  `whatsapp:identity:${createHash("sha256").update(value, "utf8").digest("hex")}`;
-const personKey = (value: string): string => `whatsapp:person:${identityKey(value).slice(-64)}`;
-const conversationKey = (value: string): string =>
-  `whatsapp:conversation:${createHash("sha256").update(value, "utf8").digest("hex")}`;
-const source = (value: string) => ({ namespace: "whatsapp-android" as const, value });
+const identityKey = whatsappIdentityKey;
+const personKey = whatsappPersonKey;
+const conversationKey = whatsappConversationKey;
+const source = (value: string) => ({ namespace: WHATSAPP_SOURCE_NAMESPACE, value });
 
 /**
  * Read-only normalization of the two supported synthetic/source shapes.

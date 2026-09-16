@@ -37,6 +37,8 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         input.ownedAccountId ?? (accounts.length === 1 ? accounts[0].id : undefined);
       if (!ownedAccountId || !accounts.some((account) => account.id === ownedAccountId))
         throw new Error("Text snapshot import requires an account in the archive scope");
+      const scopedPersonKey = (stableKey: string): string => `${ownedAccountId}:${stableKey}`;
+      const scopedIdentityKind = (namespace: string): string => `${namespace}:${ownedAccountId}`;
       if (input.liveReceipt) {
         const sourceSha = createHash("sha256").update(input.liveReceipt.sourceKey).digest("hex");
         await tx.source.upsert({
@@ -98,11 +100,11 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             where: {
               archiveId_id: {
                 archiveId: input.archiveId,
-                id: stableUuid(input.archiveId, record.stableKey),
+                id: stableUuid(input.archiveId, scopedPersonKey(record.stableKey)),
               },
             },
             create: {
-              id: stableUuid(input.archiveId, record.stableKey),
+              id: stableUuid(input.archiveId, scopedPersonKey(record.stableKey)),
               archiveId: input.archiveId,
               displayName: record.displayName,
             },
@@ -119,7 +121,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             where: {
               archiveId_kind_value: {
                 archiveId: input.archiveId,
-                kind: record.source.namespace,
+                kind: scopedIdentityKind(record.source.namespace),
                 value: record.source.value,
               },
             },
@@ -129,15 +131,15 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             where: {
               archiveId_kind_value: {
                 archiveId: input.archiveId,
-                kind: record.source.namespace,
+                kind: scopedIdentityKind(record.source.namespace),
                 value: record.source.value,
               },
             },
             create: {
-              id: stableUuid(input.archiveId, record.stableKey),
+              id: stableUuid(input.archiveId, `${ownedAccountId}:${record.stableKey}`),
               archiveId: input.archiveId,
               personId,
-              kind: record.source.namespace,
+              kind: scopedIdentityKind(record.source.namespace),
               value: record.source.value,
               displayName: record.displayName,
               provenance: json({

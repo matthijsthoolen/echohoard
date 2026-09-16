@@ -7,6 +7,7 @@ import {
   PrismaDecryptJobStore,
   PrismaImportJobLeases,
 } from "../infrastructure/db/worker-persistence.js";
+import { PrismaLiveEventNormalizer } from "../infrastructure/db/prisma-persistence.js";
 import { PrismaSnapshotPath } from "../infrastructure/db/worker-snapshot-path.js";
 import { LocalJobWork } from "../infrastructure/files/index.js";
 import type { ClockPort } from "../application/echohoard.js";
@@ -75,18 +76,67 @@ export class DecryptQueueLoop {
   }
 }
 
+export class LiveEventNormalizationLoop {
+  private stopping = false;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private current = Promise.resolve();
+
+  public constructor(
+    private readonly normalizer: PrismaLiveEventNormalizer,
+    private readonly pollMilliseconds: number,
+    private readonly batchSize: number,
+    private readonly onError: WorkerErrorSink = () => undefined,
+  ) {}
+
+  public async start(): Promise<void> {
+    if (this.stopping) return;
+    this.current = this.pump();
+  }
+
+  public async stop(): Promise<void> {
+    this.stopping = true;
+    if (this.timer) clearTimeout(this.timer);
+    await this.current;
+  }
+
+  private async pump(): Promise<void> {
+    try {
+      const receipts = await this.normalizer.listPending(this.batchSize);
+      for (const receipt of receipts) {
+        if (this.stopping) return;
+        try {
+          await this.normalizer.normalize(receipt);
+        } catch {
+          // Pending receipts are intentionally left pending by the transaction.
+          this.onError("live event normalization failed");
+        }
+      }
+    } catch {
+      this.onError("live event normalization loop failed");
+    } finally {
+      if (!this.stopping)
+        this.timer = setTimeout(() => {
+          this.current = this.pump();
+        }, this.pollMilliseconds);
+    }
+  }
+}
+
 export class ProductionWorker {
   public constructor(
     private readonly prisma: PrismaClient,
     private readonly queue: DecryptQueueLoop,
+    private readonly liveQueue: LiveEventNormalizationLoop,
   ) {}
 
   public async start(): Promise<void> {
     await this.queue.start();
+    await this.liveQueue.start();
   }
 
   public async stop(): Promise<void> {
     await this.queue.stop();
+    await this.liveQueue.stop();
     await this.prisma.$disconnect();
   }
 }
@@ -97,6 +147,8 @@ export interface ProductionWorkerComposition {
   readonly runner: DecryptJobRunner;
   readonly jobs: PrismaDecryptJobStore;
   readonly clock: ClockPort;
+  readonly liveNormalizer: PrismaLiveEventNormalizer;
+  readonly liveQueue: LiveEventNormalizationLoop;
 }
 
 export function createProductionWorker(
@@ -113,6 +165,7 @@ export function createProductionWorker(
     sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   };
   const jobs = new PrismaDecryptJobStore(prisma);
+  const liveNormalizer = new PrismaLiveEventNormalizer(prisma);
   const runner = new DecryptJobRunner(
     jobs,
     new PrismaImportJobLeases(prisma),
@@ -140,5 +193,19 @@ export function createProductionWorker(
     settings.ECHOHOARD_WORKER_BATCH_SIZE,
     onError,
   );
-  return { worker: new ProductionWorker(prisma, queue), queue, runner, jobs, clock };
+  const liveQueue = new LiveEventNormalizationLoop(
+    liveNormalizer,
+    settings.ECHOHOARD_WORKER_POLL_MS,
+    settings.ECHOHOARD_WORKER_BATCH_SIZE,
+    onError,
+  );
+  return {
+    worker: new ProductionWorker(prisma, queue, liveQueue),
+    queue,
+    runner,
+    jobs,
+    clock,
+    liveNormalizer,
+    liveQueue,
+  };
 }

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   NormalizedDirection,
   NormalizedMessageKind,
@@ -13,6 +12,12 @@ import {
   MessageIdentityRegistry,
   type MessageIdentityInput,
 } from "./message-identity.js";
+import {
+  whatsappConversationKey,
+  whatsappIdentityKey,
+  whatsappRevisionKey,
+  WHATSAPP_SOURCE_NAMESPACE,
+} from "./identity.js";
 import type { WhatsAppSqliteFixture } from "./fixtures.js";
 
 type Row = Readonly<Record<string, unknown>>;
@@ -22,10 +27,9 @@ export interface MessageMappingOptions {
   readonly snapshotId?: string;
 }
 
-const source = (value: string) => ({ namespace: "whatsapp-android" as const, value });
-const digest = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
-const identityKey = (value: string): string => `whatsapp:identity:${digest(value)}`;
-const conversationKey = (value: string): string => `whatsapp:conversation:${digest(value)}`;
+const source = (value: string) => ({ namespace: WHATSAPP_SOURCE_NAMESPACE, value });
+const identityKey = whatsappIdentityKey;
+const conversationKey = whatsappConversationKey;
 
 /**
  * Normalize message rows without allowing source table vocabulary to escape
@@ -80,7 +84,7 @@ export function normalizeWhatsAppMessages(
     const stableKey =
       registration.kind === "accepted"
         ? registration.identity.stableKey
-        : `whatsapp:message:${version}:collision:${digest(JSON.stringify([row._id, timestamp, conversation]))}`;
+        : `whatsapp:message:collision:${whatsappMessageKey(JSON.stringify([timestamp, conversation]))}`;
     const body = bodyFor(row.text_data ?? row.data);
     const record: NormalizedMessageRecord = {
       kind: "message",
@@ -136,7 +140,7 @@ export function normalizeWhatsAppMessages(
     const body = bodyFor(row.text_data ?? row.data);
     const revision: NormalizedRevisionRecord = {
       kind: "revision",
-      stableKey: `whatsapp:revision:${digest(`${message.stableKey}\0${ordinal}`)}`,
+      stableKey: whatsappRevisionKey(message.stableKey, ordinal),
       messageKey: message.stableKey,
       revisionOrdinal: ordinal,
       ...(body.value !== undefined ? { body: body.value } : {}),

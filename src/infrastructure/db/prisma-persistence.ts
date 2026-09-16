@@ -48,6 +48,8 @@ import {
   type UpdateConversationPrivacyRequest,
 } from "../../application/conversation-privacy";
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
+import { parseWacliWebhookEvent, type WacliWebhookEvent } from "../../adapters/wacli/contract.js";
+import { normalizeWacliEvent } from "../../adapters/wacli/normalize.js";
 import { PrismaTextSnapshotImporter } from "./text-import";
 import { createHash } from "node:crypto";
 
@@ -210,13 +212,12 @@ export class PrismaLiveEventNormalizer {
 
   public constructor(
     private readonly prisma: PrismaClient,
-    private readonly parseEvent: (
-      payload: Uint8Array,
-      accountKey: string,
-    ) => unknown = parseGenericEvent,
-    private readonly normalizeEvent: (
-      event: unknown,
-    ) => readonly ImportRecord[] = normalizeGenericEvent,
+    private readonly parseEvent: (payload: Uint8Array, accountKey: string) => unknown = (
+      payload,
+      accountKey,
+    ) => parseWacliWebhookEvent(payload, accountKey),
+    private readonly normalizeEvent: (event: unknown) => readonly ImportRecord[] = (event) =>
+      normalizeWacliEvent(asWacliEvent(event)),
   ) {
     this.importer = new PrismaTextSnapshotImporter(prisma);
   }
@@ -242,6 +243,8 @@ export class PrismaLiveEventNormalizer {
       new TextEncoder().encode(JSON.stringify(receipt.payload)),
       receipt.ownedAccount.accountKey,
     );
+    const records = this.normalizeEvent(event);
+    if (records.length === 0) throw new Error("live event adaptation produced no observation");
     const sourceKey = `live:${receipt.ownedAccountId}`;
     const stable = (label: string): string => stableUuid(input.archiveId, `${sourceKey}:${label}`);
     return this.importer
@@ -251,49 +254,41 @@ export class PrismaLiveEventNormalizer {
         snapshotId: stable("snapshot"),
         importJobId: stable(`job:${receipt.receiptId}`),
         observedAt: receipt.observedAt,
-        records: this.normalizeEvent(event),
+        records,
         liveReceipt: { receiptId: receipt.receiptId, sourceId: stable("source"), sourceKey },
       })
       .then((result) => ({ ...result, status: "normalized" as const }));
   }
+
+  public async listPending(limit: number): Promise<
+    readonly {
+      readonly archiveId: string;
+      readonly ownedAccountId: string;
+      readonly receiptId: string;
+    }[]
+  > {
+    const rows = await this.prisma.liveEventInbox.findMany({
+      where: { status: "pending" },
+      orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
+      take: Math.max(1, Math.min(100, Math.trunc(limit))),
+      select: { archiveId: true, ownedAccountId: true, receiptId: true },
+    });
+    return rows;
+  }
+}
+
+function asWacliEvent(event: unknown): WacliWebhookEvent {
+  if (!event || typeof event !== "object" || Array.isArray(event))
+    throw new Error("live event adaptation produced an invalid event");
+  const kind = (event as { readonly kind?: unknown }).kind;
+  if (kind !== "message" && kind !== "receipt" && kind !== "chat_presence")
+    throw new Error("live event adaptation produced an unsupported event");
+  return event as WacliWebhookEvent;
 }
 
 function stableUuid(archiveId: string, key: string): string {
   const hex = createHash("sha256").update(`${archiveId}\0${key}`).digest("hex").slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
-}
-
-function parseGenericEvent(payload: Uint8Array): unknown {
-  return JSON.parse(new TextDecoder().decode(payload)) as unknown;
-}
-
-function normalizeGenericEvent(event: unknown): readonly ImportRecord[] {
-  if (!event || typeof event !== "object" || Array.isArray(event))
-    throw new Error("live event payload is invalid");
-  const value = event as Record<string, unknown>;
-  const chat = typeof value.Chat === "string" ? value.Chat : undefined;
-  const id = typeof value.ID === "string" ? value.ID : undefined;
-  if (!chat || !id) throw new Error("live event message identity is missing");
-  const text = typeof value.Text === "string" ? value.Text : undefined;
-  return [
-    {
-      kind: "conversation",
-      stableKey: `conversation:${chat}`,
-      source: { namespace: "whatsapp-chat", value: chat },
-      conversationKind: "direct",
-    },
-    {
-      kind: "message",
-      stableKey: `message:${chat}:${id}`,
-      source: { namespace: "whatsapp-message", value: id },
-      conversationKey: `conversation:${chat}`,
-      timestamp: typeof value.Timestamp === "string" ? value.Timestamp : null,
-      direction: value.FromMe === true ? "sent" : "received",
-      messageKind: "text",
-      ...(text === undefined ? {} : { body: text }),
-      bodyState: text === undefined ? "missing" : "present",
-    },
-  ];
 }
 
 export class PrismaLiveAccountHealthPersistence {
