@@ -259,6 +259,15 @@ describe("source and unified conversation persistence", () => {
     const merged = await service.merge(merge);
     expect(merged.idempotent).toBe(false);
     expect((await service.merge(merge)).idempotent).toBe(true);
+    const mergedState = await service.getState(archiveOneId, targetId);
+    expect(mergedState).toMatchObject({
+      version: 1,
+      mergeSourceIds: [sourceId],
+      mergeAuditId: merged.auditId,
+      sources: expect.arrayContaining([expect.objectContaining({ id: sourceId })]),
+    });
+    expect(mergedState.currentSourceIds).toEqual(expect.arrayContaining([targetId, sourceId]));
+    expect(mergedState.currentSourceIds).toHaveLength(2);
     expect((await prisma.message.findUnique({ where: { id: messageId } }))?.conversationId).toBe(
       sourceId,
     );
@@ -281,6 +290,11 @@ describe("source and unified conversation persistence", () => {
       (await prisma.sourceConversation.findUnique({ where: { id: sourceId } }))
         ?.unifiedConversationId,
     ).toBe(sourceId);
+    await expect(service.getState(archiveOneId, targetId)).resolves.toMatchObject({
+      version: 2,
+      currentSourceIds: [targetId],
+      mergeSourceIds: [],
+    });
     await expect(
       service.merge({ ...merge, expectedVersion: 0, idempotencyKey: `stale-${messageId}` }),
     ).rejects.toThrow("stale grouping version");

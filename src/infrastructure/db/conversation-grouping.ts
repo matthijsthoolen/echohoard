@@ -20,6 +20,51 @@ export class PrismaConversationGroupingPersistence implements ConversationGroupi
     return this.run(request, "unmerge");
   }
 
+  public async getState(archiveId: string, targetConversationId: string) {
+    const target = await this.prisma.conversation.findUnique({
+      where: { archiveId_id: { archiveId, id: targetConversationId } },
+      select: { id: true, groupingVersion: true },
+    });
+    if (!target) throw new Error("target conversation is not in the archive");
+    const sources = await this.prisma.sourceConversation.findMany({
+      where: { archiveId },
+      select: {
+        id: true,
+        unifiedConversationId: true,
+        sourceNamespace: true,
+        sourceConversationKey: true,
+        ownedAccount: { select: { displayLabel: true, accountKey: true } },
+      },
+      orderBy: [{ sourceConversationKey: "asc" }, { id: "asc" }],
+    });
+    const currentSourceIds = sources
+      .filter((source) => source.unifiedConversationId === target.id)
+      .map((source) => source.id)
+      .sort();
+    const latestMerge = await this.prisma.conversationMergeAudit.findFirst({
+      where: { archiveId, targetConversationId: target.id, action: "merge" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true, sourceConversationIds: true },
+    });
+    const mergeSourceIds = latestMerge ? asStringArray(latestMerge.sourceConversationIds) : [];
+    const activeMerge = mergeSourceIds.every((id) => currentSourceIds.includes(id));
+    return {
+      targetConversationId: target.id,
+      version: target.groupingVersion,
+      sources: sources.map((source) => ({
+        id: source.id,
+        title: source.sourceConversationKey,
+        accountLabel: source.ownedAccount.displayLabel ?? source.ownedAccount.accountKey,
+        sourceNamespace: source.sourceNamespace,
+        sourceConversationKey: source.sourceConversationKey,
+        unifiedConversationId: source.unifiedConversationId,
+      })),
+      currentSourceIds,
+      mergeSourceIds: activeMerge ? mergeSourceIds : [],
+      ...(activeMerge && latestMerge ? { mergeAuditId: latestMerge.id } : {}),
+    };
+  }
+
   private async run(
     request: ConversationGroupingRequest,
     action: "merge" | "unmerge",

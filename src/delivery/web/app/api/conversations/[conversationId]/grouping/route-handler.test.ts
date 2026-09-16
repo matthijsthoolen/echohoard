@@ -22,7 +22,11 @@ describe("conversation grouping route", () => {
       auditId: "audit",
       idempotent: false,
     }));
-    const persistence: ConversationGroupingPersistence = { merge, unmerge: vi.fn() };
+    const persistence: ConversationGroupingPersistence = {
+      merge,
+      unmerge: vi.fn(),
+      getState: vi.fn(),
+    };
     const route = createGroupingRoute({
       getRuntime: () => ({
         auth: { principalForRequest: async () => principal },
@@ -57,6 +61,7 @@ describe("conversation grouping route", () => {
         throw new Error("stale grouping version");
       }),
       unmerge: vi.fn(),
+      getState: vi.fn(),
     };
     const route = createGroupingRoute({
       getRuntime: () => ({
@@ -79,5 +84,45 @@ describe("conversation grouping route", () => {
     await expect(response.json()).resolves.toEqual({
       error: "Conversation changed; reload before retrying",
     });
+  });
+
+  it("re-reads durable grouping state for reload and conflict recovery", async () => {
+    const getState = vi.fn(async () => ({
+      targetConversationId: "target",
+      version: 3,
+      sources: [
+        {
+          id: "source-exact",
+          title: "chat-key",
+          accountLabel: "Account A",
+          sourceNamespace: "backup",
+          sourceConversationKey: "chat-key",
+          unifiedConversationId: "target",
+        },
+      ],
+      currentSourceIds: ["source-exact"],
+      mergeSourceIds: [],
+    }));
+    const persistence: ConversationGroupingPersistence = {
+      merge: vi.fn(),
+      unmerge: vi.fn(),
+      getState,
+    };
+    const route = createGroupingRoute({
+      getRuntime: () => ({
+        auth: { principalForRequest: async () => principal },
+        grouping: new ConversationGroupingService(persistence),
+      }),
+    });
+    const response = await route(
+      new Request("http://localhost/api/conversations/target/grouping"),
+      { params: { conversationId: "target" } },
+    );
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      version: 3,
+      sources: [{ id: "source-exact" }],
+    });
+    expect(getState).toHaveBeenCalledWith("archive-1", "target");
   });
 });

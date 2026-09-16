@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { MessageRead } from "../../application/reads.js";
 import {
   emptyTimeline,
+  compareMessages,
   fetchMessagePage,
   MAX_RETAINED_MESSAGES,
   mergeTimelinePage,
   parseMessagePage,
+  parseGroupingState,
   virtualRange,
 } from "./components/message-timeline";
 
@@ -114,5 +116,34 @@ describe("virtual message timeline", () => {
       items: [message("m4", "2026-01-04")],
       hasMore: false,
     });
+  });
+
+  it("keeps exact source IDs separate from unified conversation IDs", () => {
+    const state = parseGroupingState({
+      targetConversationId: "unified-id",
+      version: 2,
+      sources: [
+        {
+          id: "source-id",
+          title: "same-jid",
+          accountLabel: "Account A",
+          sourceNamespace: "backup",
+          sourceConversationKey: "same-jid",
+          unifiedConversationId: "unified-id",
+        },
+      ],
+      currentSourceIds: ["source-id"],
+      mergeSourceIds: ["source-id"],
+      mergeAuditId: "audit-id",
+    });
+    expect(state.targetConversationId).toBe("unified-id");
+    expect(state.sources[0]?.id).toBe("source-id");
+    expect(state.sources[0]?.id).not.toBe(state.sources[0]?.unifiedConversationId);
+  });
+
+  it("orders equal-timestamp messages deterministically by message ID", () => {
+    expect(compareMessages(message("b", "2026-01-01"), message("a", "2026-01-01"))).toBeGreaterThan(
+      0,
+    );
   });
 });

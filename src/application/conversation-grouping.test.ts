@@ -27,6 +27,7 @@ describe("ConversationGroupingService", () => {
         idempotent: false,
       }),
       unmerge: vi.fn(),
+      getState: vi.fn(),
     };
     await expect(
       new ConversationGroupingService(persistence).merge(request),
@@ -42,7 +43,11 @@ describe("ConversationGroupingService", () => {
     ["target selected as source", { sourceConversationIds: ["target"] }],
     ["duplicate source selection", { sourceConversationIds: ["source-a", "source-a"] }],
   ])("rejects %s before persistence", async (_label, change) => {
-    const persistence: ConversationGroupingPersistence = { merge: vi.fn(), unmerge: vi.fn() };
+    const persistence: ConversationGroupingPersistence = {
+      merge: vi.fn(),
+      unmerge: vi.fn(),
+      getState: vi.fn(),
+    };
     expect(() =>
       new ConversationGroupingService(persistence).merge({ ...request, ...change }),
     ).toThrow();
@@ -50,7 +55,11 @@ describe("ConversationGroupingService", () => {
   });
 
   it("requires the audit that makes unmerge reversible", async () => {
-    const persistence: ConversationGroupingPersistence = { merge: vi.fn(), unmerge: vi.fn() };
+    const persistence: ConversationGroupingPersistence = {
+      merge: vi.fn(),
+      unmerge: vi.fn(),
+      getState: vi.fn(),
+    };
     expect(() => new ConversationGroupingService(persistence).unmerge(request)).toThrow(
       "auditId is required",
     );

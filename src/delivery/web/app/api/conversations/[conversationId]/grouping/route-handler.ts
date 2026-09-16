@@ -21,7 +21,7 @@ type Body = {
 };
 
 export function createGroupingRoute({ getRuntime }: GroupingRouteDependencies) {
-  return async function POST(request: Request, context: Context): Promise<Response> {
+  return async function groupingRoute(request: Request, context: Context): Promise<Response> {
     const runtime = getRuntime();
     if (!runtime) return unauthorized();
     const principal = await runtime.auth.principalForRequest(request);
@@ -29,6 +29,15 @@ export function createGroupingRoute({ getRuntime }: GroupingRouteDependencies) {
     if (!runtime.grouping)
       return Response.json({ error: "Conversation grouping unavailable" }, { status: 503 });
     const { conversationId } = await context.params;
+    if (request.method === "GET") {
+      try {
+        const state = await runtime.grouping.getState(principal.archiveId, conversationId);
+        return Response.json(state, { headers: { "Cache-Control": "private, no-store" } });
+      } catch {
+        return Response.json({ error: "Grouping state unavailable" }, { status: 404 });
+      }
+    }
+    if (request.method !== "POST") return new Response(null, { status: 405 });
     const body = await readBody(request);
     if (
       !body ||

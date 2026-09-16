@@ -28,6 +28,25 @@ export interface ConversationGroupingResult {
 export interface ConversationGroupingPersistence {
   merge(request: ConversationGroupingRequest): Promise<ConversationGroupingResult>;
   unmerge(request: ConversationGroupingRequest): Promise<ConversationGroupingResult>;
+  getState(archiveId: string, targetConversationId: string): Promise<ConversationGroupingState>;
+}
+
+export interface GroupingSourceConversation {
+  readonly id: string;
+  readonly title: string;
+  readonly accountLabel: string;
+  readonly sourceNamespace: string;
+  readonly sourceConversationKey: string;
+  readonly unifiedConversationId: string;
+}
+
+export interface ConversationGroupingState {
+  readonly targetConversationId: string;
+  readonly version: number;
+  readonly sources: readonly GroupingSourceConversation[];
+  readonly currentSourceIds: readonly string[];
+  readonly mergeSourceIds: readonly string[];
+  readonly mergeAuditId?: string;
 }
 
 export class ConversationGroupingService {
@@ -41,6 +60,15 @@ export class ConversationGroupingService {
   public unmerge(request: ConversationGroupingRequest): Promise<ConversationGroupingResult> {
     validateRequest(request, true);
     return this.persistence.unmerge(request);
+  }
+
+  public getState(
+    archiveId: string,
+    targetConversationId: string,
+  ): Promise<ConversationGroupingState> {
+    if (!archiveId.trim() || !targetConversationId.trim())
+      throw new Error("conversation is required");
+    return this.persistence.getState(archiveId, targetConversationId);
   }
 }
 
