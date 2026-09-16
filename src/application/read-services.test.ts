@@ -19,8 +19,10 @@ const port = (rows: {
       .filter(
         (r) =>
           !q.after ||
-          r.displayName > q.after[0] ||
-          (r.displayName === q.after[0] && r.id > q.after[1]),
+          (r.displayName === undefined ? 1 : 0) > q.after[0] ||
+          ((r.displayName === undefined ? 1 : 0) === q.after[0] &&
+            ((r.displayName ?? null) > q.after[1] ||
+              ((r.displayName ?? null) === q.after[1] && r.id > q.after[2]))),
       )
       .slice(0, q.limit),
   listMessages: async (q) =>
@@ -40,9 +42,9 @@ const port = (rows: {
       .filter(
         (r) =>
           !q.after ||
-          r.score < q.after[0] ||
-          (r.score === q.after[0] &&
-            (r.sortSentAt > q.after[1] || (r.sortSentAt === q.after[1] && r.id > q.after[2]))),
+          r.score < Number(q.after[0]) ||
+          (r.score === Number(q.after[0]) &&
+            (r.sortSentAt > q.after[2] || (r.sortSentAt === q.after[2] && r.id > q.after[3]))),
       )
       .slice(0, q.limit),
 });
@@ -78,8 +80,11 @@ describe("archive read services", () => {
     const cursor = codec.encode({
       archiveId: "archive-a",
       direction: "forward",
+      readKind: "messages",
+      resourceId: "conversation-a",
       sort: "sentAt,id",
       values: ["2026-01-01", "m1"],
+      filterKey: "context",
     });
     await expect(
       new ArchiveReadService(port({}), codec).listPeople({ archiveId: "archive-a", cursor }),

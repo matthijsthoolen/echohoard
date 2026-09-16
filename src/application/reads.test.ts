@@ -36,17 +36,23 @@ describe("signed opaque cursors", () => {
   const input = {
     archiveId: "archive-a",
     direction: "backward" as const,
+    readKind: "messages" as const,
+    resourceId: "conversation-10",
     sort: "sentAt,id" as const,
     values: ["2026-01-01T00:00:00.000Z", "message-10"],
+    filterKey: "context-a",
   };
 
   it("round trips an opaque versioned cursor", () => {
     const cursor = codec.encode(input);
     expect(cursor).not.toContain("archive-a");
-    expect(codec.decode(cursor, "archive-a")).toEqual({
+    expect(codec.decode(cursor, "archive-a", input)).toEqual({
+      readKind: input.readKind,
+      resourceId: input.resourceId,
       sort: input.sort,
       values: input.values,
       direction: input.direction,
+      filterKey: input.filterKey,
     });
   });
 
@@ -76,8 +82,41 @@ describe("signed opaque cursors", () => {
 
   it("binds cursors to the complete filter key", () => {
     const cursor = codec.encode({ ...input, filterKey: '{"sourceAccountId":"account-a"}' });
-    expect(() => codec.decode(cursor, "archive-a", '{"sourceAccountId":"account-b"}')).toThrow(
-      InvalidCursorError,
-    );
+    expect(() =>
+      codec.decode(cursor, "archive-a", { ...input, filterKey: '{"sourceAccountId":"account-b"}' }),
+    ).toThrow(InvalidCursorError);
+  });
+
+  it("rejects replay across read kind, direction, resource, and UI context", () => {
+    const cursor = codec.encode(input);
+    const cases = [
+      { ...input, readKind: "people" as const },
+      { ...input, direction: "forward" as const },
+      { ...input, resourceId: "conversation-11" },
+      { ...input, filterKey: "context-hidden" },
+    ];
+    for (const expected of cases)
+      expect(() => codec.decode(cursor, "archive-a", expected)).toThrow(InvalidCursorError);
+  });
+
+  it("requires null and discriminator values in the tuple", () => {
+    expect(() =>
+      codec.encode({
+        ...input,
+        readKind: "people",
+        resourceId: undefined,
+        sort: "displayNameNull,displayName,id",
+        values: ["", "person-1"],
+      }),
+    ).toThrow(InvalidCursorError);
+    expect(() =>
+      codec.encode({
+        ...input,
+        readKind: "timeline",
+        resourceId: undefined,
+        sort: "occurredAt,kind,id",
+        values: ["2026-01-01T00:00:00.000Z", "message", "event-1"],
+      }),
+    ).not.toThrow();
   });
 });

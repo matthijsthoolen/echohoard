@@ -1,15 +1,16 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 /** Application-level read contracts. They deliberately contain no ORM or
  * delivery types, and every query is scoped to exactly one archive. */
 export type ReadArchiveId = string;
 export type ReadDirection = "forward" | "backward";
+export type ReadKind = "conversations" | "people" | "messages" | "media" | "timeline" | "search";
 export type ReadSort =
   | "createdAt,id"
   | "sentAt,id"
-  | "displayName,id"
-  | "occurredAt,id"
-  | "searchScore,sentAt,id";
+  | "displayNameNull,displayName,id"
+  | "occurredAt,kind,id"
+  | "searchScore,sentAtNull,sentAt,id";
 export type MessageDirection = "sent" | "received" | "unknown";
 export type SearchMediaType = "image" | "video" | "audio" | "document" | "other";
 export type UiReadMode = "ordinary" | "hidden" | "locked";
@@ -25,8 +26,11 @@ export const MAX_CURSOR_LENGTH = 2048;
 export const CURSOR_VERSION = 1;
 export const READ_ORDER = Object.freeze({
   conversations: "createdAt,id" as const,
-  people: "displayName,id" as const,
+  people: "displayNameNull,displayName,id" as const,
   messages: "sentAt,id" as const,
+  media: "createdAt,id" as const,
+  timeline: "occurredAt,kind,id" as const,
+  search: "searchScore,sentAtNull,sentAt,id" as const,
 });
 const DEFAULT_CURSOR_TTL = 24 * 60 * 60 * 1000;
 
@@ -52,10 +56,14 @@ export interface ReadPage<T> {
 }
 
 export interface CursorPosition {
+  readonly readKind: ReadKind;
+  readonly resourceId?: string;
   readonly sort: ReadSort;
-  readonly values: readonly (string | number)[];
-  readonly filterKey?: string;
+  readonly values: readonly CursorValue[];
+  readonly filterKey: string;
 }
+
+export type CursorValue = string | number | boolean | null;
 
 interface CursorPayload extends CursorPosition {
   readonly version: typeof CURSOR_VERSION;
@@ -63,7 +71,13 @@ interface CursorPayload extends CursorPosition {
   readonly direction: ReadDirection;
   readonly issuedAt: number;
   readonly expiresAt: number;
-  readonly filterKey?: string;
+}
+
+export interface CursorExpectation {
+  readonly readKind: ReadKind;
+  readonly direction: ReadDirection;
+  readonly resourceId?: string;
+  readonly filterKey: string;
 }
 
 export class InvalidReadRequestError extends Error {
@@ -131,14 +145,19 @@ export class CursorCodec {
   public encode(input: {
     readonly archiveId: ReadArchiveId;
     readonly direction: ReadDirection;
+    readonly readKind: ReadKind;
+    readonly resourceId?: string;
     readonly sort: ReadSort;
-    readonly values: readonly (string | number)[];
-    readonly filterKey?: string;
+    readonly values: readonly CursorValue[];
+    readonly filterKey: string;
   }): string {
     if (
       !input.archiveId.trim() ||
+      !isReadKind(input.readKind) ||
       input.values.length === 0 ||
       !isSort(input.sort) ||
+      !isCursorTuple(input.sort, input.values) ||
+      !input.filterKey ||
       (input.direction !== "forward" && input.direction !== "backward")
     )
       throw new InvalidCursorError();
@@ -147,11 +166,13 @@ export class CursorCodec {
       version: CURSOR_VERSION,
       archiveId: input.archiveId,
       direction: input.direction,
+      readKind: input.readKind,
       sort: input.sort,
       values: input.values,
       issuedAt,
       expiresAt: issuedAt + this.ttlMilliseconds,
-      ...(input.filterKey === undefined ? {} : { filterKey: input.filterKey }),
+      ...(input.resourceId === undefined ? {} : { resourceId: input.resourceId }),
+      filterKey: input.filterKey,
     };
     const body = base64url(JSON.stringify(payload));
     const cursor = `${body}.${this.sign(body)}`;
@@ -162,14 +183,14 @@ export class CursorCodec {
   public decode(
     cursor: string,
     archiveId: ReadArchiveId,
-    expectedFilterKey?: string,
+    expected?: CursorExpectation,
   ): CursorPosition & { direction: ReadDirection } {
     if (!cursor || cursor.length > MAX_CURSOR_LENGTH) throw new InvalidCursorError();
     const [body, signature, extra] = cursor.split(".");
     if (!body || !signature || extra) throw new InvalidCursorError();
-    const expected = this.sign(body);
+    const expectedSignature = this.sign(body);
     const actualBytes = Buffer.from(signature);
-    const expectedBytes = Buffer.from(expected);
+    const expectedBytes = Buffer.from(expectedSignature);
     if (actualBytes.length !== expectedBytes.length || !timingSafeEqual(actualBytes, expectedBytes))
       throw new InvalidCursorError();
     let payload: Partial<CursorPayload>;
@@ -182,10 +203,15 @@ export class CursorCodec {
     }
     if (
       payload.version !== CURSOR_VERSION ||
+      !isReadKind(payload.readKind) ||
       (payload.direction !== "forward" && payload.direction !== "backward") ||
       !isSort(payload.sort) ||
       !Array.isArray(payload.values) ||
       payload.values.length === 0 ||
+      !payload.values.every(isCursorValue) ||
+      !isCursorTuple(payload.sort, payload.values) ||
+      typeof payload.filterKey !== "string" ||
+      !payload.filterKey ||
       !Number.isSafeInteger(payload.issuedAt) ||
       typeof payload.expiresAt !== "number" ||
       !Number.isSafeInteger(payload.expiresAt) ||
@@ -193,13 +219,21 @@ export class CursorCodec {
     )
       throw new InvalidCursorError();
     if (payload.archiveId !== archiveId) throw new CursorScopeError();
-    if (expectedFilterKey !== undefined && payload.filterKey !== expectedFilterKey)
+    if (
+      expected &&
+      (payload.readKind !== expected.readKind ||
+        payload.direction !== expected.direction ||
+        payload.resourceId !== expected.resourceId ||
+        payload.filterKey !== expected.filterKey)
+    )
       throw new InvalidCursorError();
     return {
+      readKind: payload.readKind,
+      ...(payload.resourceId === undefined ? {} : { resourceId: payload.resourceId }),
       sort: payload.sort,
       values: payload.values,
       direction: payload.direction,
-      ...(payload.filterKey === undefined ? {} : { filterKey: payload.filterKey }),
+      filterKey: payload.filterKey,
     };
   }
 
@@ -208,27 +242,69 @@ export class CursorCodec {
   }
 }
 
+const isReadKind = (value: unknown): value is ReadKind =>
+  value === "conversations" ||
+  value === "people" ||
+  value === "messages" ||
+  value === "media" ||
+  value === "timeline" ||
+  value === "search";
+
 const isSort = (value: unknown): value is ReadSort =>
   value === "createdAt,id" ||
   value === "sentAt,id" ||
-  value === "displayName,id" ||
-  value === "occurredAt,id" ||
-  value === "searchScore,sentAt,id";
+  value === "displayNameNull,displayName,id" ||
+  value === "occurredAt,kind,id" ||
+  value === "searchScore,sentAtNull,sentAt,id";
+
+const isCursorValue = (value: unknown): value is CursorValue =>
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "boolean" ||
+  (typeof value === "number" && Number.isFinite(value));
+
+const isCursorTuple = (sort: ReadSort, values: readonly CursorValue[]): boolean => {
+  if (sort === "createdAt,id" || sort === "sentAt,id")
+    return values.length === 2 && typeof values[0] === "string" && typeof values[1] === "string";
+  if (sort === "displayNameNull,displayName,id")
+    return (
+      values.length === 3 &&
+      (values[0] === 0 || values[0] === 1) &&
+      ((values[0] === 0 && typeof values[1] === "string") ||
+        (values[0] === 1 && values[1] === null)) &&
+      typeof values[2] === "string"
+    );
+  if (sort === "occurredAt,kind,id")
+    return (
+      values.length === 3 &&
+      typeof values[0] === "string" &&
+      (values[1] === "message" || values[1] === "media") &&
+      typeof values[2] === "string"
+    );
+  return (
+    values.length === 4 &&
+    typeof values[0] === "string" &&
+    values[0].length > 0 &&
+    (values[1] === 0 || values[1] === 1) &&
+    ((values[1] === 0 && typeof values[2] === "string") ||
+      (values[1] === 1 && values[2] === null)) &&
+    typeof values[3] === "string"
+  );
+};
 
 const searchCursorValues = (
-  values: readonly (string | number)[],
-): readonly [number, string, string] => {
-  const [score, sortSentAt, id] = values;
-  if (
-    typeof score !== "number" ||
-    !Number.isFinite(score) ||
-    typeof sortSentAt !== "string" ||
-    !sortSentAt ||
-    typeof id !== "string" ||
-    !id
-  )
+  values: readonly CursorValue[],
+): readonly [string, 0 | 1, string | null, string] => {
+  const [score, sortSentAtNull, sortSentAt, id] = values;
+  if (typeof score !== "string" || !score || (sortSentAtNull !== 0 && sortSentAtNull !== 1))
     throw new InvalidCursorError();
-  return [score, sortSentAt, id];
+  if (typeof id !== "string" || !id) throw new InvalidCursorError();
+  if (sortSentAtNull === 1) {
+    if (sortSentAt !== null) throw new InvalidCursorError();
+    return [score, sortSentAtNull, null, id];
+  }
+  if (typeof sortSentAt !== "string" || !sortSentAt) throw new InvalidCursorError();
+  return [score, sortSentAtNull, sortSentAt, id];
 };
 
 const base64url = (value: string): string => Buffer.from(value, "utf8").toString("base64url");
@@ -334,7 +410,7 @@ export interface ConversationListQuery extends PageRequest {
   readonly search?: string;
 }
 export interface PersonListQuery extends PageRequest {
-  readonly sort?: "displayName,id";
+  readonly sort?: "displayNameNull,displayName,id";
   readonly search?: string;
 }
 export interface MessageWindowQuery extends PageRequest {
@@ -407,7 +483,7 @@ export interface ReadConversationPersistenceQuery {
   readonly archiveId: string;
   readonly limit: number;
   readonly direction: ReadDirection;
-  readonly after?: readonly (string | number)[];
+  readonly after?: readonly CursorValue[];
   readonly search?: string;
   readonly uiMode: UiReadMode;
   readonly authorizedConversationIds: readonly string[];
@@ -430,8 +506,8 @@ export interface ReadSearchPersistenceQuery {
   readonly query: string;
   readonly limit: number;
   readonly direction: ReadDirection;
-  /** [rank, sortable sent-at, message id] from the previous page. */
-  readonly after?: readonly (string | number)[];
+  /** [rank, sent-at null rank, sortable sent-at, message id] from the previous page. */
+  readonly after?: readonly CursorValue[];
   readonly conversationId?: string;
   readonly unifiedConversationId?: string;
   readonly personId?: string;
@@ -460,7 +536,11 @@ export interface PersonPersistenceRow {
 export interface SearchPersistenceRow {
   readonly id: string;
   readonly score: number;
-  /** A non-null sortable timestamp; messages without sentAt use a high sentinel. */
+  /** Exact PostgreSQL numeric representation used by the ordering cursor. */
+  readonly scoreKey: string;
+  /** Null rank is the second SQL ordering key and keeps missing sentAt rows last. */
+  readonly sortSentAtNull: 0 | 1;
+  /** The nullable timestamp used by the third SQL ordering key. */
   readonly sortSentAt: string;
   readonly conversationId?: string;
 }
@@ -485,6 +565,8 @@ export interface MessagePersistenceRow {
 export interface MediaPersistenceRow {
   readonly id: string;
   readonly messageId: string;
+  /** The unique MessageAttachment row used by pagination; id is the attachment handle. */
+  readonly cursorId: string;
   readonly mimeType?: string;
   readonly availability: string;
   readonly byteSize?: number;
@@ -497,6 +579,8 @@ export interface TimelinePersistenceRow {
   readonly id: string;
   readonly kind: "message" | "media";
   readonly occurredAt: string;
+  /** The unique event row used by pagination; media id remains the attachment handle. */
+  readonly cursorId: string;
 }
 
 export class ArchiveReadService {
@@ -510,8 +594,13 @@ export class ArchiveReadService {
   ): Promise<ReadPage<ConversationRead>> {
     const request = validatePageRequest(query);
     const access = uiAccess(query.uiAccess);
+    const filterKey = readContextKey({ search: query.search ?? null, ...access });
     const position = request.cursor
-      ? this.cursors.decode(request.cursor, request.archiveId)
+      ? this.cursors.decode(request.cursor, request.archiveId, {
+          readKind: "conversations",
+          direction: request.direction,
+          filterKey,
+        })
       : undefined;
     if (position && position.sort !== "createdAt,id") throw new InvalidCursorError();
     const rows = await this.persistence.listConversations({
@@ -534,16 +623,24 @@ export class ArchiveReadService {
       request,
       items.at(-1) ? [rows[items.length - 1].createdAt, items.at(-1)!.id] : undefined,
       "createdAt,id",
+      filterKey,
+      "conversations",
     );
   }
 
   public async listPeople(query: PersonListQuery): Promise<ReadPage<PersonRead>> {
     const request = validatePageRequest(query);
     const access = uiAccess(query.uiAccess);
+    const filterKey = readContextKey({ search: query.search ?? null, ...access });
     const position = request.cursor
-      ? this.cursors.decode(request.cursor, request.archiveId)
+      ? this.cursors.decode(request.cursor, request.archiveId, {
+          readKind: "people",
+          direction: request.direction,
+          filterKey,
+        })
       : undefined;
-    if (position && position.sort !== "displayName,id") throw new InvalidCursorError();
+    if (position && position.sort !== "displayNameNull,displayName,id")
+      throw new InvalidCursorError();
     const rows = await this.persistence.listPeople({
       archiveId: request.archiveId,
       limit: request.limit + 1,
@@ -561,8 +658,16 @@ export class ArchiveReadService {
       items,
       rows.length > request.limit,
       request,
-      items.at(-1) ? [rows[items.length - 1].displayName ?? "", items.at(-1)!.id] : undefined,
-      "displayName,id",
+      items.at(-1)
+        ? [
+            rows[items.length - 1].displayName === undefined ? 1 : 0,
+            rows[items.length - 1].displayName ?? null,
+            items.at(-1)!.id,
+          ]
+        : undefined,
+      "displayNameNull,displayName,id",
+      filterKey,
+      "people",
     );
   }
 
@@ -571,8 +676,14 @@ export class ArchiveReadService {
     const access = uiAccess(query.uiAccess);
     if (!query.conversationId.trim())
       throw new InvalidReadRequestError("conversationId is required");
+    const filterKey = readContextKey({ ...access });
     const position = request.cursor
-      ? this.cursors.decode(request.cursor, request.archiveId)
+      ? this.cursors.decode(request.cursor, request.archiveId, {
+          readKind: "messages",
+          direction: request.direction,
+          resourceId: query.conversationId,
+          filterKey,
+        })
       : undefined;
     if (position && position.sort !== "sentAt,id") throw new InvalidCursorError();
     const rows = await this.persistence.listMessages({
@@ -605,14 +716,29 @@ export class ArchiveReadService {
       request,
       items.at(-1) ? [rows[items.length - 1].sortSentAt, items.at(-1)!.id] : undefined,
       "sentAt,id",
+      filterKey,
+      "messages",
+      query.conversationId,
     );
   }
 
   public async listMedia(query: MediaListQuery): Promise<ReadPage<MediaRead>> {
     const request = validatePageRequest(query);
     const access = uiAccess(query.uiAccess);
+    const resourceId = query.messageId ?? query.attachmentId;
+    const filterKey = readContextKey({
+      messageId: query.messageId ?? null,
+      attachmentId: query.attachmentId ?? null,
+      mediaType: query.mediaType ?? null,
+      ...access,
+    });
     const position = request.cursor
-      ? this.cursors.decode(request.cursor, request.archiveId)
+      ? this.cursors.decode(request.cursor, request.archiveId, {
+          readKind: "media",
+          direction: request.direction,
+          ...(resourceId === undefined ? {} : { resourceId }),
+          filterKey,
+        })
       : undefined;
     if (position && position.sort !== "createdAt,id") throw new InvalidCursorError();
     if (!this.persistence.listMedia) throw new Error("Media reads are unavailable");
@@ -641,8 +767,13 @@ export class ArchiveReadService {
       items,
       rows.length > request.limit,
       request,
-      items.at(-1) ? [rows[items.length - 1].createdAt, items.at(-1)!.id] : undefined,
+      items.at(-1)
+        ? [rows[items.length - 1].createdAt, rows[items.length - 1].cursorId]
+        : undefined,
       "createdAt,id",
+      filterKey,
+      "media",
+      resourceId,
     );
   }
   public async listTimeline(query: TimelineQuery): Promise<ReadPage<TimelineRead>> {
@@ -651,10 +782,19 @@ export class ArchiveReadService {
     const from = parseReadDate(query.from, "from");
     const to = parseReadDate(query.to, "to");
     if (from && to && from > to) throw new InvalidReadRequestError("from must be before to");
+    const filterKey = readContextKey({
+      from: from === undefined ? null : new Date(from).toISOString(),
+      to: to === undefined ? null : new Date(to).toISOString(),
+      ...access,
+    });
     const position = request.cursor
-      ? this.cursors.decode(request.cursor, request.archiveId)
+      ? this.cursors.decode(request.cursor, request.archiveId, {
+          readKind: "timeline",
+          direction: request.direction,
+          filterKey,
+        })
       : undefined;
-    if (position && position.sort !== "occurredAt,id") throw new InvalidCursorError();
+    if (position && position.sort !== "occurredAt,kind,id") throw new InvalidCursorError();
     if (!this.persistence.listTimeline) throw new Error("Timeline reads are unavailable");
     const rows = await this.persistence.listTimeline({
       archiveId: request.archiveId,
@@ -674,8 +814,16 @@ export class ArchiveReadService {
       items,
       rows.length > request.limit,
       request,
-      items.at(-1) ? [items.at(-1)!.occurredAt, items.at(-1)!.id] : undefined,
-      "occurredAt,id",
+      items.at(-1)
+        ? [
+            rows[items.length - 1].occurredAt,
+            rows[items.length - 1].kind,
+            rows[items.length - 1].cursorId,
+          ]
+        : undefined,
+      "occurredAt,kind,id",
+      filterKey,
+      "timeline",
     );
   }
   public async search(query: SearchQuery): Promise<ReadPage<SearchResultRead>> {
@@ -688,6 +836,9 @@ export class ArchiveReadService {
     const fuzzyText = query.fuzzyText ?? query.text;
     const unifiedConversationId = query.unifiedConversationId ?? query.conversationId;
     validateSearchFilters({ ...query, fuzzyName, fuzzyText });
+    const normalizedFrom =
+      query.from === undefined ? undefined : new Date(query.from).toISOString();
+    const normalizedTo = query.to === undefined ? undefined : new Date(query.to).toISOString();
     const filterKey = searchFilterKey({
       query: textQuery,
       conversationId: unifiedConversationId,
@@ -695,8 +846,8 @@ export class ArchiveReadService {
       sourceAccountId: query.sourceAccountId,
       personId: query.personId,
       senderDirection: query.senderDirection,
-      from: query.from,
-      to: query.to,
+      from: normalizedFrom ?? null,
+      to: normalizedTo ?? null,
       mediaType: query.mediaType,
       fuzzyName,
       fuzzyText,
@@ -704,9 +855,15 @@ export class ArchiveReadService {
       authorizedConversationIds: access.authorizedConversationIds,
     });
     const position = request.cursor
-      ? this.cursors.decode(request.cursor, request.archiveId, filterKey)
+      ? this.cursors.decode(request.cursor, request.archiveId, {
+          readKind: "search",
+          direction: request.direction,
+          ...(unifiedConversationId === undefined ? {} : { resourceId: unifiedConversationId }),
+          filterKey,
+        })
       : undefined;
-    if (position && position.sort !== "searchScore,sentAt,id") throw new InvalidCursorError();
+    if (position && position.sort !== "searchScore,sentAtNull,sentAt,id")
+      throw new InvalidCursorError();
     if (position && position.direction !== request.direction) throw new InvalidCursorError();
     const after = position ? searchCursorValues(position.values) : undefined;
 
@@ -744,22 +901,34 @@ export class ArchiveReadService {
       ...(fuzzyText ? { fuzzyText } : {}),
       ...access,
     });
-    const items = rows.slice(0, request.limit).map((row) => ({
-      id: row.id,
-      kind: "message" as const,
-      score: row.score,
-      ...(row.conversationId ? { conversationId: row.conversationId } : {}),
-      ...(row.sortSentAt.startsWith("9999-") ? {} : { sentAt: row.sortSentAt }),
-    }));
+    const items = rows.slice(0, request.limit).map((row) => {
+      const sortSentAtNull = searchSortSentAtNull(row);
+      return {
+        id: row.id,
+        kind: "message" as const,
+        score: row.score,
+        ...(row.conversationId ? { conversationId: row.conversationId } : {}),
+        ...(sortSentAtNull === 1 ? {} : { sentAt: row.sortSentAt }),
+      };
+    });
     return this.page(
       items,
       rows.length > request.limit,
       request,
       items.at(-1)
-        ? [rows[items.length - 1].score, rows[items.length - 1].sortSentAt, items.at(-1)!.id]
+        ? [
+            searchScoreKey(rows[items.length - 1]),
+            searchSortSentAtNull(rows[items.length - 1]),
+            searchSortSentAtNull(rows[items.length - 1]) === 1
+              ? null
+              : rows[items.length - 1].sortSentAt,
+            items.at(-1)!.id,
+          ]
         : undefined,
-      "searchScore,sentAt,id",
+      "searchScore,sentAtNull,sentAt,id",
       filterKey,
+      "search",
+      unifiedConversationId,
     );
   }
   public statistics(): Promise<StatisticsRead> {
@@ -770,9 +939,11 @@ export class ArchiveReadService {
     items: readonly T[],
     hasMore: boolean,
     request: ValidatedPageRequest,
-    values: readonly (string | number)[] | undefined,
+    values: readonly CursorValue[] | undefined,
     sort: ReadSort,
-    filterKey?: string,
+    filterKey: string,
+    readKind: ReadKind,
+    resourceId?: string,
   ): ReadPage<T> {
     return {
       items,
@@ -782,9 +953,11 @@ export class ArchiveReadService {
             nextCursor: this.cursors.encode({
               archiveId: request.archiveId,
               direction: request.direction,
+              readKind,
+              ...(resourceId === undefined ? {} : { resourceId }),
               sort,
               values,
-              ...(filterKey === undefined ? {} : { filterKey }),
+              filterKey,
             }),
           }
         : {}),
@@ -859,6 +1032,14 @@ function safeOptionalCount(value: number): number {
   return Number.isSafeInteger(value) && value >= 0 ? value : 0;
 }
 
+function searchSortSentAtNull(row: SearchPersistenceRow): 0 | 1 {
+  return row.sortSentAtNull ?? (row.sortSentAt.startsWith("9999-") ? 1 : 0);
+}
+
+function searchScoreKey(row: SearchPersistenceRow): string {
+  return row.scoreKey ?? String(row.score);
+}
+
 const isSearchMediaType = (value: unknown): value is SearchMediaType =>
   value === "image" ||
   value === "video" ||
@@ -867,5 +1048,13 @@ const isSearchMediaType = (value: unknown): value is SearchMediaType =>
   value === "other";
 
 function searchFilterKey(input: Record<string, unknown>): string {
-  return JSON.stringify(input, Object.keys(input).sort());
+  return readContextKey(input);
+}
+
+/** Hash the complete normalized read context so cursors stay opaque and
+ * bounded even when a valid search term is near its input limit. */
+function readContextKey(input: Record<string, unknown>): string {
+  return createHash("sha256")
+    .update(JSON.stringify(input, Object.keys(input).sort()))
+    .digest("base64url");
 }

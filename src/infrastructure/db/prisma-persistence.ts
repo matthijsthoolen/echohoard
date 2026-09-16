@@ -637,29 +637,58 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   ): Promise<readonly SearchPersistenceRow[]> {
     const after = input.after;
     const afterScore = after?.[0];
-    const afterSentAt = after?.[1];
-    const afterId = after?.[2];
+    const afterSentAtNull = after?.[1];
+    const afterSentAt = after?.[2];
+    const afterId = after?.[3];
     const afterPredicate = after
       ? input.direction === "forward"
         ? Prisma.sql`AND ranked.id <> CAST(${afterId} AS uuid)
           AND (
-            ranked.score < CAST(${afterScore} AS double precision)
+            ranked.score < CAST(${afterScore} AS numeric)
             OR (
-              ranked.score = CAST(${afterScore} AS double precision)
+              ranked.score = CAST(${afterScore} AS numeric)
               AND (
-                ranked.sort_sent_at > CAST(${afterSentAt} AS timestamp)
-                OR (ranked.sort_sent_at = CAST(${afterSentAt} AS timestamp) AND ranked.id > CAST(${afterId} AS uuid))
+                ranked.sent_at_is_null > CAST(${afterSentAtNull} AS integer)
+                OR (ranked.sent_at_is_null = CAST(${afterSentAtNull} AS integer)
+                  AND (
+                    ${
+                      afterSentAtNull === 0
+                        ? Prisma.sql`ranked.sort_sent_at > CAST(${afterSentAt} AS timestamp)`
+                        : Prisma.sql`FALSE`
+                    }
+                    OR (${
+                      afterSentAtNull === 0
+                        ? Prisma.sql`ranked.sort_sent_at = CAST(${afterSentAt} AS timestamp)`
+                        : Prisma.sql`TRUE`
+                    }
+                      AND ranked.id > CAST(${afterId} AS uuid))
+                  )
+                )
               )
             )
           )`
         : Prisma.sql`AND ranked.id <> CAST(${afterId} AS uuid)
           AND (
-            ranked.score > CAST(${afterScore} AS double precision)
+            ranked.score > CAST(${afterScore} AS numeric)
             OR (
-              ranked.score = CAST(${afterScore} AS double precision)
+              ranked.score = CAST(${afterScore} AS numeric)
               AND (
-                ranked.sort_sent_at < CAST(${afterSentAt} AS timestamp)
-                OR (ranked.sort_sent_at = CAST(${afterSentAt} AS timestamp) AND ranked.id < CAST(${afterId} AS uuid))
+                ranked.sent_at_is_null < CAST(${afterSentAtNull} AS integer)
+                OR (ranked.sent_at_is_null = CAST(${afterSentAtNull} AS integer)
+                  AND (
+                    ${
+                      afterSentAtNull === 0
+                        ? Prisma.sql`ranked.sort_sent_at < CAST(${afterSentAt} AS timestamp)`
+                        : Prisma.sql`FALSE`
+                    }
+                    OR (${
+                      afterSentAtNull === 0
+                        ? Prisma.sql`ranked.sort_sent_at = CAST(${afterSentAt} AS timestamp)`
+                        : Prisma.sql`TRUE`
+                    }
+                      AND ranked.id < CAST(${afterId} AS uuid))
+                  )
+                )
               )
             )
           )`
@@ -698,11 +727,20 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const where = Prisma.join(conditions, " AND ");
     const ordering =
       input.direction === "forward"
-        ? Prisma.sql`ranked.score DESC, ranked.sort_sent_at ASC, ranked.id ASC`
-        : Prisma.sql`ranked.score ASC, ranked.sort_sent_at DESC, ranked.id DESC`;
+        ? Prisma.sql`ranked.score DESC, ranked.sent_at_is_null ASC,
+            ranked.sort_sent_at ASC, ranked.id ASC`
+        : Prisma.sql`ranked.score ASC, ranked.sent_at_is_null DESC,
+            ranked.sort_sent_at DESC, ranked.id DESC`;
 
     const rows = await this.prisma.$queryRaw<
-      Array<{ id: string; score: number; sort_sent_at: Date; conversation_id: string }>
+      Array<{
+        id: string;
+        score: number;
+        score_key: string;
+        sent_at_is_null: 0 | 1;
+        sort_sent_at: Date | null;
+        conversation_id: string;
+      }>
     >(Prisma.sql`
       WITH ranked AS (
         SELECT
@@ -719,11 +757,9 @@ export class PrismaReadPersistence implements ReadPersistencePort {
               similarity(COALESCE(conversation."ownerTitle", conversation.title), ${input.fuzzyName ?? ""}),
               0
             )
-          )::double precision AS score,
-          COALESCE(
-            message."sentAt",
-            TIMESTAMP '9999-12-31 23:59:59.999'
-          ) AS sort_sent_at
+          )::numeric AS score,
+           (message."sentAt" IS NULL)::int AS sent_at_is_null,
+           message."sentAt" AS sort_sent_at
         FROM "Message" AS message
         LEFT JOIN "SourceConversation" AS source
           ON source.id = message."sourceConversationId" AND source."archiveId" = message."archiveId"
@@ -734,17 +770,21 @@ export class PrismaReadPersistence implements ReadPersistencePort {
           AND conversation."archiveId" = message."archiveId"
         WHERE ${where}
       )
-      SELECT ranked.id, ranked.score, ranked.sort_sent_at, ranked.conversation_id
+       SELECT ranked.id, ranked.score::double precision AS score,
+              ranked.score::text AS score_key, ranked.sent_at_is_null,
+              ranked.sort_sent_at, ranked.conversation_id
       FROM ranked
       WHERE TRUE
       ${afterPredicate}
-      ORDER BY ${ordering}
+       ORDER BY ${ordering}
       LIMIT ${input.limit}
     `);
     return rows.map((row) => ({
       id: row.id,
       score: row.score,
-      sortSentAt: row.sort_sent_at.toISOString(),
+      scoreKey: row.score_key,
+      sortSentAtNull: row.sent_at_is_null,
+      sortSentAt: row.sort_sent_at?.toISOString() ?? "",
       ...(row.conversation_id ? { conversationId: row.conversation_id } : {}),
     }));
   }
@@ -837,8 +877,8 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const cursor = personCursor(input);
     const order =
       input.direction === "backward"
-        ? Prisma.sql`p."displayName" DESC NULLS LAST, p.id DESC`
-        : Prisma.sql`p."displayName" ASC NULLS LAST, p.id ASC`;
+        ? Prisma.sql`(p."displayName" IS NULL) DESC, p."displayName" DESC, p.id DESC`
+        : Prisma.sql`(p."displayName" IS NULL) ASC, p."displayName" ASC, p.id ASC`;
     const rows = await this.prisma.$queryRaw<
       Array<{
         id: string;
@@ -1110,6 +1150,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         : Prisma.sql`ma."createdAt" ASC, ma.id ASC`;
     const rows = await this.prisma.$queryRaw<
       Array<{
+        cursor_id: string;
         attachment_id: string;
         message_id: string;
         created_at: Date;
@@ -1121,7 +1162,8 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         duration_ms: number | null;
       }>
     >(Prisma.sql`
-      SELECT ma."attachmentId" AS attachment_id,
+       SELECT ma.id AS cursor_id,
+              ma."attachmentId" AS attachment_id,
              ma."messageId" AS message_id,
              ma."createdAt" AS created_at,
              attachment."mimeType" AS mime_type,
@@ -1148,6 +1190,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     return rows.map((row) => ({
       id: row.attachment_id,
       messageId: row.message_id,
+      cursorId: row.cursor_id,
       availability: attachmentAvailability(row.availability),
       ...(row.mime_type ? { mimeType: row.mime_type } : {}),
       ...(row.byte_size !== null ? { byteSize: countValue(row.byte_size) } : {}),
@@ -1163,13 +1206,20 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   ): Promise<readonly TimelinePersistenceRow[]> {
     const after = input.after;
     const afterAt = after?.[0];
-    const afterId = after?.[1];
+    const afterKind = after?.[1];
+    const afterId = after?.[2];
     const afterPredicate = after
       ? input.direction === "forward"
         ? Prisma.sql`AND (events.occurred_at > CAST(${afterAt} AS timestamp)
-            OR (events.occurred_at = CAST(${afterAt} AS timestamp) AND events.id > CAST(${afterId} AS uuid)))`
+            OR (events.occurred_at = CAST(${afterAt} AS timestamp)
+              AND (events.kind > CAST(${afterKind} AS text)
+                OR (events.kind = CAST(${afterKind} AS text)
+                  AND events.cursor_id > CAST(${afterId} AS uuid)))))`
         : Prisma.sql`AND (events.occurred_at < CAST(${afterAt} AS timestamp)
-            OR (events.occurred_at = CAST(${afterAt} AS timestamp) AND events.id < CAST(${afterId} AS uuid)))`
+            OR (events.occurred_at = CAST(${afterAt} AS timestamp)
+              AND (events.kind < CAST(${afterKind} AS text)
+                OR (events.kind = CAST(${afterKind} AS text)
+                  AND events.cursor_id < CAST(${afterId} AS uuid)))))`
       : Prisma.empty;
     const datePredicates = [Prisma.sql`events.archive_id = ${input.archiveId}::uuid`];
     if (input.from)
@@ -1179,14 +1229,19 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const where = Prisma.join(datePredicates, " AND ");
     const ordering =
       input.direction === "backward"
-        ? Prisma.sql`events.occurred_at DESC, events.id DESC`
-        : Prisma.sql`events.occurred_at ASC, events.id ASC`;
+        ? Prisma.sql`events.occurred_at DESC, events.kind DESC, events.cursor_id DESC`
+        : Prisma.sql`events.occurred_at ASC, events.kind ASC, events.cursor_id ASC`;
     const rows = await this.prisma.$queryRaw<
-      Array<{ id: string; kind: "message" | "media"; occurred_at: Date }>
+      Array<{
+        id: string;
+        kind: "message" | "media";
+        cursor_id: string;
+        occurred_at: Date;
+      }>
     >(Prisma.sql`
-      WITH events AS (
-         SELECT m."archiveId" AS archive_id, m.id, 'message'::text AS kind,
-                COALESCE(m."sentAt", m."createdAt") AS occurred_at
+       WITH events AS (
+          SELECT m."archiveId" AS archive_id, m.id, m.id AS cursor_id, 'message'::text AS kind,
+                 COALESCE(m."sentAt", m."createdAt") AS occurred_at
          FROM "Message" m
          JOIN "Conversation" message_conversation
            ON message_conversation.id = m."conversationId"
@@ -1194,8 +1249,9 @@ export class PrismaReadPersistence implements ReadPersistencePort {
          WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
            AND ${uiConversationPredicate("message_conversation", input)}
          UNION ALL
-        SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id, 'media'::text AS kind,
-               ma."createdAt" AS occurred_at
+         SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id,
+                ma.id AS cursor_id, 'media'::text AS kind,
+                 ma."createdAt" AS occurred_at
          FROM "MessageAttachment" ma
          JOIN "Message" media_message
            ON media_message.id = ma."messageId" AND media_message."archiveId" = ma."archiveId"
@@ -1205,7 +1261,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
          WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
            AND ${uiConversationPredicate("media_conversation", input)}
       )
-      SELECT events.id, events.kind, events.occurred_at
+       SELECT events.id, events.kind, events.cursor_id, events.occurred_at
       FROM events
       WHERE ${where}
       ${afterPredicate}
@@ -1215,6 +1271,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     return rows.map((row) => ({
       id: row.id,
       kind: row.kind,
+      cursorId: row.cursor_id,
       occurredAt: row.occurred_at.toISOString(),
     }));
   }
@@ -1749,13 +1806,34 @@ function conversationCursor(input: ReadConversationPersistenceQuery): Prisma.Sql
 
 function personCursor(input: ReadPersonPersistenceQuery): Prisma.Sql {
   if (!input.after) return Prisma.empty;
-  const [displayName, id] = input.after;
-  if (typeof displayName !== "string" || typeof id !== "string")
+  const [nullRank, displayName, id] = input.after;
+  if (
+    (nullRank !== 0 && nullRank !== 1) ||
+    (nullRank === 0 && typeof displayName !== "string") ||
+    (nullRank === 1 && displayName !== null) ||
+    typeof id !== "string"
+  )
     throw new Error("Invalid read cursor position");
-  const operator = input.direction === "backward" ? "<" : ">";
-  return Prisma.sql`AND (COALESCE(p."displayName", '') ${Prisma.raw(operator)} ${displayName}
-    OR (COALESCE(p."displayName", '') = ${displayName}
-      AND p.id ${Prisma.raw(operator)} ${id}::uuid))`;
+  const rankOperator = input.direction === "backward" ? "<" : ">";
+  const nameOperator = input.direction === "backward" ? "<" : ">";
+  const idOperator = input.direction === "backward" ? "<" : ">";
+  return Prisma.sql`AND (
+    (p."displayName" IS NULL)::int ${Prisma.raw(rankOperator)} ${nullRank}
+    OR (
+      (p."displayName" IS NULL)::int = ${nullRank}
+      AND (
+        ${
+          nullRank === 0
+            ? Prisma.sql`p."displayName" ${Prisma.raw(nameOperator)} ${displayName}`
+            : Prisma.sql`FALSE`
+        }
+        OR (
+          ${nullRank === 0 ? Prisma.sql`p."displayName" = ${displayName}` : Prisma.sql`TRUE`}
+          AND p.id ${Prisma.raw(idOperator)} ${id}::uuid
+        )
+      )
+    )
+  )`;
 }
 
 function mediaCursor(input: ReadMediaPersistenceQuery): Prisma.Sql {
