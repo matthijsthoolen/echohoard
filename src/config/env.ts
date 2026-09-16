@@ -30,6 +30,7 @@ const schema = z.object({
     .default(120_000),
   ECHOHOARD_WACLI_CONTROL_URL: z.string().url().default("http://wacli-control:8080/"),
   ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(10_000),
+  ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE: z.string().min(1).optional(),
 });
 
 export type EchohoardEnv = z.infer<typeof schema>;
@@ -68,6 +69,9 @@ export function parseEnv(input: NodeJS.ProcessEnv = process.env): EchohoardEnv {
     ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS: input.ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS,
     ECHOHOARD_WACLI_CONTROL_URL: input.ECHOHOARD_WACLI_CONTROL_URL,
     ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS: input.ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS,
+    ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE:
+      input.ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE ??
+      (input.ECHOHOARD_SECRET_DIR ? `${input.ECHOHOARD_SECRET_DIR}/wacli-webhook-key` : undefined),
   });
 }
 

@@ -10,11 +10,14 @@ services:
       NODE_ENV: production
       ECHOHOARD_ROLE: web
       ECHOHOARD_WACLI_CONTROL_URL: ${ECHOHOARD_WACLI_CONTROL_URL:-http://wacli-control:8080/}
+      ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE: /run/echohoard/secrets/wacli-webhook-key
       DATABASE_URL: ${ECHOHOARD_DATABASE_URL:-postgresql://echohoard:replace-me@postgres.example.invalid:5432/echohoard?schema=public}
     ports:
       - "${ECHOHOARD_HTTP_PORT:-3000}:3000"
     secrets:
       - oidc_client_secret
+      - source: wacli_webhook_key
+        target: /run/echohoard/secrets/wacli-webhook-key
     healthcheck:
       test:
         [
@@ -59,3 +62,5 @@ secrets:
     file: ${ECHOHOARD_OIDC_CLIENT_SECRET_FILE:-./container/secrets/oidc-client-secret.example}
   worker_key:
     file: ${ECHOHOARD_WORKER_KEY_FILE:-./container/secrets/worker-key.example}
+  wacli_webhook_key:
+    file: ${ECHOHOARD_WACLI_WEBHOOK_KEY_FILE:-./container/secrets/wacli-webhook-key.example}

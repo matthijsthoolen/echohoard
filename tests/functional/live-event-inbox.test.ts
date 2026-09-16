@@ -10,6 +10,12 @@ import {
   type WacliWebhookEvent,
 } from "../../src/adapters/wacli/contract.js";
 import { normalizeWacliEvent } from "../../src/adapters/wacli/normalize.js";
+import {
+  CountingLiveEventMetrics,
+  LiveEventIntakeService,
+  signLiveEvent,
+} from "../../src/application/live-event-intake.js";
+import { createLiveEventRoute } from "../../src/delivery/web/app/api/internal/live-events/route-handler.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -61,7 +67,7 @@ describe("live event inbox PostgreSQL durability", () => {
     });
     await prisma.ownedAccount.createMany({
       data: [
-        { id: accountId, archiveId, accountKey: `account-${accountId}` },
+        { id: accountId, archiveId, accountKey: `account-${accountId}`, liveEnabled: true },
         { id: otherAccountId, archiveId: otherArchiveId, accountKey: `account-${otherAccountId}` },
       ],
     });
@@ -114,6 +120,77 @@ describe("live event inbox PostgreSQL durability", () => {
     expect(
       await prisma.messageObservation.count({
         where: { archiveId, observedValue: { path: ["body"], equals: "synthetic live history" } },
+      }),
+    ).toBe(1);
+  });
+
+  it("accepts a signed webhook through the web route and normalizes it", async () => {
+    const accountKey = `account-${accountId}`;
+    const secret = "synthetic-webhook-secret";
+    const event = {
+      Chat: "15550000001@s.whatsapp.net",
+      ID: `synthetic-route-${randomUUID()}`,
+      SenderJID: "15550000001@s.whatsapp.net",
+      Timestamp: "2026-01-01T00:00:00.000Z",
+      FromMe: false,
+      Text: "synthetic compose webhook",
+    };
+    const body = new TextEncoder().encode(JSON.stringify(event));
+    const timestamp = Math.floor(Date.now() / 1000);
+    const intake = new LiveEventIntakeService(
+      {
+        resolve: async (key) =>
+          key === accountKey ? { archiveId, ownedAccountId: accountId, secret } : null,
+      },
+      inbox,
+      new CountingLiveEventMetrics(),
+      {
+        validate: (payload, key) => {
+          const parsed = parseWacliWebhookEvent(payload, key);
+          return {
+            kind: parsed.kind,
+            sourceEventKey: parsed.sourceEventKey,
+            observedAt: parsed.observedAt,
+            payload: JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>,
+          };
+        },
+      },
+    );
+    const route = createLiveEventRoute({ getIntake: () => intake });
+    const response = await route(
+      new Request(`http://web:3000/api/internal/live-events?account=${accountKey}`, {
+        method: "POST",
+        headers: {
+          "x-echohoard-timestamp": String(timestamp),
+          "x-echohoard-signature": signLiveEvent(body, timestamp, secret),
+        },
+        body,
+      }),
+    );
+    expect(response.status).toBe(202);
+    const receipt = await prisma.liveEventInbox.findFirstOrThrow({
+      where: {
+        archiveId,
+        ownedAccountId: accountId,
+        sourceEventKey: { startsWith: `wacli:message:${accountKey}:` },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(
+      (
+        await normalizer.normalize({
+          archiveId,
+          ownedAccountId: accountId,
+          receiptId: receipt.receiptId,
+        })
+      ).status,
+    ).toBe("normalized");
+    expect(
+      await prisma.messageObservation.count({
+        where: {
+          archiveId,
+          observedValue: { path: ["body"], equals: "synthetic compose webhook" },
+        },
       }),
     ).toBe(1);
   });

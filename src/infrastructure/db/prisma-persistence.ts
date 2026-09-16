@@ -187,18 +187,20 @@ export class PrismaLiveEventAccountResolver implements LiveEventAccountResolver 
   public constructor(
     private readonly prisma: PrismaClient,
     private readonly archiveId: string,
-    private readonly secrets: ReadonlyMap<string, string>,
+    private readonly secrets: ReadonlyMap<string, string> | string,
   ) {}
 
   public async resolve(accountKey: string) {
-    const secret = this.secrets.get(accountKey);
+    const secret = typeof this.secrets === "string" ? this.secrets : this.secrets.get(accountKey);
     if (!secret) return null;
     const account = await this.prisma.ownedAccount.findUnique({
       where: { archiveId_accountKey: { archiveId: this.archiveId, accountKey } },
     });
     return account === null
       ? null
-      : { archiveId: account.archiveId, ownedAccountId: account.id, secret };
+      : account.liveEnabled
+        ? { archiveId: account.archiveId, ownedAccountId: account.id, secret }
+        : null;
   }
 }
 

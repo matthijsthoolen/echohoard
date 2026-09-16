@@ -28,7 +28,7 @@ services:
     command: ["follow-sync"]
     environment:
       WACLI_ACCOUNT: ${ECHOHOARD_WACLI_ACCOUNT:-account-a}
-      WACLI_WEBHOOK_ENDPOINT: http://worker:3000/internal/wacli/events
+      WACLI_WEBHOOK_ENDPOINT: http://web:3000/api/internal/live-events?account=account-a
       WACLI_WEBHOOK_SECRET_FILE: /run/secrets/wacli_webhook_key
     volumes:
       - wacli-account-a:/var/lib/wacli/account
@@ -58,7 +58,7 @@ services:
     command: ["follow-sync"]
     environment:
       WACLI_ACCOUNT: account-b
-      WACLI_WEBHOOK_ENDPOINT: http://worker:3000/internal/wacli/events
+      WACLI_WEBHOOK_ENDPOINT: http://web:3000/api/internal/live-events?account=account-b
       WACLI_WEBHOOK_SECRET_FILE: /run/secrets/wacli_webhook_key
     volumes:
       - wacli-account-b:/var/lib/wacli/account

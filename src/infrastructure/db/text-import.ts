@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PrismaClient, Prisma } from "@prisma/client";
-import { LeaseFenceError } from "../../application/echohoard.js";
+import { LeaseFenceError } from "../../application/echohoard";
 import { reconcileAttachmentAvailability } from "../../application/text-import";
 import type { ImportEligibility } from "../../application/import-exclusion";
 import type {

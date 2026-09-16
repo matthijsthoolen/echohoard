@@ -23,7 +23,7 @@ export interface WebRuntime {
   readonly auth: WebAuthBoundary;
   readonly reads: WebReadServices;
   readonly media?: MediaDeliveryPort;
-  readonly liveEventIntake?: LiveEventIntakeService;
+  readonly liveEventIntake: LiveEventIntakeService;
   readonly transcription?: TranscriptionSettingsService;
   readonly accountSettings?: AccountSettingsServicePort;
   readonly grouping?: ConversationGroupingService;

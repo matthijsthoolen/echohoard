@@ -33,6 +33,16 @@ import { PrismaLiveAccountHealthPersistence } from "../../infrastructure/db/pris
 import { HttpFixedSidecarOperations } from "../../infrastructure/wacli/sidecar-operations";
 import type { EchohoardEnv } from "../../config/env";
 import type { AccountSettingsPersistencePort } from "../../application/persistence";
+import {
+  LiveEventIntakeService,
+  CountingLiveEventMetrics,
+} from "../../application/live-event-intake";
+import {
+  PrismaLiveEventAccountResolver,
+  PrismaLiveEventInboxPersistence,
+} from "../../infrastructure/db/prisma-persistence";
+import { parseWacliWebhookEvent } from "../../adapters/wacli/contract";
+import { normalizeWacliEvent } from "../../adapters/wacli/normalize";
 
 let activeProductionRuntime: WebRuntime | undefined;
 export function productionWebRuntime(): WebRuntime {
@@ -51,6 +61,8 @@ export function createProductionWebRuntime(): WebRuntime {
     throw new Error("OIDC web configuration is incomplete");
   const secret = readFileSync(settings.OIDC_CLIENT_SECRET_FILE, "utf8").trim();
   if (!secret) throw new Error("OIDC client secret file is empty");
+  const archiveId = settings.OIDC_ARCHIVE_ID;
+  if (!archiveId) throw new Error("OIDC archive configuration is incomplete");
   const prisma = new PrismaClient();
   const unlocks = new PrismaUnlockStore(prisma);
   const persistence = createPrismaPersistence(prisma);
@@ -67,6 +79,7 @@ export function createProductionWebRuntime(): WebRuntime {
     persistence.ownedAccounts,
     settings,
   );
+  const liveEventIntake = createProductionLiveEventIntake(prisma, archiveId, settings);
   return {
     auth: new WebAuthBoundary(
       new OidcAuth(
@@ -100,7 +113,35 @@ export function createProductionWebRuntime(): WebRuntime {
     transcription: new OwnerTranscriptionSettings(persistence.transcriptionSettings, catalog),
     grouping: new ConversationGroupingService(new PrismaConversationGroupingPersistence(prisma)),
     accountSettings,
+    liveEventIntake,
   };
+}
+
+export function createProductionLiveEventIntake(
+  prisma: PrismaClient,
+  archiveId: string,
+  settings: Pick<EchohoardEnv, "ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE">,
+): LiveEventIntakeService {
+  if (!settings.ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE)
+    throw new Error("wacli webhook secret file is not configured");
+  const webhookSecret = readFileSync(settings.ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE, "utf8").trim();
+  if (!webhookSecret) throw new Error("wacli webhook secret file is empty");
+  return new LiveEventIntakeService(
+    new PrismaLiveEventAccountResolver(prisma, archiveId, webhookSecret),
+    new PrismaLiveEventInboxPersistence(prisma),
+    new CountingLiveEventMetrics(),
+    {
+      validate: (payload, accountKey) => {
+        const event = parseWacliWebhookEvent(payload, accountKey);
+        return {
+          kind: event.kind,
+          sourceEventKey: event.sourceEventKey,
+          observedAt: event.kind === "chat_presence" ? undefined : event.observedAt,
+          payload: JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>,
+        };
+      },
+    },
+  );
 }
 
 export function createProductionAccountSettings(
