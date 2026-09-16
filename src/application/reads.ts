@@ -240,6 +240,16 @@ export interface MessageRead {
   readonly replyTo?: MessageReplyRead;
   readonly revisions: readonly MessageRevisionRead[];
   readonly reactions: readonly MessageReactionRead[];
+  readonly provenance?: MessageProvenanceRead;
+}
+export interface MessageProvenanceRead {
+  readonly sourceAccountId: string;
+  readonly sourceConversationId: string;
+  readonly sourceNamespace: string;
+  readonly sourceConversationKey: string;
+  readonly importIds: readonly string[];
+  readonly importCount: number;
+  readonly importsTruncated: boolean;
 }
 export interface MessageAttachmentRead {
   readonly id: string;
@@ -428,6 +438,8 @@ export interface MessagePersistenceRow {
   readonly conversationId: string;
   readonly senderPersonId?: string;
   readonly sentAt?: string;
+  /** Non-null deterministic ordering value; missing sentAt uses createdAt. */
+  readonly sortSentAt: string;
   readonly text?: string;
   readonly attachmentCount: number;
   readonly attachments?: readonly MessageAttachmentRead[];
@@ -437,6 +449,7 @@ export interface MessagePersistenceRow {
   readonly replyTo?: MessageReplyRead;
   readonly revisions?: readonly MessageRevisionRead[];
   readonly reactions?: readonly MessageReactionRead[];
+  readonly provenance?: MessageProvenanceRead;
 }
 export interface MediaPersistenceRow {
   readonly id: string;
@@ -547,12 +560,13 @@ export class ArchiveReadService {
       ...(row.replyTo ? { replyTo: row.replyTo } : {}),
       revisions: row.revisions ?? [],
       reactions: row.reactions ?? [],
+      ...(row.provenance ? { provenance: row.provenance } : {}),
     }));
     return this.page(
       items,
       rows.length > request.limit,
       request,
-      items.at(-1) ? [rows[items.length - 1].sentAt ?? "", items.at(-1)!.id] : undefined,
+      items.at(-1) ? [rows[items.length - 1].sortSentAt, items.at(-1)!.id] : undefined,
       "sentAt,id",
     );
   }
