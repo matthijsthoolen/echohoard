@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
   PrismaLiveEventInboxPersistence,
@@ -78,6 +78,10 @@ describe("live event inbox PostgreSQL durability", () => {
     await prisma.$disconnect();
   });
 
+  beforeEach(async () => {
+    await prisma.liveEventInbox.deleteMany({ where: { archiveId } });
+  });
+
   it("commits one receipt, replays it idempotently, and applies explicit backpressure", async () => {
     const receiptId = randomUUID().replaceAll("-", "");
     expect((await inbox.enqueue(input(archiveId, accountId, receiptId))).kind).toBe("accepted");
@@ -104,7 +108,11 @@ describe("live event inbox PostgreSQL durability", () => {
   });
 
   it("keeps account/archive scope in the durable key", async () => {
+    const archiveReceiptId = randomUUID().replaceAll("-", "");
     const receiptId = randomUUID().replaceAll("-", "");
+    expect((await inbox.enqueue(input(archiveId, accountId, archiveReceiptId))).kind).toBe(
+      "accepted",
+    );
     expect((await inbox.enqueue(input(otherArchiveId, otherAccountId, receiptId))).kind).toBe(
       "accepted",
     );
@@ -213,9 +221,13 @@ describe("live event inbox PostgreSQL durability", () => {
   it("terminates poison receipts without starving later valid receipts", async () => {
     const poisonId = randomUUID().replaceAll("-", "");
     const validId = randomUUID().replaceAll("-", "");
-    await inbox.enqueue(input(archiveId, accountId, poisonId));
+    await inbox.enqueue({
+      ...input(archiveId, accountId, poisonId),
+      receivedAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
     await inbox.enqueue({
       ...input(archiveId, accountId, validId),
+      receivedAt: new Date("2026-01-01T00:00:01.000Z"),
       payload: {
         Chat: "15550000001@s.whatsapp.net",
         ID: `synthetic-after-poison-${validId}`,
@@ -306,6 +318,6 @@ describe("live event inbox PostgreSQL durability", () => {
           archiveId_ownedAccountId_receiptId: { archiveId, ownedAccountId: accountId, receiptId },
         },
       }),
-    ).toMatchObject({ status: "failed", attempts: 2, retryable: false });
+    ).toMatchObject({ status: "failed", attempts: 3, retryable: false });
   });
 });
