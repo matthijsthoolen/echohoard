@@ -83,6 +83,26 @@ describe("wacli observation normalization", () => {
     expect(liveMessage?.source.namespace).toBe("whatsapp-android");
   });
 
+  it.each([
+    ["revoke", { Revoked: true }],
+    ["delete", { EventType: "delete_for_me", ChatJID: "120@g.us", MessageID: "deleted-1" }],
+  ] as const)("emits an append-only %s deletion observation", (kind, fields) => {
+    const records = normalizeWacliEvent(
+      parse({
+        Chat: "120@g.us",
+        ID: "deleted-1",
+        SenderJID: "1555@s.whatsapp.net",
+        Timestamp: "2026-09-16T12:00:00Z",
+        FromMe: false,
+        ...fields,
+      }),
+    );
+    expect(records.find((record) => record.kind === "message")).toMatchObject({
+      sourceDeletion: { kind, eventKey: expect.stringContaining(":") },
+      bodyState: "unavailable",
+    });
+  });
+
   it.each(["android-current.v1", "android-legacy.v1"] as const)(
     "uses one scoped revision identity for live and backup edits (%s)",
     (version) => {

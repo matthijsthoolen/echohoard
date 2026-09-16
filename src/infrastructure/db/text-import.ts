@@ -371,7 +371,12 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             where: {
               archiveId_stableKey: { archiveId: input.archiveId, stableKey },
             },
-            select: { metadata: true, body: true },
+            select: {
+              metadata: true,
+              body: true,
+              sourceDeletedAt: true,
+              sourceDeletionObservationKey: true,
+            },
           });
           const existing = await tx.message.upsert({
             where: {
@@ -440,14 +445,23 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
                             : prior?.body == null
                               ? { contentUnavailable: true }
                               : {}),
-                          sourceDeletedAt: deletionObservedAt,
-                          sourceDeletionObservationKey: deletion.eventKey,
-                          sourceDeletionMetadata: json({
-                            kind: deletion.kind,
-                            eventKey: deletion.eventKey,
-                            observedAt: deletion.observedAt,
-                            ...(deletion.sourceMetadata ?? {}),
-                          }),
+                          ...(isLaterDeletion(
+                            deletionObservedAt,
+                            deletion.eventKey,
+                            prior?.sourceDeletedAt,
+                            prior?.sourceDeletionObservationKey,
+                          )
+                            ? {
+                                sourceDeletedAt: deletionObservedAt,
+                                sourceDeletionObservationKey: deletion.eventKey,
+                                sourceDeletionMetadata: json({
+                                  kind: deletion.kind,
+                                  eventKey: deletion.eventKey,
+                                  observedAt: deletion.observedAt,
+                                  ...(deletion.sourceMetadata ?? {}),
+                                }),
+                              }
+                            : {}),
                         }
                       : record.body !== undefined
                         ? { contentUnavailable: false }
@@ -823,6 +837,18 @@ function mergeSnapshotProvenance(value: unknown, snapshotId: string): Record<str
       : { firstSeenSnapshotId: snapshotId }),
     lastSeenSnapshotId: snapshotId,
   };
+}
+
+function isLaterDeletion(
+  observedAt: Date,
+  eventKey: string,
+  priorObservedAt: Date | null | undefined,
+  priorEventKey: string | null | undefined,
+): boolean {
+  if (!priorObservedAt) return true;
+  const observed = observedAt.getTime();
+  const prior = priorObservedAt.getTime();
+  return observed > prior || (observed === prior && eventKey > (priorEventKey ?? ""));
 }
 
 function stableUuid(archiveId: string, key: string): string {

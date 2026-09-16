@@ -59,6 +59,15 @@ function normalizeMessage(event: WacliMessageEvent, accountScope: string): reado
       messageKind: event.media?.type ?? (event.text === undefined ? "unsupported" : "text"),
       ...(event.text === undefined ? {} : { body: event.text }),
       bodyState: event.text === undefined ? "unavailable" : "present",
+      ...(event.sourceDeleted
+        ? {
+            sourceDeletion: {
+              kind: event.sourceDeletionKind ?? "revoke",
+              eventKey: event.sourceEventKey,
+              observedAt: event.observedAt,
+            },
+          }
+        : {}),
       ...(event.replyToKey
         ? { replyToKey: whatsappMessageKey(event.accountKey, event.chatKey, event.replyToKey) }
         : {}),

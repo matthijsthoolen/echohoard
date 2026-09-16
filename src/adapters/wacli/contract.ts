@@ -146,6 +146,7 @@ export interface WacliMessageEvent {
   readonly text?: string;
   readonly edited: boolean;
   readonly sourceDeleted: boolean;
+  readonly sourceDeletionKind?: "revoke" | "delete";
   readonly replyToKey?: string;
   readonly media?: WacliMediaMetadata;
 }
@@ -209,6 +210,12 @@ export function parseWacliWebhookEvent(payload: Uint8Array, accountKey: string):
   if (eventType === undefined) return parseMessage(value, accountKey);
   if (eventType === "receipt") return parseReceipt(value, accountKey);
   if (eventType === "chat_presence") return parsePresence(value, accountKey);
+  if (
+    eventType === "delete_for_me" ||
+    eventType === "deleted_for_me" ||
+    eventType === "message_delete_for_me"
+  )
+    return parseDeleteForMe(value, accountKey);
   throw new Error("unsupported wacli webhook event type");
 }
 
@@ -299,10 +306,12 @@ function parseMessage(value: Record<string, unknown>, accountKey: string): Wacli
   const fromMe = requiredBoolean(value, "FromMe");
   const text = boundedOptionalText(value, "Text");
   const media = parseMedia(value.Media);
+  const revoked = optionalBoolean(value, "Revoked") ?? false;
+  const deletedForMe = optionalBoolean(value, "DeletedForMe") ?? false;
   return {
     kind: "message",
     accountKey,
-    sourceEventKey: `wacli:message:${accountKey}:${chatKey}:${messageKey}`,
+    sourceEventKey: `wacli:message:${accountKey}:${chatKey}:${messageKey}${revoked ? ":revoke" : deletedForMe ? ":delete" : ""}`,
     chatKey,
     messageKey,
     senderKey,
@@ -310,11 +319,39 @@ function parseMessage(value: Record<string, unknown>, accountKey: string): Wacli
     fromMe,
     ...(text === undefined ? {} : { text }),
     edited: optionalBoolean(value, "Edited") ?? false,
-    sourceDeleted: optionalBoolean(value, "Revoked") ?? false,
+    sourceDeleted: revoked || deletedForMe,
+    ...(revoked || deletedForMe
+      ? { sourceDeletionKind: revoked ? ("revoke" as const) : ("delete" as const) }
+      : {}),
     ...(optionalString(value, "ReplyToID") === undefined
       ? {}
       : { replyToKey: optionalString(value, "ReplyToID") }),
     ...(media === undefined ? {} : { media }),
+  };
+}
+
+function parseDeleteForMe(value: Record<string, unknown>, accountKey: string): WacliMessageEvent {
+  const chatKey = optionalString(value, "ChatJID") ?? requiredString(value, "Chat");
+  const messageKey =
+    optionalString(value, "MessageID") ??
+    optionalString(value, "MessageId") ??
+    requiredString(value, "ID");
+  const senderKey =
+    optionalString(value, "SenderJID") ?? optionalString(value, "Sender") ?? chatKey;
+  const observedAt = timestamp(value, "Timestamp");
+  const fromMe = optionalBoolean(value, "IsFromMe") ?? optionalBoolean(value, "FromMe") ?? false;
+  return {
+    kind: "message",
+    accountKey,
+    sourceEventKey: `wacli:message:${accountKey}:${chatKey}:${messageKey}:delete`,
+    chatKey,
+    messageKey,
+    senderKey,
+    observedAt,
+    fromMe,
+    edited: false,
+    sourceDeleted: true,
+    sourceDeletionKind: "delete",
   };
 }
 

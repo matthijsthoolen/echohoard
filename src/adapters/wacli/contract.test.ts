@@ -127,6 +127,29 @@ describe("wacli integration contract", () => {
     expect(JSON.stringify(media)).not.toMatch(/DirectPath|MediaKey|FileSHA256|FileEncSHA256/);
   });
 
+  it("maps revoke and deleted-for-me observations to distinct source events", () => {
+    const revoke = parseWacliWebhookEvent(
+      bytes(
+        JSON.stringify({
+          Chat: "120@g.us",
+          ID: "message-1",
+          SenderJID: "1555@s.whatsapp.net",
+          Timestamp: "2026-09-16T12:00:00Z",
+          FromMe: false,
+          Revoked: true,
+        }),
+      ),
+      fixture.accountKey,
+    );
+    const deletedForMe = parseWacliWebhookEvent(
+      bytes(fixture.webhooks.deleteForMe),
+      fixture.accountKey,
+    );
+    expect(revoke).toMatchObject({ sourceDeleted: true, sourceDeletionKind: "revoke" });
+    expect(deletedForMe).toMatchObject({ sourceDeleted: true, sourceDeletionKind: "delete" });
+    expect(revoke.sourceEventKey).not.toBe(deletedForMe.sourceEventKey);
+  });
+
   it("parses account-routed receipt and chat-presence events", () => {
     const receipt = parseWacliWebhookEvent(bytes(fixture.webhooks.receipt), fixture.accountKey);
     expect(receipt).toMatchObject({
