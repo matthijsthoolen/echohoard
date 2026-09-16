@@ -14,7 +14,9 @@ export interface ConversationRouteDependencies {
 }
 
 export interface ConversationRouteRuntime {
-  readonly auth: Pick<WebRuntime["auth"], "principalForRequest">;
+  readonly auth: Pick<WebRuntime["auth"], "principalForRequest"> & {
+    readonly lockedPrincipal?: WebRuntime["auth"]["lockedPrincipal"];
+  };
   readonly reads: Pick<WebRuntime["reads"], "listConversations">;
 }
 
@@ -30,11 +32,25 @@ export function createConversationsRoute({ getRuntime }: ConversationRouteDepend
     if (parsed.ok === false) return Response.json({ error: parsed.error }, { status: 400 });
 
     try {
-      const page = await runtime.reads.listConversations({
+      let query: Parameters<typeof runtime.reads.listConversations>[0] = {
         archiveId: principal.archiveId,
         limit: parsed.limit,
+        ...(parsed.mode ? { uiAccess: { mode: parsed.mode } } : {}),
         ...(parsed.cursor ? { cursor: parsed.cursor } : {}),
-      });
+      };
+      if (parsed.mode === "locked" && parsed.conversationId) {
+        const unlocked = await runtime.auth.lockedPrincipal?.(
+          request,
+          principal.archiveId,
+          parsed.conversationId,
+        );
+        if (!unlocked) return Response.json({ error: "Conversation unavailable" }, { status: 404 });
+        query = {
+          ...query,
+          uiAccess: { mode: "locked", authorizedConversationIds: [parsed.conversationId] },
+        };
+      }
+      const page = await runtime.reads.listConversations(query);
       return Response.json(toResponse(page), {
         headers: { "Cache-Control": "private, no-store" },
       });
@@ -46,10 +62,14 @@ export function createConversationsRoute({ getRuntime }: ConversationRouteDepend
   };
 }
 
-function parseQuery(
-  params: URLSearchParams,
-):
-  | { readonly ok: true; readonly limit: number; readonly cursor?: string }
+function parseQuery(params: URLSearchParams):
+  | {
+      readonly ok: true;
+      readonly limit: number;
+      readonly cursor?: string;
+      readonly mode?: "hidden" | "locked";
+      readonly conversationId?: string;
+    }
   | { readonly ok: false; readonly error: string } {
   const rawLimit = params.get("limit");
   const limit = rawLimit === null || rawLimit === "" ? DEFAULT_PAGE_LIMIT : Number(rawLimit);
@@ -59,7 +79,17 @@ function parseQuery(
   const cursor = params.get("cursor") ?? undefined;
   if (cursor !== undefined && cursor.length > MAX_CURSOR_LENGTH)
     return { ok: false, error: "cursor is too long" };
-  return { ok: true, limit, ...(cursor ? { cursor } : {}) };
+  const mode = params.get("mode");
+  if (mode !== null && mode !== "hidden" && mode !== "locked")
+    return { ok: false, error: "mode is invalid" };
+  const conversationId = params.get("conversationId") ?? undefined;
+  return {
+    ok: true,
+    limit,
+    ...(cursor ? { cursor } : {}),
+    ...(mode === "hidden" || mode === "locked" ? { mode } : {}),
+    ...(conversationId ? { conversationId } : {}),
+  };
 }
 
 function toResponse(page: ReadPage<ConversationRead>) {

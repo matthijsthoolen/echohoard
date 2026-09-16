@@ -7,6 +7,7 @@ import type { LiveEventIntakeService } from "../../application/live-event-intake
 import type { TranscriptionSettingsService } from "../../application/transcription-catalog.js";
 import type { AccountSettingsServicePort } from "../../application/account-pairing.js";
 import type { ConversationGroupingService } from "../../application/conversation-grouping.js";
+import type { ConversationPrivacyPort } from "../../application/persistence.js";
 import type { PrivateMcpServer } from "../../delivery/mcp/index";
 import { productionWebRuntime } from "./composition";
 
@@ -30,6 +31,7 @@ export interface WebRuntime {
   readonly transcription?: TranscriptionSettingsService;
   readonly accountSettings?: AccountSettingsServicePort;
   readonly grouping?: ConversationGroupingService;
+  readonly conversationPrivacy?: ConversationPrivacyPort;
 }
 
 let activeRuntime: WebRuntime | undefined;

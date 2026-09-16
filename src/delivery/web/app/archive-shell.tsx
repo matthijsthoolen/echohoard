@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
@@ -8,14 +8,17 @@ import { SearchPanel } from "../components/search-panel";
 import { ArchiveOverview } from "../components/archive-overview";
 import { PeopleList } from "../components/people-list";
 import { ECHOHOARD_VERSION } from "../../../application/version";
+import { fetchConversationPage } from "../components/conversation-list";
 
-type ShellView = "overview" | "chats" | "people" | "search" | "settings";
+type ShellView = "overview" | "chats" | "people" | "search" | "hidden" | "locked" | "settings";
 
 const navigation = [
   ["overview", "⌂", "Overview"],
   ["chats", "▤", "Chats"],
   ["people", "♙", "People"],
   ["search", "⌕", "Search"],
+  ["hidden", "◌", "Hidden"],
+  ["locked", "▣", "Locked"],
 ] as const satisfies readonly [ShellView, string, string][];
 
 export default function ArchiveShell() {
@@ -56,7 +59,8 @@ export default function ArchiveShell() {
   }, [theme]);
 
   const hrefFor = (nextView: ShellView) => (nextView === "overview" ? "/" : `/?view=${nextView}`);
-  const showTimeline = Boolean(conversationId) && (view === "chats" || view === "search");
+  const showTimeline =
+    Boolean(conversationId) && (view === "chats" || view === "search" || view === "locked");
 
   return (
     <main className="app-shell">
@@ -110,6 +114,10 @@ export default function ArchiveShell() {
               {view === "search" ? <SearchPanel /> : null}
               {view === "people" ? <PeopleList /> : null}
               {view === "overview" || view === "chats" ? <ConversationList /> : null}
+              {view === "hidden" ? (
+                <ConversationList endpoint="/api/conversations?mode=hidden" />
+              ) : null}
+              {view === "locked" ? <LockedFolder /> : null}
             </aside>
             {showTimeline ? (
               <MessageTimeline conversationId={conversationId!} messageId={messageId} />
@@ -162,7 +170,12 @@ export default function ArchiveShell() {
 type ThemeMode = "light" | "dark" | "system";
 
 function shellView(value: string | null): ShellView {
-  return value === "chats" || value === "people" || value === "search" || value === "settings"
+  return value === "chats" ||
+    value === "people" ||
+    value === "search" ||
+    value === "hidden" ||
+    value === "locked" ||
+    value === "settings"
     ? value
     : "overview";
 }
@@ -291,11 +304,174 @@ function SettingsPanel({
         ) : null}
       </section>
       <LiveAccountsSettings accounts={accounts} onAccountsChange={(next) => setAccounts(next)} />
+      <PrivacySettings />
       <section className="settings-card" aria-labelledby="about-heading">
         <h2 id="about-heading">About EchoHoard</h2>
         <p>Private, read-only access to your preserved conversations.</p>
         <p className="settings-version">Current version · v{ECHOHOARD_VERSION}</p>
       </section>
+    </section>
+  );
+}
+
+type PrivacyPolicy = {
+  readonly archiveId: string;
+  readonly conversationId: string;
+  readonly uiVisibility: "normal" | "hidden" | "locked";
+  readonly mcpAccess: "allowed" | "denied";
+};
+
+function PrivacySettings() {
+  const [policies, setPolicies] = useState<PrivacyPolicy[] | "loading" | "error">("loading");
+  const [titles, setTitles] = useState<Record<string, string>>({});
+  const [message, setMessage] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    try {
+      const response = await fetch("/api/privacy", { credentials: "same-origin" });
+      if (!response.ok) throw new Error("privacy unavailable");
+      const body = (await response.json()) as { readonly policies: PrivacyPolicy[] };
+      setPolicies(body.policies);
+      const [normal, hidden] = await Promise.all([
+        fetchConversationPage(fetch, undefined, "/api/conversations"),
+        fetchConversationPage(fetch, undefined, "/api/conversations?mode=hidden"),
+      ]);
+      const next: Record<string, string> = {};
+      for (const page of [normal, hidden]) {
+        if (page === "unauthorized") continue;
+        for (const item of page.items) next[item.id] = item.title;
+      }
+      setTitles(next);
+    } catch {
+      setPolicies("error");
+    }
+  }, []);
+
+  useEffect(() => void reload(), [reload]);
+
+  const update = async (policy: PrivacyPolicy, change: Partial<PrivacyPolicy>) => {
+    setMessage(null);
+    try {
+      const response = await fetch("/api/privacy", {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ conversationId: policy.conversationId, ...change }),
+      });
+      if (!response.ok) throw new Error("privacy update unavailable");
+      await reload();
+    } catch {
+      setMessage("Privacy could not be changed. Your chat remains protected.");
+    }
+  };
+
+  return (
+    <section className="settings-card" aria-labelledby="privacy-heading">
+      <h2 id="privacy-heading">Chat privacy</h2>
+      <p>
+        EchoHoard privacy changes what this archive shows; it never changes your WhatsApp chats. MCP
+        access is independent: deny it to keep a chat out of assistant searches and summaries.
+      </p>
+      {policies === "loading" ? <p role="status">Loading chat privacy…</p> : null}
+      {policies === "error" ? <p role="alert">Chat privacy is temporarily unavailable.</p> : null}
+      {Array.isArray(policies) ? (
+        <div className="privacy-list">
+          {policies.map((policy) => (
+            <article className="privacy-row" key={policy.conversationId}>
+              <div>
+                <h3>
+                  {policy.uiVisibility === "locked"
+                    ? "Locked conversation"
+                    : (titles[policy.conversationId] ?? "Conversation")}
+                </h3>
+                <p>
+                  {policy.uiVisibility === "locked"
+                    ? "Step up with Authentik to view this chat."
+                    : "Choose whether this chat appears in normal navigation."}
+                </p>
+              </div>
+              <div className="privacy-actions">
+                <label>
+                  <span className="sr-only">UI visibility</span>
+                  <select
+                    value={policy.uiVisibility}
+                    onChange={(event) =>
+                      void update(policy, {
+                        uiVisibility: event.target.value as PrivacyPolicy["uiVisibility"],
+                      })
+                    }
+                  >
+                    <option value="normal">Visible</option>
+                    <option value="hidden">Hidden</option>
+                    <option value="locked">Locked</option>
+                  </select>
+                </label>
+                <button
+                  className={`button${policy.mcpAccess === "denied" ? " button-primary" : ""}`}
+                  type="button"
+                  aria-pressed={policy.mcpAccess === "denied"}
+                  onClick={() =>
+                    void update(policy, {
+                      mcpAccess: policy.mcpAccess === "allowed" ? "denied" : "allowed",
+                    })
+                  }
+                >
+                  {policy.mcpAccess === "denied" ? "MCP denied" : "MCP allowed"}
+                </button>
+                {policy.uiVisibility === "locked" ? (
+                  <a
+                    className="button"
+                    href={`/auth/unlock/start?archiveId=${encodeURIComponent(policy.archiveId)}&conversationId=${encodeURIComponent(policy.conversationId)}&returnTo=${encodeURIComponent(`/?view=locked&conversation=${policy.conversationId}`)}`}
+                  >
+                    Unlock
+                  </a>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : null}
+      {message ? <p role="alert">{message}</p> : null}
+    </section>
+  );
+}
+
+function LockedFolder() {
+  const [policies, setPolicies] = useState<PrivacyPolicy[] | "loading" | "error">("loading");
+  useEffect(() => {
+    void fetch("/api/privacy", { credentials: "same-origin" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("privacy unavailable");
+        return (await response.json()) as { readonly policies: PrivacyPolicy[] };
+      })
+      .then(
+        (body) => setPolicies(body.policies.filter((policy) => policy.uiVisibility === "locked")),
+        () => setPolicies("error"),
+      );
+  }, []);
+  return (
+    <section className="folder-panel" aria-labelledby="locked-heading">
+      <p className="eyebrow">Protected folder</p>
+      <h2 id="locked-heading">Locked chats</h2>
+      <p>Chat names and content stay concealed until Authentik confirms a recent step-up.</p>
+      {policies === "loading" ? <p role="status">Checking locked chats…</p> : null}
+      {policies === "error" ? <p role="alert">Locked chats are unavailable.</p> : null}
+      {Array.isArray(policies) && policies.length === 0 ? <p>No locked chats.</p> : null}
+      {Array.isArray(policies) ? (
+        <ul className="privacy-folder-list">
+          {policies.map((policy) => (
+            <li key={policy.conversationId}>
+              <span>Locked conversation</span>
+              <a
+                className="button"
+                href={`/auth/unlock/start?archiveId=${encodeURIComponent(policy.archiveId)}&conversationId=${encodeURIComponent(policy.conversationId)}&returnTo=${encodeURIComponent(`/?view=locked&conversation=${policy.conversationId}`)}`}
+              >
+                Step up to open
+              </a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   );
 }

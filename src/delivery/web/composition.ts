@@ -115,6 +115,7 @@ export function createProductionWebRuntime(): WebRuntime {
     media: new PrismaMediaDelivery(prisma, `${process.env.ECHOHOARD_DATA_DIR ?? "/data"}/media`),
     transcription: new OwnerTranscriptionSettings(persistence.transcriptionSettings, catalog),
     grouping: new ConversationGroupingService(new PrismaConversationGroupingPersistence(prisma)),
+    conversationPrivacy: persistence.conversationPrivacy,
     accountSettings,
     liveEventIntake,
   };

@@ -25,10 +25,13 @@ export async function fetchConversationPage(
 ): Promise<ConversationPage | "unauthorized"> {
   const query = new URLSearchParams({ limit: String(PAGE_LIMIT) });
   if (cursor) query.set("cursor", cursor);
-  const response = await fetcher(`${endpoint}?${query.toString()}`, {
-    credentials: "same-origin",
-    headers: { Accept: "application/json" },
-  });
+  const response = await fetcher(
+    `${endpoint}${endpoint.includes("?") ? "&" : "?"}${query.toString()}`,
+    {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    },
+  );
   if (response.status === 401 || response.status === 403) return "unauthorized";
   if (!response.ok) throw new Error("conversation list unavailable");
   const body: unknown = await response.json();

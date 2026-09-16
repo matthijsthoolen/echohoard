@@ -15,6 +15,7 @@ const UNLOCK_STATE_COOKIE = "echohoard_unlock_state";
 const UNLOCK_NONCE_COOKIE = "echohoard_unlock_nonce";
 const UNLOCK_VERIFIER_COOKIE = "echohoard_unlock_verifier";
 const UNLOCK_GRANT_COOKIE = "echohoard_unlock_grant";
+const UNLOCK_RETURN_COOKIE = "echohoard_unlock_return";
 const cookieOptions = "Path=/; HttpOnly; SameSite=Lax; Secure";
 
 export type AuthResponse = Response;
@@ -132,11 +133,13 @@ export class WebAuthBoundary {
       conversationId,
     });
     if (!location) return browserError("access-denied", 403);
+    const returnTo = new URL(request.url).searchParams.get("returnTo");
+    const safeReturnTo = returnTo?.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/";
     return new Response(null, {
       status: 302,
       headers: {
         Location: location,
-        "Set-Cookie": `${UNLOCK_STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_NONCE_COOKIE}=${encodeURIComponent(nonce)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_VERIFIER_COOKIE}=${encodeURIComponent(pkce.verifier)}; ${cookieOptions}; Max-Age=300`,
+        "Set-Cookie": `${UNLOCK_STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_NONCE_COOKIE}=${encodeURIComponent(nonce)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_VERIFIER_COOKIE}=${encodeURIComponent(pkce.verifier)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_RETURN_COOKIE}=${encodeURIComponent(safeReturnTo)}; ${cookieOptions}; Max-Age=300`,
       },
     });
   }
@@ -157,11 +160,12 @@ export class WebAuthBoundary {
       codeVerifier: verifier,
     });
     if (!grant) return browserError("access-denied", 403);
+    const returnTo = readCookie(request, UNLOCK_RETURN_COOKIE) ?? "/";
     return new Response(null, {
       status: 302,
       headers: {
-        Location: this.callbackUrl,
-        "Set-Cookie": `${UNLOCK_GRANT_COOKIE}=${encodeURIComponent(grant)}; ${cookieOptions}; Max-Age=300, ${clearCookie(UNLOCK_STATE_COOKIE)}, ${clearCookie(UNLOCK_NONCE_COOKIE)}, ${clearCookie(UNLOCK_VERIFIER_COOKIE)}`,
+        Location: returnTo,
+        "Set-Cookie": `${UNLOCK_GRANT_COOKIE}=${encodeURIComponent(grant)}; ${cookieOptions}; Max-Age=300, ${clearCookie(UNLOCK_STATE_COOKIE)}, ${clearCookie(UNLOCK_NONCE_COOKIE)}, ${clearCookie(UNLOCK_VERIFIER_COOKIE)}, ${clearCookie(UNLOCK_RETURN_COOKIE)}`,
       },
     });
   }
@@ -229,5 +233,6 @@ export {
   UNLOCK_NONCE_COOKIE,
   UNLOCK_STATE_COOKIE,
   UNLOCK_VERIFIER_COOKIE,
+  UNLOCK_RETURN_COOKIE,
   VERIFIER_COOKIE,
 };

@@ -1050,6 +1050,68 @@ button:focus-visible {
   margin: 0;
   color: var(--ink-muted);
 }
+.privacy-list,
+.privacy-folder-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.privacy-row,
+.privacy-folder-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+.privacy-row h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+.privacy-row p {
+  margin-top: 0.2rem;
+  font-size: 0.875rem;
+}
+.privacy-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.privacy-actions select {
+  min-height: 2.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+.folder-panel {
+  min-width: 0;
+  padding: clamp(1.25rem, 4vw, 3.5rem);
+  overflow: auto;
+}
+.folder-panel h2 {
+  margin: 0 0 0.5rem;
+}
+.folder-panel > p:not(.eyebrow) {
+  max-width: 38rem;
+  color: var(--ink-muted);
+}
+@media (max-width: 700px) {
+  .privacy-row,
+  .privacy-folder-list li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .privacy-actions {
+    justify-content: flex-start;
+  }
+}
 .theme-options {
   display: flex;
   flex-wrap: wrap;

@@ -14,7 +14,9 @@ export interface MessageRouteDependencies {
 }
 
 export interface MessageRouteRuntime {
-  readonly auth: Pick<WebRuntime["auth"], "principalForRequest">;
+  readonly auth: Pick<WebRuntime["auth"], "principalForRequest"> & {
+    readonly lockedPrincipal?: WebRuntime["auth"]["lockedPrincipal"];
+  };
   readonly reads: Pick<WebRuntime["reads"], "listMessages">;
 }
 
@@ -37,11 +39,19 @@ export function createMessagesRoute({ getRuntime }: MessageRouteDependencies) {
     if (parsed.ok === false) return invalid(parsed.error);
 
     try {
+      const unlocked = await runtime.auth.lockedPrincipal?.(
+        request,
+        principal.archiveId,
+        conversationId,
+      );
       const page = await runtime.reads.listMessages({
         archiveId: principal.archiveId,
         conversationId,
         limit: parsed.limit,
         direction: parsed.direction,
+        ...(unlocked
+          ? { uiAccess: { mode: "locked" as const, authorizedConversationIds: [conversationId] } }
+          : {}),
         ...(parsed.cursor ? { cursor: parsed.cursor } : {}),
       });
       return Response.json(toResponse(page), {
