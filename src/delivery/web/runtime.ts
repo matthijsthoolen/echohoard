@@ -3,6 +3,7 @@ import type { ArchiveHealthRead } from "../../application/health-reads.js";
 import type { ArchiveStatisticsRead } from "../../application/statistics.js";
 import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
+import type { TranscriptionSettingsService } from "../../application/transcription-catalog.js";
 import { productionWebRuntime } from "./composition";
 
 export type WebReadServices = Pick<
@@ -19,6 +20,7 @@ export interface WebRuntime {
   readonly auth: WebAuthBoundary;
   readonly reads: WebReadServices;
   readonly media?: MediaDeliveryPort;
+  readonly transcription?: TranscriptionSettingsService;
 }
 
 let activeRuntime: WebRuntime | undefined;

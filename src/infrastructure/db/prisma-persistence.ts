@@ -274,6 +274,7 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     transcriptionRequests: scoped(prisma.transcriptionRequest as unknown as Delegate),
     transcriptionRuns: scoped(prisma.transcriptionRun as unknown as Delegate),
     transcriptVersions: scoped(prisma.transcriptVersion as unknown as Delegate),
+    transcriptionSettings: new PrismaTranscriptionSettingsPersistence(prisma),
     conversationObservations: observations(
       prisma.conversationObservation as unknown as Delegate,
       "sourceConversationId",
@@ -296,6 +297,27 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     ),
   };
 };
+
+export class PrismaTranscriptionSettingsPersistence {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async get(archiveId: string): Promise<string | null> {
+    const archive = await this.prisma.archive.findUnique({
+      where: { id: archiveId },
+      select: { transcriptionModel: true },
+    });
+    return archive?.transcriptionModel ?? null;
+  }
+
+  public async set(archiveId: string, modelId: string | null): Promise<string | null> {
+    const archive = await this.prisma.archive.update({
+      where: { id: archiveId },
+      data: { transcriptionModel: modelId },
+      select: { transcriptionModel: true },
+    });
+    return archive.transcriptionModel;
+  }
+}
 
 type ReadDelegate = {
   findMany(args: unknown): Promise<unknown>;

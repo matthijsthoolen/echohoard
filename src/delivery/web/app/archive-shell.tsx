@@ -186,6 +186,37 @@ function SettingsPanel({
   readonly theme: ThemeMode;
   readonly onThemeChange: (theme: ThemeMode) => void;
 }) {
+  const [catalog, setCatalog] = useState<TranscriptionSettings | "loading" | "error">("loading");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    void fetch("/api/admin/transcription-model", { credentials: "same-origin" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("settings unavailable");
+        return (await response.json()) as TranscriptionSettings;
+      })
+      .then(setCatalog, () => setCatalog("error"));
+  }, []);
+
+  const selectModel = async (modelId: string) => {
+    if (catalog === "loading" || catalog === "error") return;
+    setSaving(true);
+    try {
+      const response = await fetch("/api/admin/transcription-model", {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ modelId: modelId || null }),
+      });
+      if (!response.ok) throw new Error("selection unavailable");
+      setCatalog((await response.json()) as TranscriptionSettings);
+    } catch {
+      // The prior selection remains visible; the next render can retry discovery.
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <section className="settings-panel" id="main-content" aria-labelledby="settings-heading">
       <p className="eyebrow">Preferences</p>
@@ -208,6 +239,43 @@ function SettingsPanel({
           ))}
         </div>
       </section>
+      <section className="settings-card" aria-labelledby="transcription-heading">
+        <h2 id="transcription-heading">Transcription model</h2>
+        <p>Choose the allowlisted model for future voice and video-note transcription.</p>
+        {catalog === "loading" ? <p role="status">Loading available models…</p> : null}
+        {catalog === "error" ? (
+          <p role="alert">Transcription models are temporarily unavailable.</p>
+        ) : null}
+        {catalog !== "loading" && catalog !== "error" ? (
+          <>
+            <label htmlFor="transcription-model">Allowed model</label>
+            <select
+              id="transcription-model"
+              value={catalog.selectedModel ?? ""}
+              disabled={saving || catalog.discovery === "error" || catalog.models.length === 0}
+              onChange={(event) => void selectModel(event.target.value)}
+            >
+              <option value="">No model selected</option>
+              {catalog.models.map((model) => (
+                <option value={model.id} key={model.id}>
+                  {model.label}
+                </option>
+              ))}
+              {catalog.selectedModelState === "unavailable" ? (
+                <option value={catalog.selectedModel ?? ""} disabled>
+                  Selected model unavailable
+                </option>
+              ) : null}
+            </select>
+            {catalog.models.length === 0 ? (
+              <p role="status">No allowed transcription model is configured.</p>
+            ) : null}
+            {catalog.selectedModelState === "unavailable" ? (
+              <p role="alert">The saved model is unavailable. New transcription work is blocked.</p>
+            ) : null}
+          </>
+        ) : null}
+      </section>
       <section className="settings-card" aria-labelledby="about-heading">
         <h2 id="about-heading">About EchoHoard</h2>
         <p>Private, read-only access to your preserved conversations.</p>
@@ -215,4 +283,11 @@ function SettingsPanel({
       </section>
     </section>
   );
+}
+
+interface TranscriptionSettings {
+  readonly models: readonly { readonly id: string; readonly label: string }[];
+  readonly selectedModel: string | null;
+  readonly selectedModelState: "selected" | "unset" | "unavailable";
+  readonly discovery: "ready" | "error";
 }

@@ -9,6 +9,7 @@ import {
   PrismaHealthReadPersistence,
   PrismaReadPersistence,
   PrismaStatisticsPersistence,
+  createPrismaPersistence,
 } from "../../infrastructure/db/prisma-persistence";
 import { PrismaMediaDelivery } from "../../infrastructure/db/media-delivery";
 import { HttpOidcProvider, PrismaPrincipalDirectory } from "../../infrastructure/auth/oidc";
@@ -16,6 +17,11 @@ import { PrismaSessionStore } from "../../infrastructure/auth/sessions";
 import { WebAuthBoundary } from "./auth";
 import type { WebRuntime } from "./runtime";
 import { productionAuthDiagnostic } from "../../application/auth-diagnostics";
+import {
+  OwnerTranscriptionSettings,
+  CachedTranscriptionCatalog,
+} from "../../application/transcription-catalog";
+import { createLiteLlmCatalog } from "../../infrastructure/litellm/catalog";
 
 let activeProductionRuntime: WebRuntime | undefined;
 export function productionWebRuntime(): WebRuntime {
@@ -34,6 +40,14 @@ function createProductionWebRuntime(): WebRuntime {
   const secret = readFileSync(settings.OIDC_CLIENT_SECRET_FILE, "utf8").trim();
   if (!secret) throw new Error("OIDC client secret file is empty");
   const prisma = new PrismaClient();
+  const persistence = createPrismaPersistence(prisma);
+  const catalog = new CachedTranscriptionCatalog(
+    createLiteLlmCatalog(
+      settings.LITELLM_BASE_URL,
+      settings.LITELLM_API_KEY_FILE,
+      settings.ECHOHOARD_TRANSCRIPTION_MODELS,
+    ),
+  );
   const reads = new ArchiveReadService(new PrismaReadPersistence(prisma), new CursorCodec(secret));
   return {
     auth: new WebAuthBoundary(
@@ -64,5 +78,6 @@ function createProductionWebRuntime(): WebRuntime {
         new ArchiveStatisticsService(new PrismaStatisticsPersistence(prisma)).getStatistics(query),
     },
     media: new PrismaMediaDelivery(prisma, `${process.env.ECHOHOARD_DATA_DIR ?? "/data"}/media`),
+    transcription: new OwnerTranscriptionSettings(persistence.transcriptionSettings, catalog),
   };
 }

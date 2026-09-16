@@ -54,6 +54,7 @@ model Archive {
   admittedIdentities              ArchiveIdentity[]
   authSessions                    AuthSession[]
   privacyAudits                   ConversationPrivacyAudit[]
+  transcriptionModel              String?
 
   @@unique([id, userId])
   @@unique([userId, name])

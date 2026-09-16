@@ -47,6 +47,10 @@ export interface TranscriptPort extends ArchiveScopedPort {}
 export interface TranscriptionRequestPort extends ArchiveScopedPort {}
 export interface TranscriptionRunPort extends ArchiveScopedPort {}
 export interface TranscriptVersionPort extends ArchiveScopedPort {}
+export interface TranscriptionSettingsPort {
+  get(archiveId: ArchiveId): Promise<string | null>;
+  set(archiveId: ArchiveId, modelId: string | null): Promise<string | null>;
+}
 
 export interface ObservationPort extends ArchiveScopedPort {
   /** Return a bounded provenance page for one typed normalized entity. */
@@ -79,6 +83,7 @@ export interface PersistencePorts {
   transcriptionRequests: TranscriptionRequestPort;
   transcriptionRuns: TranscriptionRunPort;
   transcriptVersions: TranscriptVersionPort;
+  transcriptionSettings: TranscriptionSettingsPort;
   conversationObservations: ObservationPort;
   messageObservations: ObservationPort;
   revisionObservations: ObservationPort;
