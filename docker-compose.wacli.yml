@@ -1,0 +1,95 @@
+name: echohoard-wacli
+
+# Reference-only sidecar composition. Each account receives a distinct named
+# volume and service; no web, MCP, or public port is connected to these stores.
+services:
+  wacli-pairing:
+    image: ${ECHOHOARD_WACLI_IMAGE:-echohoard-wacli:local}
+    user: "10001:10001"
+    command: ["pair"]
+    environment:
+      WACLI_ACCOUNT: ${ECHOHOARD_WACLI_ACCOUNT:-account-a}
+    volumes:
+      - wacli-account-a:/var/lib/wacli/account
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.50
+    restart: "no"
+    networks: [wacli-private]
+
+  wacli-follow-sync:
+    image: ${ECHOHOARD_WACLI_IMAGE:-echohoard-wacli:local}
+    user: "10001:10001"
+    command: ["follow-sync"]
+    environment:
+      WACLI_ACCOUNT: ${ECHOHOARD_WACLI_ACCOUNT:-account-a}
+      WACLI_WEBHOOK_ENDPOINT: http://worker:3000/internal/wacli/events
+      WACLI_WEBHOOK_SECRET_FILE: /run/secrets/wacli_webhook_key
+    volumes:
+      - wacli-account-a:/var/lib/wacli/account
+    secrets:
+      - wacli_webhook_key
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1.00
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/echohoard-wacli", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks: [wacli-private]
+
+  wacli-follow-sync-b:
+    image: ${ECHOHOARD_WACLI_IMAGE:-echohoard-wacli:local}
+    user: "10001:10001"
+    command: ["follow-sync"]
+    environment:
+      WACLI_ACCOUNT: account-b
+      WACLI_WEBHOOK_ENDPOINT: http://worker:3000/internal/wacli/events
+      WACLI_WEBHOOK_SECRET_FILE: /run/secrets/wacli_webhook_key
+    volumes:
+      - wacli-account-b:/var/lib/wacli/account
+    secrets:
+      - wacli_webhook_key
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: 1.00
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/echohoard-wacli", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks: [wacli-private]
+
+volumes:
+  wacli-account-a:
+  wacli-account-b:
+
+secrets:
+  wacli_webhook_key:
+    file: ${ECHOHOARD_WACLI_WEBHOOK_KEY_FILE:-./container/secrets/wacli-webhook-key.example}
+
+networks:
+  wacli-private:
+    internal: true
