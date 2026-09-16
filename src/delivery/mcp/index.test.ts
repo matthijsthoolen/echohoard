@@ -165,6 +165,35 @@ describe("private MCP Streamable HTTP transport", () => {
     expect(expired.status).toBe(404);
     await app.close();
   });
+
+  it("keeps concurrent initialization within the strict session maximum", async () => {
+    const root = await mkdtemp(join(tmpdir(), "echohoard-mcp-"));
+    const secretFile = join(root, "credential");
+    await writeFile(secretFile, "sentinel-read-token\n", { mode: 0o600 });
+    const app = new PrivateMcpServer({
+      authenticator: new McpCredentialAuthenticator(secretFile, principal),
+      reads,
+      maxSessions: 1,
+      sessionIdleTtlMs: 10_000,
+    });
+
+    const responses = await Promise.all([
+      app.handleRequest(initialize("sentinel-read-token")),
+      app.handleRequest(initialize("sentinel-read-token")),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    const sessionIds = responses.map((response) => response.headers.get(MCP_SESSION_HEADER)!);
+    expect(new Set(sessionIds).size).toBe(2);
+
+    const probes = await Promise.all(
+      sessionIds.map((sessionId) =>
+        app.handleRequest(sessionRequest("sentinel-read-token", sessionId)),
+      ),
+    );
+    expect(probes.filter((response) => response.status === 200)).toHaveLength(1);
+    expect(probes.filter((response) => response.status === 404)).toHaveLength(1);
+    await app.close();
+  });
 });
 
 function sessionRequest(credential: string, sessionId: string): Request {

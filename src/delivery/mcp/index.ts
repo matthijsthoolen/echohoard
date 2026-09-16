@@ -127,6 +127,7 @@ type McpSession = {
  */
 export class PrivateMcpServer {
   private readonly sessions = new Map<string, McpSession>();
+  private sessionAdmission: Promise<void> = Promise.resolve();
   private readonly maxSessions: number;
   private readonly sessionIdleTtlMs: number;
   private readonly now: () => number;
@@ -184,13 +185,16 @@ export class PrivateMcpServer {
     });
     await server.connect(transport);
     const response = await transport.handleRequest(request);
-    if (transport.sessionId) {
-      await this.ensureSessionCapacity(now);
-      this.sessions.set(transport.sessionId, {
-        principal,
-        server,
-        transport,
-        lastActivityAt: now,
+    const newSessionId = transport.sessionId;
+    if (newSessionId) {
+      await this.withSessionAdmission(async () => {
+        await this.ensureSessionCapacity(now);
+        this.sessions.set(newSessionId, {
+          principal,
+          server,
+          transport,
+          lastActivityAt: now,
+        });
       });
     }
     return response;
@@ -222,6 +226,23 @@ export class PrivateMcpServer {
       )[0];
       if (!oldest) break;
       await this.closeSession(oldest[0], oldest[1]);
+    }
+  }
+
+  /** Serialize the capacity check and insertion. Both contain awaits, so a
+   * plain size check would allow concurrent initialize requests to exceed the
+   * configured hard cap. */
+  private async withSessionAdmission<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.sessionAdmission;
+    let release!: () => void;
+    this.sessionAdmission = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
     }
   }
 

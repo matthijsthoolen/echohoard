@@ -50,7 +50,11 @@ import {
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
 import { PrismaTextSnapshotImporter } from "./text-import";
 import { createHash } from "node:crypto";
-import { conversationPrivacyPredicate, mcpConversationPredicate } from "./ui-privacy";
+import {
+  conversationPrivacyPredicate,
+  mcpConversationPredicate,
+  mcpPersonPredicate,
+} from "./ui-privacy";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -902,24 +906,28 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       LEFT JOIN "Identity" identity
         ON identity."archiveId" = p."archiveId" AND identity."personId" = p.id
       WHERE p."archiveId" = ${input.archiveId}::uuid
-        AND (
-          NOT EXISTS (
-            SELECT 1
-            FROM "ConversationParticipant" any_participant
-            WHERE any_participant."archiveId" = p."archiveId"
-              AND any_participant."personId" = p.id
-          )
-          OR EXISTS (
-            SELECT 1
-            FROM "ConversationParticipant" visible_participant
-            JOIN "Conversation" visible_conversation
-              ON visible_conversation."archiveId" = visible_participant."archiveId"
-             AND visible_conversation.id = visible_participant."conversationId"
-            WHERE visible_participant."archiveId" = p."archiveId"
-              AND visible_participant."personId" = p.id
-               AND ${conversationPrivacyPredicate("visible_conversation", input)}
-          )
-        )
+        AND ${
+          input.mcpAccess === "allowed"
+            ? mcpPersonPredicate("p")
+            : Prisma.sql`(
+                NOT EXISTS (
+                  SELECT 1
+                  FROM "ConversationParticipant" any_participant
+                  WHERE any_participant."archiveId" = p."archiveId"
+                    AND any_participant."personId" = p.id
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM "ConversationParticipant" visible_participant
+                  JOIN "Conversation" visible_conversation
+                    ON visible_conversation."archiveId" = visible_participant."archiveId"
+                   AND visible_conversation.id = visible_participant."conversationId"
+                  WHERE visible_participant."archiveId" = p."archiveId"
+                    AND visible_participant."personId" = p.id
+                    AND ${conversationPrivacyPredicate("visible_conversation", input)}
+                )
+              )`
+        }
         ${search}
         ${cursor}
       GROUP BY p.id, p."displayName"
@@ -1383,23 +1391,7 @@ export class PrismaHealthReadPersistence implements HealthReadPersistencePort {
         SELECT COUNT(*)::bigint AS count
         FROM "Person" person
         WHERE person."archiveId" = ${input.archiveId}::uuid
-          AND (
-            NOT EXISTS (
-              SELECT 1 FROM "ConversationParticipant" any_participant
-              WHERE any_participant."archiveId" = person."archiveId"
-                AND any_participant."personId" = person.id
-            )
-            OR EXISTS (
-              SELECT 1
-              FROM "ConversationParticipant" participant
-              JOIN "Conversation" conversation
-                ON conversation."archiveId" = participant."archiveId"
-               AND conversation.id = participant."conversationId"
-              WHERE participant."archiveId" = person."archiveId"
-                AND participant."personId" = person.id
-                AND ${mcpPolicy}
-            )
-          )
+          AND ${input.mcpAccess === "allowed" ? mcpPersonPredicate("person") : Prisma.sql`TRUE`}
       `),
       this.prisma.$queryRaw<
         Array<{ availability: string; referenced: bigint | number }>

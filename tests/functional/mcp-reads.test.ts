@@ -20,6 +20,8 @@ const archiveId = randomUUID();
 const otherArchiveId = randomUUID();
 const personOneId = randomUUID();
 const personTwoId = randomUUID();
+const deniedOnlyPersonId = randomUUID();
+const otherPersonId = randomUUID();
 const conversationId = randomUUID();
 const hiddenAllowedConversationId = randomUUID();
 const deniedConversationId = randomUUID();
@@ -27,6 +29,7 @@ const otherConversationId = randomUUID();
 const messageId = randomUUID();
 const hiddenAllowedMessageId = randomUUID();
 const deniedMessageId = randomUUID();
+const deniedOnlyMessageId = randomUUID();
 const otherMessageId = randomUUID();
 const attachmentId = randomUUID();
 
@@ -76,6 +79,8 @@ describe("PostgreSQL private MCP read traversal", () => {
       data: [
         { id: personOneId, archiveId, displayName: "Alex" },
         { id: personTwoId, archiveId, displayName: "Alex" },
+        { id: deniedOnlyPersonId, archiveId, displayName: "Denied only" },
+        { id: otherPersonId, archiveId: otherArchiveId, displayName: "Alex" },
       ],
     });
     await prisma.conversation.createMany({
@@ -154,17 +159,31 @@ describe("PostgreSQL private MCP read traversal", () => {
           sentAt: new Date("2026-01-03T00:00:00.000Z"),
         },
         {
+          id: deniedOnlyMessageId,
+          archiveId,
+          conversationId: deniedConversationId,
+          sourceConversationId: null,
+          senderId: deniedOnlyPersonId,
+          stableKey: "mcp-denied-only-message",
+          messageType: "text",
+          body: "denied-only sender must stay private",
+          sentAt: new Date("2026-01-03T12:00:00.000Z"),
+        },
+        {
           id: otherMessageId,
           archiveId: otherArchiveId,
           conversationId: otherConversationId,
           sourceConversationId: null,
-          senderId: null,
+          senderId: otherPersonId,
           stableKey: "mcp-other-archive-message",
           messageType: "text",
           body: "other archive must never cross the boundary",
           sentAt: new Date("2026-01-04T00:00:00.000Z"),
         },
       ],
+    });
+    await prisma.conversationParticipant.create({
+      data: { archiveId, conversationId, personId: personTwoId },
     });
     await prisma.attachment.create({
       data: {
@@ -304,6 +323,16 @@ describe("PostgreSQL private MCP read traversal", () => {
     const searchIds = search.result.structuredContent.items.map((item: { id: string }) => item.id);
     expect(searchIds).toContain(hiddenAllowedMessageId);
     expect(searchIds).not.toContain(deniedMessageId);
+    expect(searchIds).not.toContain(deniedOnlyMessageId);
+
+    const people = await httpCall(route, "find_person", { query: "Alex", limit: 10 });
+    const peopleIds = people.result.structuredContent.items.map((item: { id: string }) => item.id);
+    expect(peopleIds).toEqual(expect.arrayContaining([personOneId, personTwoId]));
+    expect(peopleIds).not.toContain(deniedOnlyPersonId);
+    expect(peopleIds).not.toContain(otherPersonId);
+
+    const deniedOnly = await httpCall(route, "find_person", { query: "Denied only" });
+    expect(deniedOnly.result.structuredContent.items).toEqual([]);
 
     const conversations = await httpCall(route, "list_conversations", { limit: 10 });
     const conversationIds = conversations.result.structuredContent.items.map(
@@ -317,6 +346,7 @@ describe("PostgreSQL private MCP read traversal", () => {
     expect(status.result.structuredContent.counts).toMatchObject({
       messages: 2,
       conversations: 2,
+      people: 2,
     });
 
     const otherArchive = await httpCall(route, "get_conversation", {

@@ -36,6 +36,37 @@ export function mcpConversationPredicate(alias: string): Prisma.Sql {
   )`;
 }
 
+/** A person is MCP-disclosable only when an allowed, materialized
+ * conversation relationship or sender message grounds the disclosure. A
+ * Person row created during import is not itself permission to reveal it. */
+export function mcpPersonPredicate(alias: string): Prisma.Sql {
+  return Prisma.sql`(
+    EXISTS (
+      SELECT 1
+      FROM "ConversationParticipant" participant
+      JOIN "Conversation" participant_conversation
+        ON participant_conversation."archiveId" = participant."archiveId"
+       AND participant_conversation.id = participant."conversationId"
+      WHERE participant."archiveId" = ${Prisma.raw(alias)}."archiveId"
+        AND participant."personId" = ${Prisma.raw(alias)}.id
+        AND participant_conversation."materialized" = true
+        AND ${mcpConversationPredicate("participant_conversation")}
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM "Message" sender_message
+      JOIN "Conversation" sender_conversation
+        ON sender_conversation."archiveId" = sender_message."archiveId"
+       AND sender_conversation.id = sender_message."conversationId"
+      WHERE sender_message."archiveId" = ${Prisma.raw(alias)}."archiveId"
+        AND sender_message."senderId" = ${Prisma.raw(alias)}.id
+        AND sender_message."materialized" = true
+        AND sender_conversation."materialized" = true
+        AND ${mcpConversationPredicate("sender_conversation")}
+    )
+  )`;
+}
+
 /** Grouping is a normal UI operation: ordinary groups are selectable, hidden
  * groups are not, and locked groups require a grant for every locked policy
  * participating in the presentation group. */
