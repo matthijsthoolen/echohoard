@@ -26,6 +26,8 @@ export interface ArchiveStatisticsQuery {
   readonly from?: string;
   /** Exclusive UTC ISO timestamp. */
   readonly to?: string;
+  /** Restricts message-derived statistics to one presentation conversation. */
+  readonly unifiedConversationId?: string;
   readonly bucket?: StatisticsBucket;
   readonly limit?: number;
   /** Restricts message-derived statistics to one owned source account. */
@@ -75,6 +77,7 @@ export interface StatisticsPersistenceInput {
   readonly to?: string;
   readonly bucket: StatisticsBucket;
   readonly limit: number;
+  readonly unifiedConversationId?: string;
   readonly sourceAccountId?: string;
   readonly uiMode: UiReadMode;
   readonly authorizedConversationIds: readonly string[];
@@ -123,6 +126,8 @@ function validateStatisticsQuery(query: ArchiveStatisticsQuery): StatisticsPersi
   if (!query.archiveId.trim()) throw new Error("archiveId is required");
   if (query.sourceAccountId !== undefined && !query.sourceAccountId.trim())
     throw new Error("sourceAccountId is invalid");
+  if (query.unifiedConversationId !== undefined && !query.unifiedConversationId.trim())
+    throw new Error("unifiedConversationId is invalid");
   const from = normalizeDate(query.from, "from");
   const to = normalizeDate(query.to, "to");
   if (from && to && from >= to) throw new Error("from must be earlier than to");
@@ -144,6 +149,7 @@ function validateStatisticsQuery(query: ArchiveStatisticsQuery): StatisticsPersi
     ...(to ? { to } : {}),
     bucket,
     limit,
+    ...(query.unifiedConversationId ? { unifiedConversationId: query.unifiedConversationId } : {}),
     ...(query.sourceAccountId ? { sourceAccountId: query.sourceAccountId } : {}),
     uiMode,
     authorizedConversationIds,

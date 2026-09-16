@@ -36,7 +36,7 @@ describe("search route", () => {
     const route = createSearchRoute({ getRuntime: () => ({ auth, reads: { search } }) });
     const response = await route(
       new Request(
-        "http://localhost/api/search?q=needle&conversation=chat-1&person=person-1&direction=received&from=2026-01-01&to=2026-02-01&media=image&name=Alice&text=hello&limit=2&cursor=previous",
+        "http://localhost/api/search?q=needle&conversation=chat-1&sourceAccount=account-1&person=person-1&direction=received&from=2026-01-01&to=2026-02-01&media=image&name=Alice&text=hello&limit=2&cursor=previous",
       ),
     );
     expect(response.status).toBe(200);
@@ -49,6 +49,7 @@ describe("search route", () => {
       archiveId: "archive-1",
       query: "needle",
       conversationId: "chat-1",
+      sourceAccountId: "account-1",
       personId: "person-1",
       senderDirection: "received",
       from: "2026-01-01",

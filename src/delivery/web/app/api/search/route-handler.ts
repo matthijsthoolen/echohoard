@@ -70,6 +70,8 @@ function parseQuery(
   const values = {
     query: params.get("q") ?? params.get("query") ?? undefined,
     conversationId: params.get("conversation") ?? params.get("conversationId") ?? undefined,
+    unifiedConversationId:
+      params.get("unifiedConversation") ?? params.get("unifiedConversationId") ?? undefined,
     personId: params.get("person") ?? params.get("personId") ?? undefined,
     senderDirection: senderDirection as MessageDirection | undefined,
     from: params.get("from") ?? undefined,
@@ -77,6 +79,7 @@ function parseQuery(
     mediaType: mediaType as SearchMediaType | undefined,
     fuzzyName: params.get("name") ?? undefined,
     fuzzyText: params.get("text") ?? undefined,
+    sourceAccountId: params.get("sourceAccount") ?? params.get("sourceAccountId") ?? undefined,
   } satisfies Omit<SearchQuery, "archiveId">;
   for (const [name, value] of Object.entries(values)) {
     if (value !== undefined && value.length > MAX_FILTER_LENGTH)

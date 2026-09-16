@@ -30,6 +30,10 @@ const bobId = randomUUID();
 const otherPersonId = randomUUID();
 const imageId = randomUUID();
 const documentId = randomUUID();
+const sourceConversationOneId = randomUUID();
+const sourceConversationTwoId = randomUUID();
+let accountOneId: string;
+let accountTwoId: string;
 
 describe("PostgreSQL archive statistics", () => {
   beforeAll(async () => {
@@ -42,7 +46,8 @@ describe("PostgreSQL archive statistics", () => {
         { id: emptyArchiveId, userId, name: "statistics-empty" },
       ],
     });
-    const accountOneId = await createFixtureOwnedAccount(prisma, archiveOneId);
+    accountOneId = await createFixtureOwnedAccount(prisma, archiveOneId);
+    accountTwoId = await createFixtureOwnedAccount(prisma, archiveOneId);
     const accountTwoId = await createFixtureOwnedAccount(prisma, archiveTwoId);
     await prisma.source.createMany({
       data: [
@@ -152,6 +157,26 @@ describe("PostgreSQL archive statistics", () => {
         },
       ],
     });
+    await prisma.sourceConversation.createMany({
+      data: [
+        {
+          id: sourceConversationOneId,
+          archiveId: archiveOneId,
+          ownedAccountId: accountOneId,
+          unifiedConversationId: conversationOneId,
+          sourceNamespace: "functional",
+          sourceConversationKey: "source-one",
+        },
+        {
+          id: sourceConversationTwoId,
+          archiveId: archiveOneId,
+          ownedAccountId: accountTwoId,
+          unifiedConversationId: conversationTwoId,
+          sourceNamespace: "functional",
+          sourceConversationKey: "source-two",
+        },
+      ],
+    });
     await prisma.person.createMany({
       data: [
         { id: aliceId, archiveId: archiveOneId, displayName: "Alice" },
@@ -164,12 +189,14 @@ describe("PostgreSQL archive statistics", () => {
         {
           archiveId: archiveOneId,
           conversationId: conversationOneId,
+          sourceConversationId: sourceConversationOneId,
           personId: aliceId,
           role: "member",
         },
         {
           archiveId: archiveOneId,
           conversationId: conversationOneId,
+          sourceConversationId: sourceConversationOneId,
           personId: bobId,
           role: "member",
         },
@@ -201,6 +228,7 @@ describe("PostgreSQL archive statistics", () => {
           id: randomUUID(),
           archiveId: archiveOneId,
           conversationId: conversationOneId,
+          sourceConversationId: sourceConversationOneId,
           senderId: aliceId,
           stableKey: "statistics-sent",
           messageType: "text",
@@ -211,6 +239,7 @@ describe("PostgreSQL archive statistics", () => {
           id: randomUUID(),
           archiveId: archiveOneId,
           conversationId: conversationOneId,
+          sourceConversationId: sourceConversationTwoId,
           senderId: bobId,
           stableKey: "statistics-received-boundary",
           messageType: "text",
@@ -263,7 +292,7 @@ describe("PostgreSQL archive statistics", () => {
 
   it("reconciles finalized totals, media, direction, activity, and top conversations", async () => {
     const result = await service.getStatistics({ archiveId: archiveOneId });
-    expect(result.totals).toEqual({ messages: 2, conversations: 1, people: 2, media: 2 });
+    expect(result.totals).toEqual({ messages: 2, conversations: 2, people: 2, media: 2 });
     expect(result.direction).toEqual({ sent: 1, received: 1, unknown: 0 });
     expect(result.mediaByTypeAndState).toEqual([
       { type: "document", availability: "missing", count: 1 },
@@ -277,7 +306,13 @@ describe("PostgreSQL archive statistics", () => {
       {
         conversationId: conversationOneId,
         title: "Alice and Bob",
-        messageCount: 2,
+        messageCount: 1,
+        lastMessageAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        conversationId: conversationTwoId,
+        title: "Unfinalized chat",
+        messageCount: 1,
         lastMessageAt: "2026-01-02T00:00:00.000Z",
       },
     ]);
@@ -299,5 +334,34 @@ describe("PostgreSQL archive statistics", () => {
       people: 0,
       media: 0,
     });
+  });
+
+  it("keeps logical and global counts stable across merge/unmerge and filters sources", async () => {
+    const before = await service.getStatistics({ archiveId: archiveOneId });
+    const sourceOne = await service.getStatistics({
+      archiveId: archiveOneId,
+      sourceAccountId: accountOneId,
+    });
+    expect(sourceOne.totals.messages).toBe(1);
+    expect(before.totals.messages).toBe(2);
+    expect(before.totals.conversations).toBe(2);
+
+    await prisma.sourceConversation.update({
+      where: { archiveId_id: { archiveId: archiveOneId, id: sourceConversationTwoId } },
+      data: { unifiedConversationId: conversationOneId },
+    });
+    const merged = await service.getStatistics({
+      archiveId: archiveOneId,
+      unifiedConversationId: conversationOneId,
+    });
+    expect(merged.totals.messages).toBe(before.totals.messages);
+    expect(merged.totals.conversations).toBe(2);
+
+    await prisma.sourceConversation.update({
+      where: { archiveId_id: { archiveId: archiveOneId, id: sourceConversationTwoId } },
+      data: { unifiedConversationId: conversationTwoId },
+    });
+    const after = await service.getStatistics({ archiveId: archiveOneId });
+    expect(after.totals).toEqual(before.totals);
   });
 });

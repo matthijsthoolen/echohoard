@@ -30,6 +30,7 @@ describe("archive statistics service", () => {
         bucket: "week",
         limit: 10,
         sourceAccountId: "account-a",
+        unifiedConversationId: "unified-a",
       }),
     ).resolves.toEqual({
       archiveId: "archive-a",
@@ -47,6 +48,7 @@ describe("archive statistics service", () => {
       bucket: "week",
       limit: 10,
       sourceAccountId: "account-a",
+      unifiedConversationId: "unified-a",
       uiMode: "ordinary",
       authorizedConversationIds: [],
     });

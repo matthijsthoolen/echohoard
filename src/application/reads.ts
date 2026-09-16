@@ -354,6 +354,8 @@ export interface SearchQuery extends PageRequest {
   /** Full-text terms. Empty terms are allowed when a filter is supplied. */
   readonly query?: string;
   readonly conversationId?: string;
+  /** Explicit name for the presentation/unified conversation filter. */
+  readonly unifiedConversationId?: string;
   readonly personId?: string;
   /** Restricts results to messages from one owned source account. */
   readonly sourceAccountId?: string;
@@ -431,6 +433,7 @@ export interface ReadSearchPersistenceQuery {
   /** [rank, sortable sent-at, message id] from the previous page. */
   readonly after?: readonly (string | number)[];
   readonly conversationId?: string;
+  readonly unifiedConversationId?: string;
   readonly personId?: string;
   readonly sourceAccountId?: string;
   readonly senderDirection?: MessageDirection;
@@ -683,10 +686,13 @@ export class ArchiveReadService {
     const textQuery = query.query?.trim() ?? "";
     const fuzzyName = query.fuzzyName ?? query.name;
     const fuzzyText = query.fuzzyText ?? query.text;
+    const unifiedConversationId = query.unifiedConversationId ?? query.conversationId;
     validateSearchFilters({ ...query, fuzzyName, fuzzyText });
     const filterKey = searchFilterKey({
       query: textQuery,
-      conversationId: query.conversationId,
+      conversationId: unifiedConversationId,
+      unifiedConversationId,
+      sourceAccountId: query.sourceAccountId,
       personId: query.personId,
       senderDirection: query.senderDirection,
       from: query.from,
@@ -710,7 +716,7 @@ export class ArchiveReadService {
       !textQuery &&
       fuzzyName === undefined &&
       fuzzyText === undefined &&
-      query.conversationId === undefined &&
+      unifiedConversationId === undefined &&
       query.personId === undefined &&
       query.sourceAccountId === undefined &&
       query.senderDirection === undefined &&
@@ -726,7 +732,8 @@ export class ArchiveReadService {
       limit: request.limit + 1,
       direction: request.direction,
       ...(after ? { after } : {}),
-      ...(query.conversationId ? { conversationId: query.conversationId } : {}),
+      ...(unifiedConversationId ? { conversationId: unifiedConversationId } : {}),
+      ...(unifiedConversationId ? { unifiedConversationId } : {}),
       ...(query.sourceAccountId ? { sourceAccountId: query.sourceAccountId } : {}),
       ...(query.personId ? { personId: query.personId } : {}),
       ...(query.senderDirection ? { senderDirection: query.senderDirection } : {}),

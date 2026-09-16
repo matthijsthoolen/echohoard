@@ -73,4 +73,11 @@ describe("signed opaque cursors", () => {
       InvalidCursorError,
     );
   });
+
+  it("binds cursors to the complete filter key", () => {
+    const cursor = codec.encode({ ...input, filterKey: '{"sourceAccountId":"account-a"}' });
+    expect(() => codec.decode(cursor, "archive-a", '{"sourceAccountId":"account-b"}')).toThrow(
+      InvalidCursorError,
+    );
+  });
 });

@@ -578,9 +578,9 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         Prisma.sql`message."searchVector" @@ plainto_tsquery('simple'::regconfig, ${input.query})`,
       );
     if (input.fuzzyText) conditions.push(Prisma.sql`message.body % ${input.fuzzyText}`);
-    if (input.conversationId)
+    if (input.conversationId ?? input.unifiedConversationId)
       conditions.push(
-        Prisma.sql`COALESCE(source."unifiedConversationId", message."conversationId") = ${input.conversationId}::uuid`,
+        Prisma.sql`COALESCE(source."unifiedConversationId", message."conversationId") = ${(input.unifiedConversationId ?? input.conversationId)!}::uuid`,
       );
     if (input.sourceAccountId)
       conditions.push(Prisma.sql`source."ownedAccountId" = ${input.sourceAccountId}::uuid`);
@@ -1228,7 +1228,9 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
           Prisma.sql`
         SELECT
           COUNT(DISTINCT fm.id)::bigint AS messages,
-          COUNT(DISTINCT fm.conversation_id)::bigint AS conversations,
+           /* Conversation totals describe preserved source chats, not the
+            * reversible presentation grouping. */
+           COUNT(DISTINCT COALESCE(fm.source_conversation_id, fm.conversation_id))::bigint AS conversations,
           COUNT(DISTINCT people.person_id)::bigint AS people,
           COUNT(DISTINCT attachment.id)::bigint AS media
         FROM finalized_messages fm
@@ -1395,12 +1397,13 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
       FROM "Message" message
       LEFT JOIN "SourceConversation" source
         ON source.id = message."sourceConversationId" AND source."archiveId" = message."archiveId"
-      JOIN "Conversation" conversation
-        ON conversation.id = message."conversationId"
+       JOIN "Conversation" conversation
+         ON conversation.id = COALESCE(source."unifiedConversationId", message."conversationId")
        AND conversation."archiveId" = message."archiveId"
       WHERE message."archiveId" = ${input.archiveId}::uuid
         AND message."materialized" = true
-        ${input.sourceAccountId ? Prisma.sql`AND source."ownedAccountId" = ${input.sourceAccountId}::uuid` : Prisma.empty}
+         ${input.sourceAccountId ? Prisma.sql`AND source."ownedAccountId" = ${input.sourceAccountId}::uuid` : Prisma.empty}
+         ${input.unifiedConversationId ? Prisma.sql`AND COALESCE(source."unifiedConversationId", message."conversationId") = ${input.unifiedConversationId}::uuid` : Prisma.empty}
         AND EXISTS (
           SELECT 1
           FROM "Snapshot" snapshot

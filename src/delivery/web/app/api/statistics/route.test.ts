@@ -49,6 +49,29 @@ describe("archive statistics route", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
   });
 
+  it("propagates bounded unified and source-account filters", async () => {
+    const archiveStatistics = vi.fn(async () => statistics);
+    await createStatisticsRoute({
+      getRuntime: () => ({
+        auth: { principalForRequest: async () => principal },
+        reads: { archiveStatistics },
+      }),
+    })(
+      new Request(
+        "http://x/api/statistics?unifiedConversationId=unified-1&sourceAccountId=account-1&from=2026-01-01&to=2026-02-01&bucket=week&limit=10",
+      ),
+    );
+    expect(archiveStatistics).toHaveBeenCalledWith({
+      archiveId: "archive-1",
+      unifiedConversationId: "unified-1",
+      sourceAccountId: "account-1",
+      from: "2026-01-01",
+      to: "2026-02-01",
+      bucket: "week",
+      limit: 10,
+    });
+  });
+
   it("redacts service failures", async () => {
     const response = await createStatisticsRoute({
       getRuntime: () => ({
