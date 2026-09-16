@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { OidcAuth, type OidcProvider } from "../../src/application/auth.js";
 import { hashToken, PrismaSessionStore } from "../../src/infrastructure/auth/sessions.js";
+import { PrismaUnlockStore } from "../../src/infrastructure/auth/unlocks.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -11,6 +12,7 @@ const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
 const userId = randomUUID();
 const archiveId = randomUUID();
 const otherArchiveId = randomUUID();
+const lockedConversationId = randomUUID();
 const principal = {
   userId,
   archiveId,
@@ -32,6 +34,15 @@ describe("PostgreSQL durable auth sessions", () => {
         { id: archiveId, userId, name: "Durable sessions" },
         { id: otherArchiveId, userId, name: "Other archive" },
       ],
+    });
+    await prisma.conversation.create({
+      data: {
+        id: lockedConversationId,
+        archiveId,
+        kind: "direct",
+        stableKey: "locked-conversation",
+        uiVisibility: "locked",
+      },
     });
   });
 
@@ -77,5 +88,98 @@ describe("PostgreSQL durable auth sessions", () => {
     await expect(
       prisma.authSession.findUnique({ where: { tokenHash: hashToken(token) } }),
     ).resolves.toBeNull();
+  });
+
+  it("isolates, consumes, expires, revokes, and restarts step-up grants", async () => {
+    const sessionStore = new PrismaSessionStore(prisma);
+    const session = await sessionStore.create(principal);
+    const unlocks = new PrismaUnlockStore(prisma);
+    await expect(
+      unlocks.createChallenge({
+        state: "synthetic-step-up-state",
+        sessionToken: session,
+        archiveId,
+        conversationId: lockedConversationId,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      unlocks.createChallenge({
+        state: "cross-archive-state",
+        sessionToken: session,
+        archiveId: otherArchiveId,
+        conversationId: lockedConversationId,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      unlocks.findChallenge({ state: "synthetic-step-up-state", sessionToken: session }),
+    ).resolves.toEqual({ archiveId, conversationId: lockedConversationId });
+    await expect(
+      unlocks.consumeChallenge({ state: "synthetic-step-up-state", sessionToken: session }),
+    ).resolves.toBe(true);
+    await expect(
+      unlocks.consumeChallenge({ state: "synthetic-step-up-state", sessionToken: session }),
+    ).resolves.toBe(false);
+
+    const grant = await unlocks.createGrant({
+      sessionToken: session,
+      archiveId,
+      conversationId: lockedConversationId,
+    });
+    await expect(
+      unlocks.validateGrant({
+        grantToken: grant,
+        sessionToken: session,
+        archiveId,
+        conversationId: lockedConversationId,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      unlocks.validateGrant({
+        grantToken: grant,
+        sessionToken: session,
+        archiveId: otherArchiveId,
+        conversationId: lockedConversationId,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      prisma.unlockGrant.findUnique({ where: { tokenHash: hashToken(grant) } }),
+    ).resolves.toMatchObject({
+      tokenHash: hashToken(grant),
+    });
+
+    const restarted = new PrismaUnlockStore(prisma);
+    await expect(
+      restarted.validateGrant({
+        grantToken: grant,
+        sessionToken: session,
+        archiveId,
+        conversationId: lockedConversationId,
+      }),
+    ).resolves.toBe(false);
+
+    const expired = new PrismaUnlockStore(prisma, 300, -1);
+    const expiredGrant = await expired.createGrant({
+      sessionToken: session,
+      archiveId,
+      conversationId: lockedConversationId,
+    });
+    await expect(
+      expired.validateGrant({
+        grantToken: expiredGrant,
+        sessionToken: session,
+        archiveId,
+        conversationId: lockedConversationId,
+      }),
+    ).resolves.toBe(false);
+    await unlocks.revokeSession(session);
+    await expect(
+      unlocks.validateGrant({
+        grantToken: grant,
+        sessionToken: session,
+        archiveId,
+        conversationId: lockedConversationId,
+      }),
+    ).resolves.toBe(false);
+    await sessionStore.revoke(session);
   });
 });

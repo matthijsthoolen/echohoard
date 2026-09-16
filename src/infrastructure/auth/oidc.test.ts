@@ -224,6 +224,17 @@ describe("HttpOidcProvider", () => {
     expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
+  it("requests a fresh Authentik authentication for step-up", () => {
+    const url = new URL(
+      provider(mockEndpoints()).authorizationUrl("step-up-state", nonce, "challenge", {
+        prompt: "login",
+        maxAge: 0,
+      }),
+    );
+    expect(url.searchParams.get("prompt")).toBe("login");
+    expect(url.searchParams.get("max_age")).toBe("0");
+  });
+
   it("does not contact discovery when no verifier is supplied", async () => {
     const fetcher = mockEndpoints();
 
