@@ -212,6 +212,7 @@ describe("archive read services", () => {
       from: "2026-01-01T00:00:00.000Z",
       to: "2026-01-04T00:00:00.000Z",
       mediaType: "image",
+      sourceAccountId: "account-a",
       limit: 2,
     });
     expect(first.nextCursor).toBeDefined();
@@ -225,6 +226,7 @@ describe("archive read services", () => {
         from: "2026-01-01T00:00:00.000Z",
         to: "2026-01-04T00:00:00.000Z",
         mediaType: "image",
+        sourceAccountId: "account-a",
       }),
     );
     await expect(

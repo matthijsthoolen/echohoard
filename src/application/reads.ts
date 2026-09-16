@@ -335,6 +335,8 @@ export interface SearchQuery extends PageRequest {
   readonly query?: string;
   readonly conversationId?: string;
   readonly personId?: string;
+  /** Restricts results to messages from one owned source account. */
+  readonly sourceAccountId?: string;
   /** Direction of the message sender; pagination direction remains separate. */
   readonly senderDirection?: MessageDirection;
   readonly from?: string;
@@ -407,6 +409,7 @@ export interface ReadSearchPersistenceQuery {
   readonly after?: readonly (string | number)[];
   readonly conversationId?: string;
   readonly personId?: string;
+  readonly sourceAccountId?: string;
   readonly senderDirection?: MessageDirection;
   readonly from?: string;
   readonly to?: string;
@@ -671,6 +674,7 @@ export class ArchiveReadService {
       fuzzyText === undefined &&
       query.conversationId === undefined &&
       query.personId === undefined &&
+      query.sourceAccountId === undefined &&
       query.senderDirection === undefined &&
       query.from === undefined &&
       query.to === undefined &&
@@ -685,6 +689,7 @@ export class ArchiveReadService {
       direction: request.direction,
       ...(after ? { after } : {}),
       ...(query.conversationId ? { conversationId: query.conversationId } : {}),
+      ...(query.sourceAccountId ? { sourceAccountId: query.sourceAccountId } : {}),
       ...(query.personId ? { personId: query.personId } : {}),
       ...(query.senderDirection ? { senderDirection: query.senderDirection } : {}),
       ...(query.from ? { from: new Date(query.from).toISOString() } : {}),
@@ -758,6 +763,7 @@ function validateSearchFilters(
   for (const [name, value] of [
     ["conversationId", input.conversationId],
     ["personId", input.personId],
+    ["sourceAccountId", input.sourceAccountId],
   ] as const) {
     if (value !== undefined && (!value.trim() || value.length > 200))
       throw new InvalidReadRequestError(`${name} is invalid`);

@@ -16,9 +16,10 @@ filter or pagination direction invalidates the cursor.
   sender's observed display name or the conversation title. A fuzzy match
   returns the existing message/person/conversation IDs; it never merges
   identities or changes stored names.
-- `conversationId` selects one conversation and `personId` selects messages
-  sent by that exact person ID. Both are constrained to the requested
-  archive.
+- `conversationId` selects a unified conversation, including all of its member
+  source conversations, and `personId` selects messages sent by that exact
+  person ID. Both are constrained to the requested archive. `sourceAccountId`
+  selects one owned source account within the unified result.
 - `senderDirection` selects `sent`, `received`, or `unknown`. Missing or
   unsupported metadata is treated as `unknown`; it is independent from the
   cursor's `forward`/`backward` pagination direction.

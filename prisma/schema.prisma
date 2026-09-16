@@ -438,6 +438,8 @@ model SourceConversation {
   @@unique([id, unifiedConversationId, archiveId])
   @@unique([id, archiveId, ownedAccountId])
   @@index([archiveId, ownedAccountId])
+  @@index([archiveId, unifiedConversationId])
+  @@index([archiveId, ownedAccountId, unifiedConversationId])
 }
 
 model ConversationParticipant {
