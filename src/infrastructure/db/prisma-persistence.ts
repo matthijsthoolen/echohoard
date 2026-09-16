@@ -1372,11 +1372,13 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
            /* Conversation totals describe preserved source chats, not the
             * reversible presentation grouping. */
            COUNT(DISTINCT COALESCE(fm.source_conversation_id, fm.conversation_id))::bigint AS conversations,
-          COUNT(DISTINCT people.person_id)::bigint AS people,
+           COUNT(DISTINCT people.person_id)::bigint AS people,
           COUNT(DISTINCT attachment.id)::bigint AS media
         FROM finalized_messages fm
-        LEFT JOIN finalized_people people
-          ON people.archive_id = fm.archive_id
+         LEFT JOIN finalized_people people
+           ON people.archive_id = fm.archive_id
+          AND people.conversation_id = fm.conversation_id
+          AND people.source_conversation_id IS NOT DISTINCT FROM fm.source_conversation_id
          LEFT JOIN "MessageAttachment" link
            ON link."archiveId" = fm.archive_id AND link."messageId" = fm.id AND link."materialized" = true
         LEFT JOIN "Attachment" attachment
@@ -1462,7 +1464,10 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
           ON conversation."archiveId" = fm.archive_id
           AND conversation.id = fm.conversation_id
         GROUP BY fm.conversation_id, conversation."ownerTitle", conversation.title
-        ORDER BY message_count DESC, fm.conversation_id ASC
+           /* Count ties are ordered by the newest message, then the stable
+            * presentation id.  Do not rely on PostgreSQL's arbitrary order
+            * for equal-count groups. */
+           ORDER BY message_count DESC, last_message_at DESC NULLS LAST, fm.conversation_id ASC
         LIMIT ${input.limit}
       `,
         ),
@@ -1510,24 +1515,36 @@ export const PrismaArchiveStatisticsPersistence = PrismaStatisticsPersistence;
 
 function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`
-    WITH finalized_messages AS (
-      SELECT
-        message.id,
-        message."archiveId" AS archive_id,
-        COALESCE(source."unifiedConversationId", message."conversationId") AS conversation_id,
-        message."sourceConversationId" AS source_conversation_id,
-        message."senderId" AS sender_id,
-        message.metadata,
-        message."sentAt" AS sent_at
-      FROM "Message" message
-      LEFT JOIN "SourceConversation" source
-        ON source.id = message."sourceConversationId" AND source."archiveId" = message."archiveId"
+     WITH finalized_messages AS (
+       SELECT
+         message.id,
+         message."archiveId" AS archive_id,
+         COALESCE(source."unifiedConversationId", message."conversationId") AS conversation_id,
+         message."sourceConversationId" AS source_conversation_id,
+         /* V2 rows carry account provenance on SourceConversation.  Legacy
+          * V1 rows have no source conversation, so their account is resolved
+          * through the snapshot named by message provenance.  If neither is
+          * present the row remains in unfiltered archive totals but cannot be
+          * attributed to a selected account. */
+         COALESCE(source."ownedAccountId", provenance_snapshot."ownedAccountId") AS source_account_id,
+         message."senderId" AS sender_id,
+         message.metadata,
+         message."sentAt" AS sent_at
+       FROM "Message" message
+       LEFT JOIN "SourceConversation" source
+         ON source.id = message."sourceConversationId" AND source."archiveId" = message."archiveId"
+       LEFT JOIN "Snapshot" provenance_snapshot
+         ON provenance_snapshot."archiveId" = message."archiveId"
+        AND provenance_snapshot.id::text = COALESCE(
+          message.metadata->>'lastSeenSnapshotId',
+          message.metadata->>'firstSeenSnapshotId'
+        )
        JOIN "Conversation" conversation
          ON conversation.id = COALESCE(source."unifiedConversationId", message."conversationId")
        AND conversation."archiveId" = message."archiveId"
       WHERE message."archiveId" = ${input.archiveId}::uuid
         AND message."materialized" = true
-          ${input.sourceAccountId ? Prisma.sql`AND source."ownedAccountId"::text = ${input.sourceAccountId}` : Prisma.empty}
+           ${input.sourceAccountId ? Prisma.sql`AND COALESCE(source."ownedAccountId", provenance_snapshot."ownedAccountId")::text = ${input.sourceAccountId}` : Prisma.empty}
           ${input.unifiedConversationId ? Prisma.sql`AND COALESCE(source."unifiedConversationId", message."conversationId")::text = ${input.unifiedConversationId}` : Prisma.empty}
         AND EXISTS (
           SELECT 1
@@ -1546,17 +1563,17 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
         AND ${uiConversationPredicate("conversation", input)}
         ${datePredicates(input)}
     ),
-    finalized_people AS (
-      SELECT fm.archive_id, fm.sender_id AS person_id
+     finalized_people AS (
+       SELECT fm.archive_id, fm.conversation_id, fm.source_conversation_id, fm.sender_id AS person_id
+       FROM finalized_messages fm
+       WHERE fm.sender_id IS NOT NULL
+       UNION
+       SELECT fm.archive_id, fm.conversation_id, fm.source_conversation_id, participant."personId" AS person_id
       FROM finalized_messages fm
-      WHERE fm.sender_id IS NOT NULL
-      UNION
-      SELECT fm.archive_id, participant."personId" AS person_id
-      FROM finalized_messages fm
-      JOIN "ConversationParticipant" participant
-        ON participant."archiveId" = fm.archive_id
-         AND (participant."conversationId" = fm.conversation_id
-           OR participant."sourceConversationId" = fm.source_conversation_id)
+       JOIN "ConversationParticipant" participant
+         ON participant."archiveId" = fm.archive_id
+          AND (participant."sourceConversationId" = fm.source_conversation_id
+            OR (fm.source_conversation_id IS NULL AND participant."conversationId" = fm.conversation_id))
     )
     ${select}
   `;

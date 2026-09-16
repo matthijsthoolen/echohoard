@@ -346,7 +346,38 @@ describe("PostgreSQL archive statistics", () => {
       archiveId: archiveOneId,
       sourceAccountId: accountOneId,
     });
-    expect(sourceOne.totals.messages).toBe(1);
+    const sourceTwo = await service.getStatistics({
+      archiveId: archiveOneId,
+      sourceAccountId: accountTwoId,
+    });
+    expect(sourceOne.totals).toEqual({ messages: 1, conversations: 1, people: 2, media: 1 });
+    expect(sourceOne.mediaByTypeAndState).toEqual([
+      { type: "image", availability: "available", count: 1 },
+    ]);
+    expect(sourceOne.direction).toEqual({ sent: 1, received: 0, unknown: 0 });
+    expect(sourceOne.activity).toEqual([{ bucketStart: "2026-01-01T00:00:00.000Z", count: 1 }]);
+    expect(sourceOne.mostActiveConversations).toEqual([
+      {
+        conversationId: conversationOneId,
+        title: "Alice and Bob",
+        messageCount: 1,
+        lastMessageAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+    expect(sourceTwo.totals).toEqual({ messages: 1, conversations: 1, people: 1, media: 1 });
+    expect(sourceTwo.mediaByTypeAndState).toEqual([
+      { type: "document", availability: "missing", count: 1 },
+    ]);
+    expect(sourceTwo.direction).toEqual({ sent: 0, received: 1, unknown: 0 });
+    expect(sourceTwo.activity).toEqual([{ bucketStart: "2026-01-02T00:00:00.000Z", count: 1 }]);
+    expect(sourceTwo.mostActiveConversations).toEqual([
+      {
+        conversationId: conversationTwoId,
+        title: "Unfinalized chat",
+        messageCount: 1,
+        lastMessageAt: "2026-01-02T00:00:00.000Z",
+      },
+    ]);
     expect(before.totals.messages).toBe(2);
     expect(before.totals.conversations).toBe(2);
 
@@ -358,8 +389,18 @@ describe("PostgreSQL archive statistics", () => {
       archiveId: archiveOneId,
       unifiedConversationId: conversationOneId,
     });
-    expect(merged.totals.messages).toBe(before.totals.messages);
-    expect(merged.totals.conversations).toBe(2);
+    expect(merged.totals).toEqual(before.totals);
+    expect(merged.direction).toEqual(before.direction);
+    expect(merged.mediaByTypeAndState).toEqual(before.mediaByTypeAndState);
+    expect(merged.activity).toEqual(before.activity);
+    expect(merged.mostActiveConversations).toEqual([
+      {
+        conversationId: conversationOneId,
+        title: "Alice and Bob",
+        messageCount: 2,
+        lastMessageAt: "2026-01-02T00:00:00.000Z",
+      },
+    ]);
 
     await prisma.sourceConversation.update({
       where: { archiveId_id: { archiveId: archiveOneId, id: sourceConversationTwoId } },
@@ -367,5 +408,9 @@ describe("PostgreSQL archive statistics", () => {
     });
     const after = await service.getStatistics({ archiveId: archiveOneId });
     expect(after.totals).toEqual(before.totals);
+    expect(after.mediaByTypeAndState).toEqual(before.mediaByTypeAndState);
+    expect(after.direction).toEqual(before.direction);
+    expect(after.activity).toEqual(before.activity);
+    expect(after.mostActiveConversations).toEqual(before.mostActiveConversations);
   });
 });
