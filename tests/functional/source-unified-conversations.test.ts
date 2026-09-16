@@ -255,11 +255,13 @@ describe("source and unified conversation persistence", () => {
       reason: "synthetic exact selection",
       idempotencyKey: `merge-${messageId}`,
       ownerTitle: "Owner title",
+      uiAccess: { authorizedConversationIds: [] },
     };
     const merged = await service.merge(merge);
     expect(merged.idempotent).toBe(false);
     expect((await service.merge(merge)).idempotent).toBe(true);
-    const mergedState = await service.getState(archiveOneId, targetId);
+    const access = { authorizedConversationIds: [] };
+    const mergedState = await service.getState(archiveOneId, targetId, access);
     expect(mergedState).toMatchObject({
       version: 1,
       mergeSourceIds: [sourceId],
@@ -290,7 +292,7 @@ describe("source and unified conversation persistence", () => {
       (await prisma.sourceConversation.findUnique({ where: { id: sourceId } }))
         ?.unifiedConversationId,
     ).toBe(sourceId);
-    await expect(service.getState(archiveOneId, targetId)).resolves.toMatchObject({
+    await expect(service.getState(archiveOneId, targetId, access)).resolves.toMatchObject({
       version: 2,
       currentSourceIds: [targetId],
       mergeSourceIds: [],
@@ -298,6 +300,63 @@ describe("source and unified conversation persistence", () => {
     await expect(
       service.merge({ ...merge, expectedVersion: 0, idempotencyKey: `stale-${messageId}` }),
     ).rejects.toThrow("stale grouping version");
+    await prisma.conversation.update({
+      where: { id: targetId },
+      data: { uiVisibility: "hidden" },
+    });
+    await expect(service.getState(archiveOneId, targetId, access)).rejects.toThrow(
+      "grouping conversation unavailable",
+    );
+    await expect(
+      service.merge({ ...merge, expectedVersion: 2, idempotencyKey: `hidden-${messageId}` }),
+    ).rejects.toThrow("grouping conversation unavailable");
+    await prisma.conversation.update({
+      where: { id: targetId },
+      data: { uiVisibility: "normal" },
+    });
+    await prisma.conversation.update({
+      where: { id: sourceId },
+      data: { uiVisibility: "locked" },
+    });
+    await expect(
+      service.merge({
+        ...merge,
+        expectedVersion: 2,
+        idempotencyKey: `locked-source-${messageId}`,
+      }),
+    ).rejects.toThrow("grouping conversation unavailable");
+    await prisma.sourceConversation.update({
+      where: { archiveId_id: { archiveId: archiveOneId, id: sourceId } },
+      data: { unifiedConversationId: targetId },
+    });
+    await expect(service.getState(archiveOneId, targetId, access)).rejects.toThrow(
+      "grouping conversation unavailable",
+    );
+    await expect(
+      service.getState(archiveOneId, targetId, {
+        authorizedConversationIds: [targetId, sourceId],
+      }),
+    ).resolves.toMatchObject({ currentSourceIds: expect.arrayContaining([targetId, sourceId]) });
+    await prisma.conversation.update({
+      where: { id: targetId },
+      data: { uiVisibility: "locked" },
+    });
+    await expect(service.getState(archiveOneId, targetId, access)).rejects.toThrow(
+      "grouping conversation unavailable",
+    );
+    await expect(
+      service.getState(archiveOneId, targetId, {
+        authorizedConversationIds: [targetId, sourceId],
+      }),
+    ).resolves.toBeDefined();
+    await prisma.conversation.update({
+      where: { id: targetId },
+      data: { uiVisibility: "normal" },
+    });
+    await prisma.conversation.update({
+      where: { id: sourceId },
+      data: { uiVisibility: "normal" },
+    });
     await prisma.conversation.update({ where: { id: targetId }, data: { groupingLocked: true } });
     await expect(
       service.merge({ ...merge, expectedVersion: 2, idempotencyKey: `locked-${messageId}` }),

@@ -123,6 +123,44 @@ describe("conversation grouping route", () => {
       version: 3,
       sources: [{ id: "source-exact" }],
     });
-    expect(getState).toHaveBeenCalledWith("archive-1", "target");
+    expect(getState).toHaveBeenCalledWith("archive-1", "target", {
+      authorizedConversationIds: [],
+    });
+  });
+
+  it("passes recent step-up grants for every grouping id without enumerating denied ids", async () => {
+    const getState = vi.fn(async () => {
+      throw new Error("grouping conversation unavailable");
+    });
+    const persistence: ConversationGroupingPersistence = {
+      merge: vi.fn(async () => {
+        throw new Error("grouping conversation unavailable");
+      }),
+      unmerge: vi.fn(),
+      getState,
+    };
+    const lockedPrincipal = vi.fn(async (_request: Request, _archive: string, id: string) =>
+      id === "locked-source" ? principal : null,
+    );
+    const route = createGroupingRoute({
+      getRuntime: () => ({
+        auth: { principalForRequest: async () => principal, lockedPrincipal },
+        grouping: new ConversationGroupingService(persistence),
+      }),
+    });
+    const response = await route(
+      new Request("http://localhost/api/conversations/target/grouping", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "merge",
+          sourceConversationIds: ["locked-source", "missing-source"],
+          expectedVersion: 0,
+        }),
+      }),
+      { params: { conversationId: "target" } },
+    );
+    expect(response.status).toBe(404);
+    expect(lockedPrincipal).toHaveBeenCalledTimes(3);
+    expect(getState).not.toHaveBeenCalled();
   });
 });

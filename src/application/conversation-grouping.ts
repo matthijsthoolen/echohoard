@@ -1,5 +1,10 @@
 export type ConversationGroupingAction = "merge" | "unmerge";
 
+export interface GroupingUiAccess {
+  /** Conversation ids for which Authentik step-up was recently validated. */
+  readonly authorizedConversationIds: readonly string[];
+}
+
 export interface ConversationGroupingRequest {
   readonly archiveId: string;
   readonly targetConversationId: string;
@@ -13,6 +18,7 @@ export interface ConversationGroupingRequest {
   readonly ownerAvatar?: string | null;
   readonly auditId?: string;
   readonly requestedAt?: Date;
+  readonly uiAccess: GroupingUiAccess;
 }
 
 export interface ConversationGroupingResult {
@@ -28,7 +34,11 @@ export interface ConversationGroupingResult {
 export interface ConversationGroupingPersistence {
   merge(request: ConversationGroupingRequest): Promise<ConversationGroupingResult>;
   unmerge(request: ConversationGroupingRequest): Promise<ConversationGroupingResult>;
-  getState(archiveId: string, targetConversationId: string): Promise<ConversationGroupingState>;
+  getState(
+    archiveId: string,
+    targetConversationId: string,
+    uiAccess: GroupingUiAccess,
+  ): Promise<ConversationGroupingState>;
 }
 
 export interface GroupingSourceConversation {
@@ -65,10 +75,11 @@ export class ConversationGroupingService {
   public getState(
     archiveId: string,
     targetConversationId: string,
+    uiAccess: GroupingUiAccess,
   ): Promise<ConversationGroupingState> {
     if (!archiveId.trim() || !targetConversationId.trim())
       throw new Error("conversation is required");
-    return this.persistence.getState(archiveId, targetConversationId);
+    return this.persistence.getState(archiveId, targetConversationId, uiAccess);
   }
 }
 
@@ -78,7 +89,8 @@ function validateRequest(request: ConversationGroupingRequest, unmerge: boolean)
       name === "requestedAt" ||
       name === "ownerTitle" ||
       name === "ownerAvatar" ||
-      name === "sourceConversationIds"
+      name === "sourceConversationIds" ||
+      name === "uiAccess"
     )
       continue;
     if (name === "expectedVersion") {
@@ -93,4 +105,10 @@ function validateRequest(request: ConversationGroupingRequest, unmerge: boolean)
   if (ids.size !== request.sourceConversationIds.length || ids.has(request.targetConversationId))
     throw new Error("sourceConversationIds must be unique and cannot contain the target");
   if (unmerge && !request.auditId) throw new Error("auditId is required for unmerge");
+  if (
+    !request.uiAccess ||
+    !Array.isArray(request.uiAccess.authorizedConversationIds) ||
+    request.uiAccess.authorizedConversationIds.some((id) => !id.trim())
+  )
+    throw new Error("ui authorization is required");
 }

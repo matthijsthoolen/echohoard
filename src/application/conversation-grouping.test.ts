@@ -12,6 +12,7 @@ const request = {
   actor: "owner",
   reason: "same chat",
   idempotencyKey: "command-1",
+  uiAccess: { authorizedConversationIds: [] },
 } as const;
 
 describe("ConversationGroupingService", () => {

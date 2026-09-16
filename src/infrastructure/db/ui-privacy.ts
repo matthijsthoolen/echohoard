@@ -6,6 +6,59 @@ export interface UiPrivacyQueryInput {
   readonly authorizedConversationIds: readonly string[];
 }
 
+/** Grouping is a normal UI operation: ordinary groups are selectable, hidden
+ * groups are not, and locked groups require a grant for every locked policy
+ * participating in the presentation group. */
+export function groupingConversationPredicate(
+  alias: string,
+  authorizedConversationIds: readonly string[],
+): Prisma.Sql {
+  const groupId = presentationConversationId(alias);
+  return groupingPolicyPredicate(
+    Prisma.sql`${Prisma.raw(alias)}."archiveId"`,
+    groupId,
+    authorizedConversationIds,
+  );
+}
+
+export function groupingSourcePredicate(
+  alias: string,
+  authorizedConversationIds: readonly string[],
+): Prisma.Sql {
+  return groupingPolicyPredicate(
+    Prisma.sql`${Prisma.raw(alias)}."archiveId"`,
+    Prisma.sql`${Prisma.raw(alias)}."unifiedConversationId"`,
+    authorizedConversationIds,
+  );
+}
+
+function groupingPolicyPredicate(
+  archiveId: Prisma.Sql,
+  groupId: Prisma.Sql,
+  authorizedConversationIds: readonly string[],
+): Prisma.Sql {
+  const unauthorizedLocked =
+    authorizedConversationIds.length === 0
+      ? Prisma.sql`TRUE`
+      : Prisma.sql`policy.id::text NOT IN (${Prisma.join(
+          authorizedConversationIds.map((id) => Prisma.sql`${id}`),
+        )})`;
+  return Prisma.sql`
+    NOT EXISTS (
+      SELECT 1 FROM "Conversation" policy
+      WHERE policy."archiveId" = ${archiveId}
+        AND ${policyBelongsToGroup("policy", groupId)}
+        AND policy."uiVisibility" = 'hidden'
+    )
+    AND NOT EXISTS (
+      SELECT 1 FROM "Conversation" policy
+      WHERE policy."archiveId" = ${archiveId}
+        AND ${policyBelongsToGroup("policy", groupId)}
+        AND policy."uiVisibility" = 'locked'
+        AND ${unauthorizedLocked}
+    )`;
+}
+
 /**
  * Return the effective UI policy for the presentation group containing the
  * aliased conversation. Source conversations remain policy-bearing rows, so
@@ -54,11 +107,13 @@ function policyBelongsToGroup(policyAlias: string, groupId: Prisma.Sql): Prisma.
     ${Prisma.raw(policyAlias)}.id = ${groupId}
     OR EXISTS (
       SELECT 1
-      FROM "SourceConversation" group_source
-      WHERE group_source."archiveId" = ${Prisma.raw(policyAlias)}."archiveId"
-        AND group_source."unifiedConversationId" = ${groupId}
-        AND (
-          EXISTS (
+        FROM "SourceConversation" group_source
+        WHERE group_source."archiveId" = ${Prisma.raw(policyAlias)}."archiveId"
+          AND group_source."unifiedConversationId" = ${groupId}
+          AND (
+            group_source.id = ${Prisma.raw(policyAlias)}.id
+            OR
+            EXISTS (
             SELECT 1
             FROM "Message" group_message
             WHERE group_message."archiveId" = group_source."archiveId"

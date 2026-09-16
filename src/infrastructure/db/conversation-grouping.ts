@@ -4,7 +4,9 @@ import type {
   ConversationGroupingPersistence,
   ConversationGroupingRequest,
   ConversationGroupingResult,
+  GroupingUiAccess,
 } from "../../application/conversation-grouping.js";
+import { groupingConversationPredicate, groupingSourcePredicate } from "./ui-privacy";
 
 type PreviousGroups = Record<string, string>;
 
@@ -20,14 +22,30 @@ export class PrismaConversationGroupingPersistence implements ConversationGroupi
     return this.run(request, "unmerge");
   }
 
-  public async getState(archiveId: string, targetConversationId: string) {
+  public async getState(
+    archiveId: string,
+    targetConversationId: string,
+    uiAccess: GroupingUiAccess,
+  ) {
     const target = await this.prisma.conversation.findUnique({
       where: { archiveId_id: { archiveId, id: targetConversationId } },
       select: { id: true, groupingVersion: true },
     });
-    if (!target) throw new Error("target conversation is not in the archive");
+    if (!target) throw new Error("grouping conversation unavailable");
+    const targetAllowed = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM "Conversation" conversation
+      WHERE conversation."archiveId" = ${archiveId}::uuid
+        AND conversation.id = ${targetConversationId}::uuid
+        AND ${groupingConversationPredicate("conversation", uiAccess.authorizedConversationIds)}
+    `);
+    if (targetAllowed.length !== 1) throw new Error("grouping conversation unavailable");
+    const allowedSources = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT source.id FROM "SourceConversation" source
+      WHERE source."archiveId" = ${archiveId}::uuid
+        AND ${groupingSourcePredicate("source", uiAccess.authorizedConversationIds)}
+    `);
     const sources = await this.prisma.sourceConversation.findMany({
-      where: { archiveId },
+      where: { archiveId, id: { in: allowedSources.map((source) => source.id) } },
       select: {
         id: true,
         unifiedConversationId: true,
@@ -69,6 +87,7 @@ export class PrismaConversationGroupingPersistence implements ConversationGroupi
     request: ConversationGroupingRequest,
     action: "merge" | "unmerge",
   ): Promise<ConversationGroupingResult> {
+    await this.assertAuthorized(this.prisma, request, request.uiAccess);
     const existing = await this.prisma.conversationMergeAudit.findUnique({
       where: {
         archiveId_idempotencyKey: {
@@ -90,17 +109,17 @@ export class PrismaConversationGroupingPersistence implements ConversationGroupi
       const target = await tx.conversation.findUnique({
         where: { archiveId_id: { archiveId: request.archiveId, id: request.targetConversationId } },
       });
-      if (!target) throw new Error("target conversation is not in the archive");
+      if (!target) throw new Error("grouping conversation unavailable");
       if (target.groupingLocked) throw new Error("conversation grouping is locked");
       if (target.groupingVersion !== request.expectedVersion)
         throw new Error("stale grouping version");
+      await this.assertAuthorized(tx, request, request.uiAccess);
 
       const sources = await tx.sourceConversation.findMany({
         where: { archiveId: request.archiveId, id: { in: ids } },
         select: { id: true, unifiedConversationId: true },
       });
-      if (sources.length !== ids.length)
-        throw new Error("a source conversation is not in the archive");
+      if (sources.length !== ids.length) throw new Error("grouping conversation unavailable");
       const previousGroups = Object.fromEntries(
         sources.map((source) => [source.id, source.unifiedConversationId]),
       );
@@ -162,6 +181,29 @@ export class PrismaConversationGroupingPersistence implements ConversationGroupi
       });
       return { ...resultFromAudit(audit, request, action), idempotent: false };
     });
+  }
+
+  private async assertAuthorized(
+    client: PrismaClient | Prisma.TransactionClient,
+    request: ConversationGroupingRequest,
+    uiAccess: GroupingUiAccess,
+  ): Promise<void> {
+    const targetRows = await client.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT conversation.id FROM "Conversation" conversation
+      WHERE conversation."archiveId" = ${request.archiveId}::uuid
+        AND conversation.id = ${request.targetConversationId}::uuid
+        AND ${groupingConversationPredicate("conversation", uiAccess.authorizedConversationIds)}
+    `);
+    const sourceRows = await client.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT source.id FROM "SourceConversation" source
+      WHERE source."archiveId" = ${request.archiveId}::uuid
+        AND source.id IN (${Prisma.join(
+          request.sourceConversationIds.map((id) => Prisma.sql`${id}::uuid`),
+        )})
+        AND ${groupingSourcePredicate("source", uiAccess.authorizedConversationIds)}
+    `);
+    if (targetRows.length !== 1 || sourceRows.length !== request.sourceConversationIds.length)
+      throw new Error("grouping conversation unavailable");
   }
 }
 
