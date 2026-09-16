@@ -37,7 +37,7 @@ export async function GET(): Promise<Response> {
     if (!tables[0]?.migrations_table)
       return Response.json({ status: "migrations-pending" }, { status: 503 });
     const migrations = await prisma.$queryRaw<MigrationRecord[]>`
-      SELECT migration_name, finished_at, rolled_back_at
+      SELECT migration_name, started_at, finished_at, rolled_back_at
       FROM "_prisma_migrations"
       ORDER BY started_at, migration_name
     `;

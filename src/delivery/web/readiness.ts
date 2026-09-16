@@ -29,6 +29,7 @@ export interface MigrationReadiness {
 
 export interface MigrationRecord {
   readonly migration_name: string;
+  readonly started_at: Date;
   readonly finished_at: Date | null;
   readonly rolled_back_at: Date | null;
 }
@@ -58,10 +59,20 @@ export function getMigrationReadinessFailure(
   const rows = status.migrations ?? [];
   const shipped = new Set(shippedMigrations);
   if (rows.some((row) => !shipped.has(row.migration_name))) return "migrations-unknown";
-  if (rows.some((row) => row.finished_at === null || row.rolled_back_at !== null))
-    return "migrations-failed";
-  if (shippedMigrations.some((name) => !rows.some((row) => row.migration_name === name)))
-    return "migrations-pending";
+
+  // Prisma keeps every attempt in this table. A rolled-back attempt is only
+  // historical when a later attempt for the same migration completed.
+  const latestByMigration = new Map<string, MigrationRecord>();
+  for (const row of rows) {
+    const latest = latestByMigration.get(row.migration_name);
+    if (latest === undefined || row.started_at >= latest.started_at)
+      latestByMigration.set(row.migration_name, row);
+  }
+  for (const name of shippedMigrations) {
+    const latest = latestByMigration.get(name);
+    if (latest === undefined) return "migrations-pending";
+    if (latest.finished_at === null || latest.rolled_back_at !== null) return "migrations-failed";
+  }
   return undefined;
 }
 

@@ -20,6 +20,18 @@ const configuration: ReadinessConfiguration = {
   ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE: "/run/secrets/wacli",
 };
 
+const migration = (
+  migration_name: string,
+  started_at: string,
+  finished_at: string | null,
+  rolled_back_at: string | null,
+) => ({
+  migration_name,
+  started_at: new Date(started_at),
+  finished_at: finished_at === null ? null : new Date(finished_at),
+  rolled_back_at: rolled_back_at === null ? null : new Date(rolled_back_at),
+});
+
 describe("web readiness configuration", () => {
   it.each([
     ["OIDC_ISSUER", { OIDC_ISSUER: undefined }],
@@ -68,21 +80,21 @@ describe("web readiness configuration", () => {
   it.each([
     [
       "latest migration is pending",
-      [{ migration_name: "001", finished_at: new Date(), rolled_back_at: null }],
+      [migration("001", "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", null)],
       ["001", "002"],
       "migrations-pending",
     ],
     [
       "migration failed",
-      [{ migration_name: "001", finished_at: null, rolled_back_at: null }],
+      [migration("001", "2026-01-01T00:00:00Z", null, null)],
       ["001"],
       "migrations-failed",
     ],
     [
       "database has an unknown migration",
       [
-        { migration_name: "001", finished_at: new Date(), rolled_back_at: null },
-        { migration_name: "foreign", finished_at: new Date(), rolled_back_at: null },
+        migration("001", "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", null),
+        migration("foreign", "2026-01-01T00:02:00Z", "2026-01-01T00:03:00Z", null),
       ],
       ["001"],
       "migrations-unknown",
@@ -101,6 +113,40 @@ describe("web readiness configuration", () => {
     ).toBe(reason);
   });
 
+  it("ignores a rolled-back attempt when a later attempt succeeds", () => {
+    expect(
+      getMigrationReadinessFailure(
+        {
+          user_table: true,
+          migrations_table: true,
+          applied_migrations: 2,
+          migrations: [
+            migration("001", "2026-01-01T00:00:00Z", null, "2026-01-01T00:01:00Z"),
+            migration("001", "2026-01-01T00:02:00Z", "2026-01-01T00:03:00Z", null),
+          ],
+        },
+        ["001"],
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects a later unresolved attempt after a completed migration", () => {
+    expect(
+      getMigrationReadinessFailure(
+        {
+          user_table: true,
+          migrations_table: true,
+          applied_migrations: 2,
+          migrations: [
+            migration("001", "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", null),
+            migration("001", "2026-01-01T00:02:00Z", null, null),
+          ],
+        },
+        ["001"],
+      ),
+    ).toBe("migrations-failed");
+  });
+
   it("requires every shipped migration, not merely a positive count", () => {
     expect(
       hasCompletedMigrations(
@@ -108,7 +154,7 @@ describe("web readiness configuration", () => {
           user_table: true,
           migrations_table: true,
           applied_migrations: 1n,
-          migrations: [{ migration_name: "001", finished_at: new Date(), rolled_back_at: null }],
+          migrations: [migration("001", "2026-01-01T00:00:00Z", "2026-01-01T00:01:00Z", null)],
         },
         ["001", "002"],
       ),
