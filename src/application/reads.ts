@@ -12,6 +12,12 @@ export type ReadSort =
   | "searchScore,sentAt,id";
 export type MessageDirection = "sent" | "received" | "unknown";
 export type SearchMediaType = "image" | "video" | "audio" | "document" | "other";
+export type UiReadMode = "ordinary" | "hidden" | "locked";
+export interface UiReadAccess {
+  readonly mode?: UiReadMode;
+  /** Conversation ids for which the existing step-up grant was validated. */
+  readonly authorizedConversationIds?: readonly string[];
+}
 
 export const DEFAULT_READ_LIMIT = 50;
 export const MAX_READ_LIMIT = 100;
@@ -29,6 +35,7 @@ export interface PageRequest {
   readonly limit?: number;
   readonly cursor?: string;
   readonly direction?: ReadDirection;
+  readonly uiAccess?: UiReadAccess;
 }
 
 export interface ValidatedPageRequest {
@@ -95,6 +102,19 @@ export function validatePageRequest(input: PageRequest): ValidatedPageRequest {
     ...(input.cursor ? { cursor: input.cursor } : {}),
     direction: input.direction ?? "forward",
   };
+}
+
+function uiAccess(input: UiReadAccess | undefined): {
+  readonly uiMode: UiReadMode;
+  readonly authorizedConversationIds: readonly string[];
+} {
+  const mode = input?.mode ?? "ordinary";
+  if (mode !== "ordinary" && mode !== "hidden" && mode !== "locked")
+    throw new InvalidReadRequestError("ui read mode is invalid");
+  const ids = input?.authorizedConversationIds ?? [];
+  if (ids.some((id) => !id.trim()))
+    throw new InvalidReadRequestError("conversation authorization is invalid");
+  return { uiMode: mode, authorizedConversationIds: ids };
 }
 
 export class CursorCodec {
@@ -355,6 +375,7 @@ export interface StatisticsQuery {
   readonly archiveId: ReadArchiveId;
   readonly from?: string;
   readonly to?: string;
+  readonly uiAccess?: UiReadAccess;
 }
 
 export interface ReadPorts {
@@ -386,6 +407,8 @@ export interface ReadConversationPersistenceQuery {
   readonly direction: ReadDirection;
   readonly after?: readonly (string | number)[];
   readonly search?: string;
+  readonly uiMode: UiReadMode;
+  readonly authorizedConversationIds: readonly string[];
 }
 export interface ReadPersonPersistenceQuery extends ReadConversationPersistenceQuery {}
 export interface ReadMessagePersistenceQuery extends ReadConversationPersistenceQuery {
@@ -416,6 +439,8 @@ export interface ReadSearchPersistenceQuery {
   readonly mediaType?: SearchMediaType;
   readonly fuzzyName?: string;
   readonly fuzzyText?: string;
+  readonly uiMode: UiReadMode;
+  readonly authorizedConversationIds: readonly string[];
 }
 export interface ConversationPersistenceRow {
   readonly id: string;
@@ -481,6 +506,7 @@ export class ArchiveReadService {
     query: ConversationListQuery,
   ): Promise<ReadPage<ConversationRead>> {
     const request = validatePageRequest(query);
+    const access = uiAccess(query.uiAccess);
     const position = request.cursor
       ? this.cursors.decode(request.cursor, request.archiveId)
       : undefined;
@@ -491,6 +517,7 @@ export class ArchiveReadService {
       direction: request.direction,
       ...(position ? { after: position.values } : {}),
       ...(query.search ? { search: query.search } : {}),
+      ...access,
     });
     const items = rows.slice(0, request.limit).map((row) => ({
       id: row.id,
@@ -509,6 +536,7 @@ export class ArchiveReadService {
 
   public async listPeople(query: PersonListQuery): Promise<ReadPage<PersonRead>> {
     const request = validatePageRequest(query);
+    const access = uiAccess(query.uiAccess);
     const position = request.cursor
       ? this.cursors.decode(request.cursor, request.archiveId)
       : undefined;
@@ -519,6 +547,7 @@ export class ArchiveReadService {
       direction: request.direction,
       ...(position ? { after: position.values } : {}),
       ...(query.search ? { search: query.search } : {}),
+      ...access,
     });
     const items = rows.slice(0, request.limit).map((row) => ({
       id: row.id,
@@ -536,6 +565,7 @@ export class ArchiveReadService {
 
   public async listMessages(query: MessageWindowQuery): Promise<ReadPage<MessageRead>> {
     const request = validatePageRequest(query);
+    const access = uiAccess(query.uiAccess);
     if (!query.conversationId.trim())
       throw new InvalidReadRequestError("conversationId is required");
     const position = request.cursor
@@ -548,6 +578,7 @@ export class ArchiveReadService {
       limit: request.limit + 1,
       direction: request.direction,
       ...(position ? { after: position.values } : {}),
+      ...access,
     });
     const items = rows.slice(0, request.limit).map((row) => ({
       id: row.id,
@@ -576,6 +607,7 @@ export class ArchiveReadService {
 
   public async listMedia(query: MediaListQuery): Promise<ReadPage<MediaRead>> {
     const request = validatePageRequest(query);
+    const access = uiAccess(query.uiAccess);
     const position = request.cursor
       ? this.cursors.decode(request.cursor, request.archiveId)
       : undefined;
@@ -589,6 +621,7 @@ export class ArchiveReadService {
       ...(query.messageId ? { messageId: query.messageId } : {}),
       ...(query.attachmentId ? { attachmentId: query.attachmentId } : {}),
       ...(query.mediaType ? { mediaType: query.mediaType } : {}),
+      ...access,
     });
     const items = rows.slice(0, request.limit).map((row) => ({
       id: row.id,
@@ -611,6 +644,7 @@ export class ArchiveReadService {
   }
   public async listTimeline(query: TimelineQuery): Promise<ReadPage<TimelineRead>> {
     const request = validatePageRequest(query);
+    const access = uiAccess(query.uiAccess);
     const from = parseReadDate(query.from, "from");
     const to = parseReadDate(query.to, "to");
     if (from && to && from > to) throw new InvalidReadRequestError("from must be before to");
@@ -626,6 +660,7 @@ export class ArchiveReadService {
       ...(position ? { after: position.values } : {}),
       ...(from ? { from: new Date(from).toISOString() } : {}),
       ...(to ? { to: new Date(to).toISOString() } : {}),
+      ...access,
     });
     const items = rows.slice(0, request.limit).map((row) => ({
       id: row.id,
@@ -642,6 +677,7 @@ export class ArchiveReadService {
   }
   public async search(query: SearchQuery): Promise<ReadPage<SearchResultRead>> {
     const request = validatePageRequest(query);
+    const access = uiAccess(query.uiAccess);
     if (query.query !== undefined && typeof query.query !== "string")
       throw new InvalidReadRequestError("query must be a string");
     const textQuery = query.query?.trim() ?? "";
@@ -658,6 +694,8 @@ export class ArchiveReadService {
       mediaType: query.mediaType,
       fuzzyName,
       fuzzyText,
+      uiMode: access.uiMode,
+      authorizedConversationIds: access.authorizedConversationIds,
     });
     const position = request.cursor
       ? this.cursors.decode(request.cursor, request.archiveId, filterKey)
@@ -697,6 +735,7 @@ export class ArchiveReadService {
       ...(query.mediaType ? { mediaType: query.mediaType } : {}),
       ...(fuzzyName ? { fuzzyName } : {}),
       ...(fuzzyText ? { fuzzyText } : {}),
+      ...access,
     });
     const items = rows.slice(0, request.limit).map((row) => ({
       id: row.id,

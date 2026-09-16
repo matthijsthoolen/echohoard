@@ -255,4 +255,58 @@ describe("archive read services", () => {
     ).rejects.toThrow("from must be before to");
     expect(searchMessages).not.toHaveBeenCalled();
   });
+
+  it("passes the shared UI policy mode to every read surface", async () => {
+    const received: Record<string, unknown> = {};
+    const base = port({
+      conversations: [],
+      people: [],
+      messages: [],
+      search: [{ id: "m", score: 1, sortSentAt: "2026-01-01T00:00:00.000Z" }],
+    });
+    const persistence: ReadPersistencePort = {
+      ...base,
+      listConversations: async (query) => {
+        received.conversations = query;
+        return [];
+      },
+      listPeople: async (query) => {
+        received.people = query;
+        return [];
+      },
+      listMessages: async (query) => {
+        received.messages = query;
+        return [];
+      },
+      listMedia: async (query) => {
+        received.media = query;
+        return [];
+      },
+      listTimeline: async (query) => {
+        received.timeline = query;
+        return [];
+      },
+      searchMessages: async (query) => {
+        received.search = query;
+        return [];
+      },
+    };
+    const service = new ArchiveReadService(persistence, codec);
+    const uiAccess = { mode: "locked" as const, authorizedConversationIds: ["conversation-a"] };
+    await service.listConversations({ archiveId: "archive-a", uiAccess });
+    await service.listPeople({ archiveId: "archive-a", uiAccess });
+    await service.listMessages({
+      archiveId: "archive-a",
+      conversationId: "conversation-a",
+      uiAccess,
+    });
+    await service.listMedia({ archiveId: "archive-a", uiAccess });
+    await service.listTimeline({ archiveId: "archive-a", uiAccess });
+    await service.search({ archiveId: "archive-a", query: "needle", uiAccess });
+    for (const query of Object.values(received))
+      expect(query).toMatchObject({
+        uiMode: "locked",
+        authorizedConversationIds: ["conversation-a"],
+      });
+  });
 });

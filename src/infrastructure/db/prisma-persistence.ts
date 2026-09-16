@@ -22,6 +22,7 @@ import type {
   MediaPersistenceRow,
   TimelinePersistenceRow,
   SearchMediaType,
+  UiReadMode,
 } from "../../application/reads";
 import type {
   HealthJobPersistenceRow,
@@ -549,6 +550,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const conditions = [
       Prisma.sql`message."archiveId" = ${input.archiveId}::uuid`,
       Prisma.sql`message."materialized" = true`,
+      uiConversationPredicate("conversation", input),
     ];
     if (input.query.trim())
       conditions.push(
@@ -636,6 +638,8 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     const where = {
       archiveId: input.archiveId,
       materialized: true,
+      uiVisibility: input.uiMode,
+      ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
       ...(input.search
         ? {
             OR: [
@@ -685,6 +689,14 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   ): Promise<readonly PersonPersistenceRow[]> {
     const where = {
       archiveId: input.archiveId,
+      participants: {
+        some: {
+          conversation: {
+            uiVisibility: input.uiMode,
+            ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
+          },
+        },
+      },
       ...(input.search ? { displayName: { contains: input.search, mode: "insensitive" } } : {}),
       ...cursorWhere(input.after, input.direction, "displayName"),
     };
@@ -723,14 +735,17 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       : Prisma.empty;
     const candidates = await this.prisma.$queryRaw<Array<{ id: string; sort_sent_at: Date }>>(
       Prisma.sql`
-        SELECT m.id, COALESCE(m."sentAt", m."createdAt") AS sort_sent_at
-        FROM "Message" m
-        LEFT JOIN "SourceConversation" sc
+         SELECT m.id, COALESCE(m."sentAt", m."createdAt") AS sort_sent_at
+         FROM "Message" m
+         JOIN "Conversation" conversation
+           ON conversation.id = m."conversationId" AND conversation."archiveId" = m."archiveId"
+         LEFT JOIN "SourceConversation" sc
           ON sc.id = m."sourceConversationId" AND sc."archiveId" = m."archiveId"
         WHERE m."archiveId" = ${input.archiveId}::uuid
           AND m."materialized" = true
           AND (m."conversationId" = ${input.conversationId}::uuid
             OR sc."unifiedConversationId" = ${input.conversationId}::uuid)
+           AND ${uiConversationPredicate("conversation", input)}
         ${afterPredicate}
         ORDER BY COALESCE(m."sentAt", m."createdAt")
           ${input.direction === "backward" ? Prisma.sql`DESC` : Prisma.sql`ASC`},
@@ -916,6 +931,12 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       where: {
         archiveId: input.archiveId,
         materialized: true,
+        message: {
+          conversation: {
+            uiVisibility: input.uiMode,
+            ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
+          },
+        },
         ...(input.messageId ? { messageId: input.messageId } : {}),
         ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}),
         ...(input.mediaType ? { attachment: mediaTypeWhere(input.mediaType) } : {}),
@@ -996,15 +1017,25 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       Array<{ id: string; kind: "message" | "media"; occurred_at: Date }>
     >(Prisma.sql`
       WITH events AS (
-        SELECT m."archiveId" AS archive_id, m.id, 'message'::text AS kind,
-               COALESCE(m."sentAt", m."createdAt") AS occurred_at
-        FROM "Message" m
-        WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
-        UNION ALL
+         SELECT m."archiveId" AS archive_id, m.id, 'message'::text AS kind,
+                COALESCE(m."sentAt", m."createdAt") AS occurred_at
+         FROM "Message" m
+         JOIN "Conversation" message_conversation
+           ON message_conversation.id = m."conversationId"
+          AND message_conversation."archiveId" = m."archiveId"
+         WHERE m."archiveId" = ${input.archiveId}::uuid AND m."materialized" = true
+           AND ${uiConversationPredicate("message_conversation", input)}
+         UNION ALL
         SELECT ma."archiveId" AS archive_id, ma."attachmentId" AS id, 'media'::text AS kind,
                ma."createdAt" AS occurred_at
-        FROM "MessageAttachment" ma
-           WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
+         FROM "MessageAttachment" ma
+         JOIN "Message" media_message
+           ON media_message.id = ma."messageId" AND media_message."archiveId" = ma."archiveId"
+         JOIN "Conversation" media_conversation
+           ON media_conversation.id = media_message."conversationId"
+          AND media_conversation."archiveId" = media_message."archiveId"
+         WHERE ma."archiveId" = ${input.archiveId}::uuid AND ma."materialized" = true
+           AND ${uiConversationPredicate("media_conversation", input)}
       )
       SELECT events.id, events.kind, events.occurred_at
       FROM events
@@ -1307,6 +1338,18 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
  * aggregate rather than its delivery concern. */
 export const PrismaArchiveStatisticsPersistence = PrismaStatisticsPersistence;
 
+function uiConversationPredicate(
+  alias: string,
+  input: { readonly uiMode: UiReadMode; readonly authorizedConversationIds: readonly string[] },
+): Prisma.Sql {
+  const visibility = Prisma.sql`${Prisma.raw(alias)}."uiVisibility" = ${input.uiMode}`;
+  if (input.uiMode !== "locked") return visibility;
+  if (input.authorizedConversationIds.length === 0) return Prisma.sql`FALSE`;
+  return Prisma.sql`${visibility} AND ${Prisma.raw(alias)}.id IN (${Prisma.join(
+    input.authorizedConversationIds.map((id) => Prisma.sql`${id}::uuid`),
+  )})`;
+}
+
 function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`
     WITH finalized_messages AS (
@@ -1321,6 +1364,9 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
       FROM "Message" message
       LEFT JOIN "SourceConversation" source
         ON source.id = message."sourceConversationId" AND source."archiveId" = message."archiveId"
+      JOIN "Conversation" conversation
+        ON conversation.id = message."conversationId"
+       AND conversation."archiveId" = message."archiveId"
       WHERE message."archiveId" = ${input.archiveId}::uuid
         AND message."materialized" = true
         ${input.sourceAccountId ? Prisma.sql`AND source."ownedAccountId" = ${input.sourceAccountId}::uuid` : Prisma.empty}
@@ -1338,6 +1384,7 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
             AND snapshot.lifecycle = 'completed'
             AND job.status = 'completed'
         )
+        AND ${uiConversationPredicate("conversation", input)}
         ${datePredicates(input)}
     ),
     finalized_people AS (

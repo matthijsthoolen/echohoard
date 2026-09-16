@@ -1,3 +1,5 @@
+import type { UiReadAccess, UiReadMode } from "./reads.js";
+
 /** Archive statistics are deterministic, archive-scoped read models.  They
  * intentionally contain no interpretation of message content: direction is
  * the normalized metadata value, media type is derived from its MIME type,
@@ -28,6 +30,7 @@ export interface ArchiveStatisticsQuery {
   readonly limit?: number;
   /** Restricts message-derived statistics to one owned source account. */
   readonly sourceAccountId?: string;
+  readonly uiAccess?: UiReadAccess;
 }
 
 export interface ArchiveStatisticsRead {
@@ -73,6 +76,8 @@ export interface StatisticsPersistenceInput {
   readonly bucket: StatisticsBucket;
   readonly limit: number;
   readonly sourceAccountId?: string;
+  readonly uiMode: UiReadMode;
+  readonly authorizedConversationIds: readonly string[];
 }
 
 export interface StatisticsPersistenceResult {
@@ -127,6 +132,12 @@ function validateStatisticsQuery(query: ArchiveStatisticsQuery): StatisticsPersi
   const limit = query.limit ?? DEFAULT_STATISTICS_LIMIT;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_STATISTICS_LIMIT)
     throw new Error(`limit must be an integer from 1 to ${MAX_STATISTICS_LIMIT}`);
+  const uiMode = query.uiAccess?.mode ?? "ordinary";
+  if (uiMode !== "ordinary" && uiMode !== "hidden" && uiMode !== "locked")
+    throw new Error("ui read mode is invalid");
+  const authorizedConversationIds = query.uiAccess?.authorizedConversationIds ?? [];
+  if (authorizedConversationIds.some((id) => !id.trim()))
+    throw new Error("conversation authorization is invalid");
   return {
     archiveId: query.archiveId,
     ...(from ? { from } : {}),
@@ -134,6 +145,8 @@ function validateStatisticsQuery(query: ArchiveStatisticsQuery): StatisticsPersi
     bucket,
     limit,
     ...(query.sourceAccountId ? { sourceAccountId: query.sourceAccountId } : {}),
+    uiMode,
+    authorizedConversationIds,
   };
 }
 

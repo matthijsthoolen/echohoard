@@ -11,6 +11,10 @@ const userId = randomUUID();
 const archiveOneId = randomUUID();
 const archiveTwoId = randomUUID();
 const conversationId = randomUUID();
+const hiddenConversationId = randomUUID();
+const lockedConversationId = randomUUID();
+const hiddenMessageId = randomUUID();
+const lockedMessageId = randomUUID();
 
 describe("bounded archive read services", () => {
   const service = new ArchiveReadService(
@@ -29,10 +33,16 @@ describe("bounded archive read services", () => {
       `INSERT INTO "Conversation" (id,"archiveId",kind,"stableKey",title,"createdAt","updatedAt") VALUES ('${conversationId}','${archiveOneId}','direct','stable','Chat','2026-01-01T00:00:00Z',now())`,
     );
     await prisma.$executeRawUnsafe(
+      `INSERT INTO "Conversation" (id,"archiveId",kind,"stableKey",title,"uiVisibility","createdAt","updatedAt") VALUES ('${hiddenConversationId}','${archiveOneId}','direct','hidden','Hidden chat','hidden','2026-01-03T00:00:00Z',now()),('${lockedConversationId}','${archiveOneId}','direct','locked','Locked chat','locked','2026-01-04T00:00:00Z',now())`,
+    );
+    await prisma.$executeRawUnsafe(
       `INSERT INTO "Person" ("archiveId","displayName","updatedAt") VALUES ('${archiveOneId}','Alex',now()),('${archiveOneId}','Alex',now()),('${archiveTwoId}','Alex',now())`,
     );
     await prisma.$executeRawUnsafe(
       `INSERT INTO "Message" ("archiveId","conversationId","stableKey","messageType",body,"sentAt","updatedAt") VALUES ('${archiveOneId}','${conversationId}','m1','text','one','2026-01-01T00:00:00Z',now()),('${archiveOneId}','${conversationId}','m2','text','two','2026-01-02T00:00:00Z',now())`,
+    );
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "Message" (id,"archiveId","conversationId","stableKey","messageType",body,"sentAt","updatedAt") VALUES ('${hiddenMessageId}','${archiveOneId}','${hiddenConversationId}','hidden-message','text','hidden sentinel','2026-01-03T00:00:00Z',now()),('${lockedMessageId}','${archiveOneId}','${lockedConversationId}','locked-message','text','locked sentinel','2026-01-04T00:00:00Z',now())`,
     );
   });
   afterAll(async () => {
@@ -64,5 +74,52 @@ describe("bounded archive read services", () => {
     expect((await service.listMessages({ archiveId: archiveTwoId, conversationId })).items).toEqual(
       [],
     );
+  });
+
+  it("filters every ordinary and authorized UI mode without enumerating locked ids", async () => {
+    const ordinary = { archiveId: archiveOneId, uiAccess: { mode: "ordinary" as const } };
+    const hidden = { archiveId: archiveOneId, uiAccess: { mode: "hidden" as const } };
+    const locked = {
+      archiveId: archiveOneId,
+      uiAccess: { mode: "locked" as const, authorizedConversationIds: [lockedConversationId] },
+    };
+    expect((await service.listConversations(ordinary)).items.map((item) => item.id)).toEqual([
+      conversationId,
+    ]);
+    expect((await service.listConversations(hidden)).items.map((item) => item.id)).toEqual([
+      hiddenConversationId,
+    ]);
+    expect(
+      (await service.listConversations({ archiveId: archiveOneId, uiAccess: { mode: "locked" } }))
+        .items,
+    ).toEqual([]);
+    expect((await service.listConversations(locked)).items.map((item) => item.id)).toEqual([
+      lockedConversationId,
+    ]);
+
+    expect(
+      (await service.listMessages({ ...ordinary, conversationId: hiddenConversationId })).items,
+    ).toEqual([]);
+    expect(
+      (await service.listMessages({ ...hidden, conversationId: hiddenConversationId })).items[0]
+        ?.id,
+    ).toBe(hiddenMessageId);
+    expect(
+      (await service.listMessages({ ...ordinary, conversationId: lockedConversationId })).items,
+    ).toEqual([]);
+    expect(
+      (await service.listMessages({ ...locked, conversationId: lockedConversationId })).items[0]
+        ?.id,
+    ).toBe(lockedMessageId);
+    expect((await service.search({ ...ordinary, query: "sentinel" })).items).toEqual([]);
+    expect((await service.search({ ...hidden, query: "sentinel" })).items[0]?.id).toBe(
+      hiddenMessageId,
+    );
+    expect((await service.search({ ...locked, query: "sentinel" })).items[0]?.id).toBe(
+      lockedMessageId,
+    );
+    expect(
+      (await service.listTimeline(ordinary)).items.every((item) => item.id !== hiddenMessageId),
+    ).toBe(true);
   });
 });

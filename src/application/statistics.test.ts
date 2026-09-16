@@ -47,6 +47,8 @@ describe("archive statistics service", () => {
       bucket: "week",
       limit: 10,
       sourceAccountId: "account-a",
+      uiMode: "ordinary",
+      authorizedConversationIds: [],
     });
   });
 
