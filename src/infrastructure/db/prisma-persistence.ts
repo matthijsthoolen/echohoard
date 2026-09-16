@@ -558,20 +558,50 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   public async listMessages(
     input: ReadMessagePersistenceQuery,
   ): Promise<readonly MessagePersistenceRow[]> {
+    const after = input.after;
+    const afterAt = after?.[0];
+    const afterId = after?.[1];
+    const afterPredicate = after
+      ? input.direction === "forward"
+        ? Prisma.sql`AND (COALESCE(m."sentAt", m."createdAt") > CAST(${afterAt} AS timestamp)
+            OR (COALESCE(m."sentAt", m."createdAt") = CAST(${afterAt} AS timestamp)
+              AND m.id > CAST(${afterId} AS uuid)))`
+        : Prisma.sql`AND (COALESCE(m."sentAt", m."createdAt") < CAST(${afterAt} AS timestamp)
+            OR (COALESCE(m."sentAt", m."createdAt") = CAST(${afterAt} AS timestamp)
+              AND m.id < CAST(${afterId} AS uuid)))`
+      : Prisma.empty;
+    const candidates = await this.prisma.$queryRaw<Array<{ id: string; sort_sent_at: Date }>>(
+      Prisma.sql`
+        SELECT m.id, COALESCE(m."sentAt", m."createdAt") AS sort_sent_at
+        FROM "Message" m
+        LEFT JOIN "SourceConversation" sc
+          ON sc.id = m."sourceConversationId" AND sc."archiveId" = m."archiveId"
+        WHERE m."archiveId" = ${input.archiveId}::uuid
+          AND m."materialized" = true
+          AND (m."conversationId" = ${input.conversationId}::uuid
+            OR sc."unifiedConversationId" = ${input.conversationId}::uuid)
+        ${afterPredicate}
+        ORDER BY COALESCE(m."sentAt", m."createdAt")
+          ${input.direction === "backward" ? Prisma.sql`DESC` : Prisma.sql`ASC`},
+          m.id ${input.direction === "backward" ? Prisma.sql`DESC` : Prisma.sql`ASC`}
+        LIMIT ${input.limit}
+      `,
+    );
+    if (candidates.length === 0) return [];
+    const sortAt = new Map(candidates.map((candidate) => [candidate.id, candidate.sort_sent_at]));
     const rows = await (this.prisma.message as unknown as ReadDelegate).findMany({
       where: {
         archiveId: input.archiveId,
-        conversationId: input.conversationId,
+        id: { in: candidates.map((candidate) => candidate.id) },
         materialized: true,
-        ...cursorWhere(input.after, input.direction, "sentAt"),
       },
-      orderBy: [
-        { sentAt: input.direction === "backward" ? "desc" : "asc" },
-        { id: input.direction === "backward" ? "desc" : "asc" },
-      ],
-      take: input.limit,
       include: {
-        _count: { select: { attachments: { where: { materialized: true } } } },
+        _count: {
+          select: {
+            attachments: { where: { materialized: true } },
+            messageObservations: true,
+          },
+        },
         attachments: {
           where: { materialized: true },
           select: {
@@ -604,6 +634,19 @@ export class PrismaReadPersistence implements ReadPersistencePort {
           select: { id: true, personId: true, emoji: true },
           orderBy: [{ id: "asc" }],
         },
+        messageObservations: {
+          select: { importJobId: true },
+          orderBy: { importJobId: "asc" },
+          take: 9,
+        },
+        sourceConversation: {
+          select: {
+            id: true,
+            sourceNamespace: true,
+            sourceConversationKey: true,
+            ownedAccountId: true,
+          },
+        },
       },
     });
     return (
@@ -615,7 +658,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         metadata: unknown;
         sentAt: Date | null;
         body: string | null;
-        _count: { attachments: number };
+        _count: { attachments: number; messageObservations: number };
         attachments: Array<{
           id: string;
           ordinal: number | null;
@@ -634,51 +677,85 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         replyTo: { id: string; sentAt: Date | null; body: string | null } | null;
         revisions: Array<{ id: string; firstSeenAt: Date; body: string | null }>;
         reactions: Array<{ id: string; personId: string; emoji: string }>;
+        messageObservations: Array<{ importJobId: string }>;
+        sourceConversation: {
+          id: string;
+          sourceNamespace: string;
+          sourceConversationKey: string;
+          ownedAccountId: string;
+        } | null;
       }>
-    ).map((row) => ({
-      id: row.id,
-      conversationId: row.conversationId,
-      senderPersonId: row.senderId ?? undefined,
-      sentAt: iso(row.sentAt),
-      text: row.body ?? undefined,
-      attachmentCount: row._count.attachments,
-      attachments: row.attachments.map((link) => ({
-        id: link.attachment.id,
-        availability: attachmentAvailability(link.attachment.availability),
-        ...(link.attachment.mimeType ? { mimeType: link.attachment.mimeType } : {}),
-        ...(link.attachment.originalName ? { originalName: link.attachment.originalName } : {}),
-        ...(safeNumber(link.attachment.byteSize) !== undefined
-          ? { byteSize: safeNumber(link.attachment.byteSize) }
+    )
+      .sort((left, right) => {
+        const leftAt = sortAt.get(left.id)?.getTime() ?? 0;
+        const rightAt = sortAt.get(right.id)?.getTime() ?? 0;
+        const comparison = leftAt - rightAt;
+        if (comparison !== 0) return input.direction === "backward" ? -comparison : comparison;
+        const idComparison = left.id.localeCompare(right.id);
+        return input.direction === "backward" ? -idComparison : idComparison;
+      })
+      .map((row) => ({
+        id: row.id,
+        conversationId: row.conversationId,
+        senderPersonId: row.senderId ?? undefined,
+        sentAt: iso(row.sentAt),
+        sortSentAt: sortAt.get(row.id)?.toISOString() ?? row.sentAt?.toISOString() ?? "",
+        text: row.body ?? undefined,
+        attachmentCount: row._count.attachments,
+        attachments: row.attachments.map((link) => ({
+          id: link.attachment.id,
+          availability: attachmentAvailability(link.attachment.availability),
+          ...(link.attachment.mimeType ? { mimeType: link.attachment.mimeType } : {}),
+          ...(link.attachment.originalName ? { originalName: link.attachment.originalName } : {}),
+          ...(safeNumber(link.attachment.byteSize) !== undefined
+            ? { byteSize: safeNumber(link.attachment.byteSize) }
+            : {}),
+          ...(link.attachment.width !== null ? { width: link.attachment.width } : {}),
+          ...(link.attachment.height !== null ? { height: link.attachment.height } : {}),
+          ...(link.attachment.durationMs !== null
+            ? { durationMs: link.attachment.durationMs }
+            : {}),
+          ...(link.ordinal !== null ? { ordinal: link.ordinal } : {}),
+          ...(link.role ? { role: link.role } : {}),
+        })),
+        ...(safeMetadata(row.metadata) ? { metadata: safeMetadata(row.metadata) } : {}),
+        direction: messageDirection(row.metadata),
+        messageType: row.messageType,
+        ...(row.replyTo
+          ? {
+              replyTo: {
+                id: row.replyTo.id,
+                ...(row.replyTo.sentAt ? { sentAt: row.replyTo.sentAt.toISOString() } : {}),
+                ...(row.replyTo.body !== null ? { text: row.replyTo.body } : {}),
+              },
+            }
           : {}),
-        ...(link.attachment.width !== null ? { width: link.attachment.width } : {}),
-        ...(link.attachment.height !== null ? { height: link.attachment.height } : {}),
-        ...(link.attachment.durationMs !== null ? { durationMs: link.attachment.durationMs } : {}),
-        ...(link.ordinal !== null ? { ordinal: link.ordinal } : {}),
-        ...(link.role ? { role: link.role } : {}),
-      })),
-      ...(safeMetadata(row.metadata) ? { metadata: safeMetadata(row.metadata) } : {}),
-      direction: messageDirection(row.metadata),
-      messageType: row.messageType,
-      ...(row.replyTo
-        ? {
-            replyTo: {
-              id: row.replyTo.id,
-              ...(row.replyTo.sentAt ? { sentAt: row.replyTo.sentAt.toISOString() } : {}),
-              ...(row.replyTo.body !== null ? { text: row.replyTo.body } : {}),
-            },
-          }
-        : {}),
-      revisions: row.revisions.map((revision) => ({
-        id: revision.id,
-        firstSeenAt: revision.firstSeenAt.toISOString(),
-        ...(revision.body !== null ? { text: revision.body } : {}),
-      })),
-      reactions: row.reactions.map((reaction) => ({
-        id: reaction.id,
-        personId: reaction.personId,
-        emoji: reaction.emoji,
-      })),
-    }));
+        revisions: row.revisions.map((revision) => ({
+          id: revision.id,
+          firstSeenAt: revision.firstSeenAt.toISOString(),
+          ...(revision.body !== null ? { text: revision.body } : {}),
+        })),
+        reactions: row.reactions.map((reaction) => ({
+          id: reaction.id,
+          personId: reaction.personId,
+          emoji: reaction.emoji,
+        })),
+        ...(row.sourceConversation
+          ? {
+              provenance: {
+                sourceAccountId: row.sourceConversation.ownedAccountId,
+                sourceConversationId: row.sourceConversation.id,
+                sourceNamespace: row.sourceConversation.sourceNamespace,
+                sourceConversationKey: row.sourceConversation.sourceConversationKey,
+                importIds: row.messageObservations
+                  .slice(0, 8)
+                  .map((observation) => observation.importJobId),
+                importCount: row._count.messageObservations,
+                importsTruncated: row._count.messageObservations > 8,
+              },
+            }
+          : {}),
+      }));
   }
 
   public async listMedia(

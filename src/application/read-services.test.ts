@@ -28,8 +28,10 @@ const port = (rows: {
       .filter((r) => r.archiveId === undefined || r.archiveId === q.archiveId)
       .filter(
         (r) =>
-          r.conversationId === q.conversationId &&
-          (!q.after || r.sentAt > q.after[0] || (r.sentAt === q.after[0] && r.id > q.after[1])),
+          (r.unifiedConversationId ?? r.conversationId) === q.conversationId &&
+          (!q.after ||
+            (r.sortSentAt ?? r.sentAt ?? "") > q.after[0] ||
+            ((r.sortSentAt ?? r.sentAt ?? "") === q.after[0] && r.id > q.after[1])),
       )
       .slice(0, q.limit),
   searchMessages: async (q) =>
@@ -103,6 +105,52 @@ describe("archive read services", () => {
       (await service.listMessages({ archiveId: "archive-b", conversationId: "conversation-a" }))
         .items,
     ).toEqual([]);
+  });
+
+  it("paginates a merged timeline across sources with equal and missing timestamps", async () => {
+    const service = new ArchiveReadService(
+      port({
+        messages: [
+          {
+            id: "m1",
+            conversationId: "source-a",
+            unifiedConversationId: "unified",
+            sentAt: "2026-01-01T00:00:00.000Z",
+            sortSentAt: "2026-01-01T00:00:00.000Z",
+            attachmentCount: 0,
+          },
+          {
+            id: "m2",
+            conversationId: "source-b",
+            unifiedConversationId: "unified",
+            attachmentCount: 0,
+            sortSentAt: "2026-01-01T00:00:00.000Z",
+          },
+          {
+            id: "m3",
+            conversationId: "source-a",
+            unifiedConversationId: "unified",
+            sentAt: "2026-01-02T00:00:00.000Z",
+            sortSentAt: "2026-01-02T00:00:00.000Z",
+            attachmentCount: 0,
+          },
+        ],
+      }),
+      codec,
+    );
+    const first = await service.listMessages({
+      archiveId: "archive-a",
+      conversationId: "unified",
+      limit: 2,
+    });
+    expect(first.items.map((item) => item.id)).toEqual(["m1", "m2"]);
+    const second = await service.listMessages({
+      archiveId: "archive-a",
+      conversationId: "unified",
+      limit: 2,
+      cursor: first.nextCursor,
+    });
+    expect(second.items.map((item) => item.id)).toEqual(["m3"]);
   });
 
   it("returns bounded ranked message matches and a stable cursor", async () => {
