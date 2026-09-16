@@ -17,6 +17,7 @@ import {
 interface WacliFixture {
   readonly contractVersion: string;
   readonly accountKey: string;
+  readonly followSyncWebhookEvents: string;
   readonly lifecycle: readonly { readonly line: string; readonly expectedEvent: string }[];
   readonly webhooks: Readonly<Record<string, string>>;
 }
@@ -54,6 +55,7 @@ describe("wacli integration contract", () => {
     }
     const follow = invocations[1];
     expect(follow.argv).toContain(WACLI_PROTECTED_SECRET_PLACEHOLDER);
+    expect(follow.argv).toContain(fixture.followSyncWebhookEvents);
     expect(follow.secretSource).toBe("protected-file");
     expect(follow.argv.join(" ")).not.toContain("fixture-secret");
 

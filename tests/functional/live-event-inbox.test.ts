@@ -462,6 +462,88 @@ describe("live event inbox PostgreSQL durability", () => {
     },
   );
 
+  it.each([
+    ["revoke", "Revoked"],
+    ["delete", "delete_for_me"],
+  ] as const)(
+    "preserves %s deletion observations across reordered delivery, replay, and accounts",
+    async (deletionKind, eventKind) => {
+      const chatKey = "15550000001@s.whatsapp.net";
+      const messageKey = `functional-deletion-${deletionKind}-${randomUUID()}`;
+      const original = {
+        Chat: chatKey,
+        ID: messageKey,
+        SenderJID: chatKey,
+        Timestamp: "2026-01-01T00:00:01.000Z",
+        FromMe: false,
+        Text: `retained ${deletionKind} content`,
+      };
+      const deletion =
+        eventKind === "Revoked"
+          ? { ...original, Timestamp: "2026-01-01T00:00:02.000Z", Revoked: true }
+          : {
+              EventType: "delete_for_me",
+              ChatJID: chatKey,
+              MessageID: messageKey,
+              SenderJID: chatKey,
+              Timestamp: "2026-01-01T00:00:02.000Z",
+              IsFromMe: false,
+            };
+
+      const apply = async (ownedAccountId: string, payload: Record<string, unknown>) => {
+        const receiptId = randomUUID().replaceAll("-", "");
+        await inbox.enqueue({
+          ...input(archiveId, ownedAccountId, receiptId),
+          sourceEventKey: `wacli:test:${ownedAccountId}:${messageKey}:${receiptId}`,
+          payload,
+        });
+        await expect(
+          normalizer.normalize({ archiveId, ownedAccountId, receiptId }),
+        ).resolves.toMatchObject({ status: "normalized" });
+        return receiptId;
+      };
+
+      const accountADeletionReceipt = await apply(accountId, deletion);
+      await apply(accountId, original);
+      const replay = await inbox.enqueue({
+        ...input(archiveId, accountId, accountADeletionReceipt),
+        sourceEventKey: `wacli:test:${accountId}:${messageKey}:replay`,
+        payload: deletion,
+      });
+      expect(replay.kind).toBe("duplicate");
+
+      await apply(sameArchiveOtherAccountId, original);
+      await apply(sameArchiveOtherAccountId, deletion);
+
+      const stableKeys = [accountId, sameArchiveOtherAccountId].map((ownedAccountId) =>
+        whatsappMessageKey(ownedAccountId, chatKey, messageKey),
+      );
+      const messages = await prisma.message.findMany({
+        where: { archiveId, stableKey: { in: stableKeys } },
+        orderBy: { stableKey: "asc" },
+      });
+      expect(messages).toHaveLength(2);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            sourceDeleted: true,
+            contentUnavailable: false,
+            body: original.Text,
+            sourceDeletionMetadata: expect.objectContaining({ kind: deletionKind }),
+          }),
+        ]),
+      );
+      expect(
+        await prisma.messageObservation.count({
+          where: { archiveId, messageId: { in: messages.map((message) => message.id) } },
+        }),
+      ).toBe(4);
+      expect(
+        await prisma.message.count({ where: { archiveId, stableKey: { in: stableKeys } } }),
+      ).toBe(2);
+    },
+  );
+
   it("retries transient claims, recovers a stale claim, and serializes concurrent claims", async () => {
     const receiptId = randomUUID().replaceAll("-", "");
     await inbox.enqueue(input(archiveId, accountId, receiptId));

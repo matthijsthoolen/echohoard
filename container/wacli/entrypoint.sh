@@ -38,7 +38,7 @@ case "$1" in
     [ -n "$secret" ] || die "webhook secret file is empty"
     exec /usr/local/bin/wacli --account "${WACLI_ACCOUNT}" --events sync --follow \
       --presence-mode quiet --webhook "${WACLI_WEBHOOK_ENDPOINT:-http://web:3000/api/internal/live-events?account=${WACLI_ACCOUNT}}" \
-      --webhook-events message,receipt,chat_presence --webhook-secret "$secret"
+      --webhook-events message,receipt,chat_presence,delete_for_me --webhook-secret "$secret"
     ;;
   health)
     exec /usr/local/bin/wacli --account "${WACLI_ACCOUNT}" --read-only --json auth status

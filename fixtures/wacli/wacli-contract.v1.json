@@ -1,6 +1,7 @@
 {
   "contractVersion": "wacli-webhook-contract.v1",
   "accountKey": "fixture-account-a",
+  "followSyncWebhookEvents": "message,receipt,chat_presence,delete_for_me",
   "lifecycle": [
     {
       "line": "{\"event\":\"auth_starting\",\"ts\":1789555200000}",

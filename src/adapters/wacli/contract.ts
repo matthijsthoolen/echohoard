@@ -89,7 +89,7 @@ export function buildWacliInvocation(
           "--webhook",
           webhookEndpoint,
           "--webhook-events",
-          "message,receipt,chat_presence",
+          "message,receipt,chat_presence,delete_for_me",
           "--webhook-secret",
           WACLI_PROTECTED_SECRET_PLACEHOLDER,
         ],

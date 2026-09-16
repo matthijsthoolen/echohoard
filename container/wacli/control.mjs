@@ -158,7 +158,7 @@ class AccountController {
       "--webhook",
       endpoint.toString(),
       "--webhook-events",
-      "message,receipt,chat_presence",
+      "message,receipt,chat_presence,delete_for_me",
       "--webhook-secret",
       secret,
     ]);
