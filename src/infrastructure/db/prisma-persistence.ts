@@ -815,6 +815,15 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         FROM "Conversation" c
         WHERE c."archiveId" = ${input.archiveId}::uuid
           AND c."materialized" = true
+          -- Imported conversations retain their source identity in the
+          -- observation ledger; SourceConversation ids are separate handles
+          -- and may be regrouped away from this Conversation id.
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "ConversationObservation" observation
+            WHERE observation."archiveId" = c."archiveId"
+              AND observation."logicalEntityKey" = c."stableKey"
+          )
           AND NOT EXISTS (
             SELECT 1
             FROM "SourceConversation" source_row

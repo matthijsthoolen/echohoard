@@ -9,12 +9,22 @@ import {
 import { PrismaConversationGroupingPersistence } from "../../src/infrastructure/db/conversation-grouping.js";
 import { ArchiveReadService, CursorCodec } from "../../src/application/reads.js";
 import { PrismaReadPersistence } from "../../src/infrastructure/db/prisma-persistence.js";
+import { PrismaTextSnapshotImporter } from "../../src/infrastructure/db/text-import.js";
+import type { ImportRecord } from "../../src/application/text-import.js";
+import {
+  whatsappConversationKey,
+  whatsappIdentityKey,
+  whatsappMessageKey,
+  whatsappPersonKey,
+  WHATSAPP_SOURCE_NAMESPACE,
+} from "../../src/adapters/whatsapp/identity.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
 
 const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
 const ports = createPrismaPersistence(prisma);
+const importer = new PrismaTextSnapshotImporter(prisma);
 const [userId, archiveOneId, archiveTwoId] = Array.from({ length: 3 }, () => randomUUID());
 
 describe("source and unified conversation persistence", () => {
@@ -528,4 +538,183 @@ describe("source and unified conversation persistence", () => {
       unmerged.items.filter((item) => item.id === targetId || item.id === sourceId),
     ).toHaveLength(2);
   });
+
+  it("lists imported conversations once after regrouping and keeps archives isolated", async () => {
+    const sourceChat = "12025550101@s.whatsapp.net";
+    const targetChat = "12025550102@g.us";
+    const observedAt = new Date("2026-02-03T12:00:00.000Z");
+    const first = await importConversationArchive(
+      "production-list-one",
+      [targetChat, sourceChat],
+      observedAt,
+    );
+    const second = await importConversationArchive("production-list-two", [targetChat], observedAt);
+    const firstSources = await prisma.sourceConversation.findMany({
+      where: { archiveId: first.archiveId, ownedAccountId: first.accountId },
+      select: { id: true, sourceConversationKey: true, unifiedConversationId: true },
+    });
+    const targetSource = firstSources.find((source) => source.sourceConversationKey === targetChat);
+    const sourceSource = firstSources.find((source) => source.sourceConversationKey === sourceChat);
+    if (!targetSource || !sourceSource)
+      throw new Error("imported source conversations are missing");
+    expect(targetSource.id).not.toBe(targetSource.unifiedConversationId);
+    expect(sourceSource.id).not.toBe(sourceSource.unifiedConversationId);
+
+    const reads = new ArchiveReadService(
+      new PrismaReadPersistence(prisma),
+      new CursorCodec("list-test"),
+    );
+    const grouping = new ConversationGroupingService(
+      new PrismaConversationGroupingPersistence(prisma),
+    );
+    const before = await reads.listConversations({ archiveId: first.archiveId });
+    expect(before.items).toHaveLength(2);
+    expect(before.items.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        targetSource.unifiedConversationId,
+        sourceSource.unifiedConversationId,
+      ]),
+    );
+    expect((await reads.listConversations({ archiveId: second.archiveId })).items).toHaveLength(1);
+
+    const merged = await grouping.merge({
+      archiveId: first.archiveId,
+      targetConversationId: targetSource.unifiedConversationId,
+      sourceConversationIds: [sourceSource.id],
+      expectedVersion: 0,
+      actor: "synthetic-owner",
+      reason: "production-shaped regrouping regression",
+      idempotencyKey: `production-list-merge-${first.archiveId}`,
+      uiAccess: { authorizedConversationIds: [] },
+    });
+    const afterMerge = await reads.listConversations({ archiveId: first.archiveId });
+    expect(afterMerge.items).toHaveLength(1);
+    expect(afterMerge.items[0]).toMatchObject({
+      id: targetSource.unifiedConversationId,
+      participantCount: 2,
+      lastMessageAt: observedAt.toISOString(),
+    });
+    expect((await reads.listConversations({ archiveId: second.archiveId })).items).toHaveLength(1);
+
+    await grouping.unmerge({
+      archiveId: first.archiveId,
+      targetConversationId: targetSource.unifiedConversationId,
+      sourceConversationIds: [sourceSource.id],
+      expectedVersion: 1,
+      actor: "synthetic-owner",
+      reason: "production-shaped regrouping regression undo",
+      idempotencyKey: `production-list-unmerge-${first.archiveId}`,
+      auditId: merged.auditId,
+      uiAccess: { authorizedConversationIds: [] },
+    });
+    const afterUnmerge = await reads.listConversations({ archiveId: first.archiveId });
+    expect(afterUnmerge.items).toHaveLength(2);
+    expect(afterUnmerge.items.map((item) => item.id)).toEqual(
+      expect.arrayContaining([
+        targetSource.unifiedConversationId,
+        sourceSource.unifiedConversationId,
+      ]),
+    );
+    expect(
+      (await reads.listConversations({ archiveId: second.archiveId })).items.map((item) => item.id),
+    ).not.toEqual(expect.arrayContaining(afterUnmerge.items.map((item) => item.id)));
+  });
 });
+
+async function importConversationArchive(
+  name: string,
+  chats: readonly string[],
+  observedAt: Date,
+): Promise<{ readonly archiveId: string; readonly accountId: string }> {
+  const archiveId = randomUUID();
+  const accountId = randomUUID();
+  const sourceId = randomUUID();
+  const snapshotId = randomUUID();
+  const importJobId = randomUUID();
+  const accountKey = `production-${name}`;
+  await prisma.archive.create({ data: { id: archiveId, userId, name } });
+  await prisma.ownedAccount.create({
+    data: { id: accountId, archiveId, accountKey, displayLabel: name },
+  });
+  await prisma.source.create({
+    data: {
+      id: sourceId,
+      archiveId,
+      ownedAccountId: accountId,
+      kind: "whatsapp",
+      stableKey: `${name}-source`,
+      sha256: `${name}${"0".repeat(64)}`.slice(0, 64),
+    },
+  });
+  await prisma.snapshot.create({
+    data: {
+      id: snapshotId,
+      archiveId,
+      ownedAccountId: accountId,
+      sourceId,
+      sha256: `${name}${"1".repeat(64)}`.slice(0, 64),
+    },
+  });
+  await prisma.importJob.create({
+    data: {
+      id: importJobId,
+      archiveId,
+      ownedAccountId: accountId,
+      sourceId,
+      snapshotId,
+      status: "queued",
+    },
+  });
+  await importer.import({
+    archiveId,
+    ownedAccountId: accountId,
+    snapshotId,
+    importJobId,
+    observedAt,
+    records: importedConversationRecords(accountKey, chats, observedAt),
+  });
+  return { archiveId, accountId };
+}
+
+function importedConversationRecords(
+  accountScope: string,
+  chats: readonly string[],
+  observedAt: Date,
+): readonly ImportRecord[] {
+  return chats.flatMap((chat, index) => {
+    const personSourceKey = `12025550${index + 1}@s.whatsapp.net`;
+    const personKey = whatsappPersonKey(accountScope, personSourceKey);
+    const identityKey = whatsappIdentityKey(accountScope, personSourceKey);
+    const conversationKey = whatsappConversationKey(accountScope, chat);
+    const messageKey = whatsappMessageKey(accountScope, chat, `production-message-${index}`);
+    return [
+      { kind: "person", stableKey: personKey, displayName: `Imported person ${index}` },
+      {
+        kind: "identity",
+        stableKey: identityKey,
+        personKey,
+        source: { namespace: WHATSAPP_SOURCE_NAMESPACE, value: personSourceKey },
+      },
+      {
+        kind: "conversation",
+        stableKey: conversationKey,
+        source: { namespace: WHATSAPP_SOURCE_NAMESPACE, value: chat },
+        conversationKind: chat.endsWith("@g.us") ? "group" : "direct",
+        title: `Imported chat ${index}`,
+      },
+      { kind: "participant", conversationKey, identityKey, role: "member" },
+      {
+        kind: "message",
+        stableKey: messageKey,
+        source: { namespace: WHATSAPP_SOURCE_NAMESPACE, value: `message-${index}` },
+        conversationKey,
+        senderIdentityKey: identityKey,
+        timestamp: observedAt.toISOString(),
+        direction: "received",
+        messageKind: "text",
+        body: `Imported message ${index}`,
+        bodyState: "present",
+      },
+    ] satisfies readonly ImportRecord[];
+  });
+}
