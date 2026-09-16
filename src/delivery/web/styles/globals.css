@@ -518,6 +518,51 @@ button:focus-visible {
   gap: 0.5rem;
   padding-bottom: 0.75rem;
 }
+.grouping-controls {
+  margin-bottom: 1rem;
+}
+.grouping-panel {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+.grouping-panel h3,
+.grouping-panel p {
+  margin: 0;
+}
+.grouping-panel fieldset {
+  display: grid;
+  gap: 0.5rem;
+  border: 0;
+  padding: 0;
+}
+.grouping-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.message-provenance {
+  margin-top: 0.5rem;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+.message-provenance dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.15rem 0.75rem;
+  margin: 0.5rem 0 0;
+}
+.message-provenance dt {
+  font-weight: 700;
+}
+.message-provenance dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
 .timeline-actions .load-more {
   width: auto;
   margin-top: 0;
