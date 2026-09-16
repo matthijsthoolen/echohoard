@@ -28,6 +28,9 @@ const conversationId = randomUUID();
 const hiddenAllowedConversationId = randomUUID();
 const deniedConversationId = randomUUID();
 const otherConversationId = randomUUID();
+const accountOneId = randomUUID();
+const accountTwoId = randomUUID();
+const otherAccountId = randomUUID();
 const messageId = randomUUID();
 const hiddenAllowedMessageId = randomUUID();
 const deniedMessageId = randomUUID();
@@ -70,12 +73,27 @@ describe("PostgreSQL private MCP read traversal", () => {
         { id: otherArchiveId, userId, name: "mcp-two" },
       ],
     });
-    await prisma.ownedAccount.create({
-      data: {
-        archiveId,
-        accountKey: "synthetic-mcp-account-key",
-        displayLabel: "synthetic-mcp-account-label",
-      },
+    await prisma.ownedAccount.createMany({
+      data: [
+        {
+          id: accountOneId,
+          archiveId,
+          accountKey: "synthetic-mcp-account-one-key",
+          displayLabel: "synthetic-mcp-account-one-label",
+        },
+        {
+          id: accountTwoId,
+          archiveId,
+          accountKey: "synthetic-mcp-account-two-key",
+          displayLabel: "synthetic-mcp-account-two-label",
+        },
+        {
+          id: otherAccountId,
+          archiveId: otherArchiveId,
+          accountKey: "synthetic-mcp-other-account-key",
+          displayLabel: "synthetic-mcp-other-account-label",
+        },
+      ],
     });
     await prisma.person.createMany({
       data: [
@@ -361,6 +379,8 @@ describe("PostgreSQL private MCP read traversal", () => {
   it("exposes a merged conversation once and switches back after unmerge", async () => {
     const sourceConversationId = randomUUID();
     const sourceMessageId = randomUUID();
+    const targetMessageId = randomUUID();
+    const secondSourceMessageId = randomUUID();
     const grouping = new ConversationGroupingService(
       new PrismaConversationGroupingPersistence(prisma),
     );
@@ -379,7 +399,7 @@ describe("PostgreSQL private MCP read traversal", () => {
         {
           id: conversationId,
           archiveId,
-          ownedAccountId: (await prisma.ownedAccount.findFirstOrThrow({ where: { archiveId } })).id,
+          ownedAccountId: accountOneId,
           unifiedConversationId: conversationId,
           sourceNamespace: "synthetic",
           sourceConversationKey: `mcp-unified-target-${conversationId}`,
@@ -387,7 +407,7 @@ describe("PostgreSQL private MCP read traversal", () => {
         {
           id: sourceConversationId,
           archiveId,
-          ownedAccountId: (await prisma.ownedAccount.findFirstOrThrow({ where: { archiveId } })).id,
+          ownedAccountId: accountTwoId,
           unifiedConversationId: sourceConversationId,
           sourceNamespace: "synthetic",
           sourceConversationKey: `mcp-unified-source-${sourceConversationId}`,
@@ -406,6 +426,32 @@ describe("PostgreSQL private MCP read traversal", () => {
         body: "synthetic unified MCP message",
         sentAt: new Date("2026-01-05T00:00:00.000Z"),
       },
+    });
+    await prisma.message.createMany({
+      data: [
+        {
+          id: targetMessageId,
+          archiveId,
+          conversationId,
+          sourceConversationId: conversationId,
+          senderId: personOneId,
+          stableKey: `mcp-unified-target-message-${targetMessageId}`,
+          messageType: "text",
+          body: "source-account-probe",
+          sentAt: new Date("2026-01-05T00:00:00.000Z"),
+        },
+        {
+          id: secondSourceMessageId,
+          archiveId,
+          conversationId: sourceConversationId,
+          sourceConversationId,
+          senderId: personOneId,
+          stableKey: `mcp-unified-source-message-${secondSourceMessageId}`,
+          messageType: "text",
+          body: "source-account-probe",
+          sentAt: new Date("2026-01-05T00:00:00.000Z"),
+        },
+      ],
     });
     const merged = await grouping.merge({
       archiveId,
@@ -436,11 +482,39 @@ describe("PostgreSQL private MCP read traversal", () => {
       name: "get_conversation",
       arguments: { conversationId, limit: 10 },
     });
-    expect(
-      messages.result.structuredContent.items.map((item: { id: string }) => item.id),
-    ).toContain(sourceMessageId);
+    const mergedMessageIds = messages.result.structuredContent.items.map(
+      (item: { id: string }) => item.id,
+    );
+    expect(mergedMessageIds).toEqual([
+      messageId,
+      ...[sourceMessageId, targetMessageId, secondSourceMessageId].sort(),
+    ]);
+    expect(mergedMessageIds).toHaveLength(4);
     expect(messages.result.structuredContent.items[0].conversationId).toBe(conversationId);
     expect(JSON.stringify(messages)).not.toContain(sourceConversationId);
+
+    const accountSelected = await call("tools/call", {
+      name: "search_messages",
+      arguments: {
+        query: "source-account-probe",
+        sourceAccountId: accountTwoId,
+        limit: 10,
+      },
+    });
+    expect(
+      accountSelected.result.structuredContent.items.map((item: { id: string }) => item.id),
+    ).toEqual([secondSourceMessageId]);
+    expect(accountSelected.result.structuredContent.items).toHaveLength(1);
+
+    const crossAccount = await call("tools/call", {
+      name: "search_messages",
+      arguments: {
+        query: "source-account-probe",
+        sourceAccountId: otherAccountId,
+        limit: 10,
+      },
+    });
+    expect(crossAccount.result.structuredContent.items).toEqual([]);
 
     const searched = await call("tools/call", {
       name: "search_messages",
