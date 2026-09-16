@@ -1,4 +1,5 @@
 import type {
+  ConversationPrivacyPolicy,
   ConversationMcpAccess,
   ConversationUiVisibility,
 } from "../../../../../application/conversation-privacy";
@@ -9,7 +10,8 @@ export interface PrivacyRouteDependencies {
 }
 
 export interface PrivacyRouteRuntime {
-  readonly auth: Pick<WebRuntime["auth"], "principalForRequest">;
+  readonly auth: Pick<WebRuntime["auth"], "principalForRequest"> &
+    Partial<Pick<WebRuntime["auth"], "createUnlockHandle" | "resolveUnlockHandle">>;
   readonly conversationPrivacy?: WebRuntime["conversationPrivacy"];
 }
 
@@ -26,33 +28,68 @@ export function createPrivacyRoute({ getRuntime }: PrivacyRouteDependencies) {
         const policies = await conversationPrivacy.list(principal.archiveId);
         return Response.json(
           {
-            policies: policies.map(({ archiveId, conversationId, uiVisibility, mcpAccess }) => ({
-              archiveId,
-              conversationId,
-              uiVisibility,
-              mcpAccess,
-            })),
+            policies: await Promise.all(
+              policies.map(async ({ archiveId, conversationId, uiVisibility, mcpAccess }) => {
+                if (uiVisibility !== "locked")
+                  return { archiveId, conversationId, uiVisibility, mcpAccess };
+                const unlockHandle = await runtime.auth.createUnlockHandle?.(
+                  request,
+                  archiveId,
+                  conversationId,
+                );
+                return unlockHandle ? { uiVisibility, mcpAccess, unlockHandle } : { uiVisibility };
+              }),
+            ),
           },
           { headers: noStore() },
         );
       }
       if (request.method !== "PATCH") return jsonError("Method not allowed", 405);
       const body = (await request.json()) as Record<string, unknown>;
-      const conversationId = typeof body.conversationId === "string" ? body.conversationId : "";
+      const conversationHandle =
+        typeof body.unlockHandle === "string" ? body.unlockHandle : undefined;
+      const resolved = conversationHandle
+        ? await runtime.auth.resolveUnlockHandle?.(request, conversationHandle)
+        : undefined;
+      const conversationId =
+        resolved?.conversationId ??
+        (typeof body.conversationId === "string" ? body.conversationId : "");
+      if (conversationHandle && !resolved) return jsonError("Privacy settings unavailable", 400);
       const uiVisibility = body.uiVisibility as ConversationUiVisibility | undefined;
       const mcpAccess = body.mcpAccess as ConversationMcpAccess | undefined;
       const result = await conversationPrivacy.updatePolicy({
-        archiveId: principal.archiveId,
+        archiveId: resolved?.archiveId ?? principal.archiveId,
         conversationId,
         actorId: principal.userId,
         ...(uiVisibility ? { uiVisibility } : {}),
         ...(mcpAccess ? { mcpAccess } : {}),
       });
-      return Response.json({ policy: result.policy }, { headers: noStore() });
+      return Response.json(
+        { policy: await responsePolicy(request, runtime.auth, result.policy) },
+        {
+          headers: noStore(),
+        },
+      );
     } catch {
       return jsonError("Privacy settings unavailable", 400);
     }
   };
+}
+
+async function responsePolicy(
+  request: Request,
+  auth: PrivacyRouteRuntime["auth"],
+  policy: ConversationPrivacyPolicy,
+) {
+  if (policy.uiVisibility !== "locked") return policy;
+  const unlockHandle = await auth.createUnlockHandle?.(
+    request,
+    policy.archiveId,
+    policy.conversationId,
+  );
+  return unlockHandle
+    ? { uiVisibility: policy.uiVisibility, mcpAccess: policy.mcpAccess, unlockHandle }
+    : { uiVisibility: policy.uiVisibility };
 }
 
 function noStore(): Record<string, string> {

@@ -315,8 +315,9 @@ function SettingsPanel({
 }
 
 type PrivacyPolicy = {
-  readonly archiveId: string;
-  readonly conversationId: string;
+  readonly archiveId?: string;
+  readonly conversationId?: string;
+  readonly unlockHandle?: string;
   readonly uiVisibility: "normal" | "hidden" | "locked";
   readonly mcpAccess: "allowed" | "denied";
 };
@@ -356,7 +357,12 @@ function PrivacySettings() {
         method: "PATCH",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ conversationId: policy.conversationId, ...change }),
+        body: JSON.stringify({
+          ...(policy.unlockHandle
+            ? { unlockHandle: policy.unlockHandle }
+            : { conversationId: policy.conversationId }),
+          ...change,
+        }),
       });
       if (!response.ok) throw new Error("privacy update unavailable");
       await reload();
@@ -377,12 +383,16 @@ function PrivacySettings() {
       {Array.isArray(policies) ? (
         <div className="privacy-list">
           {policies.map((policy) => (
-            <article className="privacy-row" key={policy.conversationId}>
+            <article
+              className="privacy-row"
+              key={policy.unlockHandle ?? policy.conversationId}
+              aria-labelledby={`privacy-chat-${policy.unlockHandle ?? policy.conversationId}`}
+            >
               <div>
-                <h3>
+                <h3 id={`privacy-chat-${policy.unlockHandle ?? policy.conversationId}`}>
                   {policy.uiVisibility === "locked"
                     ? "Locked conversation"
-                    : (titles[policy.conversationId] ?? "Conversation")}
+                    : (titles[policy.conversationId ?? ""] ?? "Conversation")}
                 </h3>
                 <p>
                   {policy.uiVisibility === "locked"
@@ -392,7 +402,12 @@ function PrivacySettings() {
               </div>
               <div className="privacy-actions">
                 <label>
-                  <span className="sr-only">UI visibility</span>
+                  <span className="sr-only">
+                    UI visibility for{" "}
+                    {policy.uiVisibility === "locked"
+                      ? "locked conversation"
+                      : (titles[policy.conversationId ?? ""] ?? "conversation")}
+                  </span>
                   <select
                     value={policy.uiVisibility}
                     onChange={(event) =>
@@ -409,6 +424,7 @@ function PrivacySettings() {
                 <button
                   className={`button${policy.mcpAccess === "denied" ? " button-primary" : ""}`}
                   type="button"
+                  aria-label={`${policy.mcpAccess === "denied" ? "Allow" : "Deny"} MCP access for ${policy.uiVisibility === "locked" ? "locked conversation" : (titles[policy.conversationId ?? ""] ?? "conversation")}`}
                   aria-pressed={policy.mcpAccess === "denied"}
                   onClick={() =>
                     void update(policy, {
@@ -421,7 +437,7 @@ function PrivacySettings() {
                 {policy.uiVisibility === "locked" ? (
                   <a
                     className="button"
-                    href={`/auth/unlock/start?archiveId=${encodeURIComponent(policy.archiveId)}&conversationId=${encodeURIComponent(policy.conversationId)}&returnTo=${encodeURIComponent(`/?view=locked&conversation=${policy.conversationId}`)}`}
+                    href={`/auth/unlock/start?unlockHandle=${encodeURIComponent(policy.unlockHandle ?? "")}&returnTo=${encodeURIComponent("/?view=locked")}`}
                   >
                     Unlock
                   </a>
@@ -460,14 +476,17 @@ function LockedFolder() {
       {Array.isArray(policies) ? (
         <ul className="privacy-folder-list">
           {policies.map((policy) => (
-            <li key={policy.conversationId}>
+            <li key={policy.unlockHandle ?? policy.conversationId}>
               <span>Locked conversation</span>
-              <a
-                className="button"
-                href={`/auth/unlock/start?archiveId=${encodeURIComponent(policy.archiveId)}&conversationId=${encodeURIComponent(policy.conversationId)}&returnTo=${encodeURIComponent(`/?view=locked&conversation=${policy.conversationId}`)}`}
-              >
-                Step up to open
-              </a>
+              {policy.unlockHandle ? (
+                <a
+                  className="button"
+                  href={`/auth/unlock/start?unlockHandle=${encodeURIComponent(policy.unlockHandle)}&returnTo=${encodeURIComponent("/?view=locked")}`}
+                  aria-label="Step up to open locked conversation"
+                >
+                  Step up to open
+                </a>
+              ) : null}
             </li>
           ))}
         </ul>

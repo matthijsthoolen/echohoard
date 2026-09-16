@@ -20,9 +20,10 @@ describe("privacy route", () => {
         sourceLockMetadata: { title: "must not cross this boundary" },
       },
     ]);
+    const createUnlockHandle = vi.fn(async () => "opaque-unlock-handle");
     const route = createPrivacyRoute({
       getRuntime: () => ({
-        auth: { principalForRequest: async () => principal },
+        auth: { principalForRequest: async () => principal, createUnlockHandle },
         conversationPrivacy: { list, updatePolicy: vi.fn() },
       }),
     });
@@ -31,15 +32,11 @@ describe("privacy route", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       policies: [
-        {
-          archiveId: "archive-1",
-          conversationId: "chat-1",
-          uiVisibility: "locked",
-          mcpAccess: "denied",
-        },
+        { uiVisibility: "locked", mcpAccess: "denied", unlockHandle: "opaque-unlock-handle" },
       ],
     });
     expect(list).toHaveBeenCalledWith("archive-1");
+    expect(createUnlockHandle).toHaveBeenCalledWith(expect.any(Request), "archive-1", "chat-1");
   });
 
   it("updates only the authenticated archive and actor", async () => {
@@ -78,6 +75,28 @@ describe("privacy route", () => {
       uiVisibility: "hidden",
       mcpAccess: "denied",
     });
+  });
+
+  it("does not resolve an unknown unlock handle into a conversation identifier", async () => {
+    const updatePolicy = vi.fn();
+    const route = createPrivacyRoute({
+      getRuntime: () => ({
+        auth: {
+          principalForRequest: async () => principal,
+          resolveUnlockHandle: vi.fn(async () => null),
+        },
+        conversationPrivacy: { list: vi.fn(), updatePolicy },
+      }),
+    });
+    const response = await route(
+      new Request("http://localhost/api/privacy", {
+        method: "PATCH",
+        body: JSON.stringify({ unlockHandle: "not-a-valid-handle", uiVisibility: "normal" }),
+      }),
+    );
+    expect(response.status).toBe(400);
+    expect(updatePolicy).not.toHaveBeenCalled();
+    expect(await response.text()).not.toContain("not-a-valid-handle");
   });
 
   it("fails closed and sanitizes update errors", async () => {
