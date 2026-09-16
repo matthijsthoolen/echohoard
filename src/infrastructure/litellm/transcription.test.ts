@@ -13,6 +13,7 @@ import {
 const roots: string[] = [];
 const mediaBytes = Buffer.from("synthetic audio sentinel");
 const mediaSha256 = createHash("sha256").update(mediaBytes).digest("hex");
+const privateEndpointLookup = async (): Promise<readonly string[]> => ["127.0.0.1"];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -85,7 +86,7 @@ describe("bounded LiteLLM transcription adapter", () => {
       "synthetic/audio",
       f.casRoot,
       f.workRoot,
-      { derivativeExecutable: command, fetcher },
+      { derivativeExecutable: command, fetcher, endpointLookup: privateEndpointLookup },
     );
 
     await expect(adapter.transcribe(input(f.casPath))).resolves.toEqual({
@@ -122,7 +123,7 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
       new Set(["synthetic/audio"]),
       f.casRoot,
       f.workRoot,
-      { derivativeExecutable: command, fetcher },
+      { derivativeExecutable: command, fetcher, endpointLookup: privateEndpointLookup },
     );
 
     await adapter.transcribe(input(f.casPath));
@@ -141,7 +142,7 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
       new Set(["synthetic/audio"]),
       f.casRoot,
       f.workRoot,
-      { fetcher, maxBytes: 1, maxDurationMs: 3_000 },
+      { fetcher, maxBytes: 1, maxDurationMs: 3_000, endpointLookup: privateEndpointLookup },
     );
     await expect(adapter.transcribe(input(join(f.casRoot, "outside")))).rejects.toMatchObject({
       kind: "cas-unavailable",
@@ -155,15 +156,16 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
         ...input(f.casPath),
         attachment: { ...input(f.casPath).attachment, mimeType: "application/octet-stream" },
       }),
-    ).rejects.toMatchObject({ kind: "unsupported-format" });
+    ).rejects.toMatchObject({ kind: "unsupported-format", retryable: false });
     await expect(
       adapter.transcribe({
         ...input(f.casPath),
         attachment: { ...input(f.casPath).attachment, durationMs: 3_001 },
       }),
-    ).rejects.toMatchObject({ kind: "duration-too-long" });
+    ).rejects.toMatchObject({ kind: "duration-too-long", retryable: false });
     await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
       kind: "input-too-large",
+      retryable: false,
     });
     expect(fetcher).not.toHaveBeenCalled();
   });
@@ -177,7 +179,11 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
       new Set(["synthetic/audio"]),
       f.casRoot,
       f.workRoot,
-      { derivativeExecutable: command, derivativeTimeoutMs: 20 },
+      {
+        derivativeExecutable: command,
+        derivativeTimeoutMs: 20,
+        endpointLookup: privateEndpointLookup,
+      },
     );
     await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
       kind: "timeout",
@@ -208,8 +214,38 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
       new Set(["synthetic/audio"]),
       f.casRoot,
       f.workRoot,
-      { derivative, fetcher, timeoutMs: 20 },
+      { derivative, fetcher, timeoutMs: 20, endpointLookup: privateEndpointLookup },
     );
+    await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
+      kind: "timeout",
+      retryable: true,
+    });
+    await expect(readdir(f.workRoot)).resolves.toEqual([]);
+  });
+
+  it("times out while reading a response body, not just while waiting for headers", async () => {
+    const f = await fixture();
+    const derivative = {
+      prepare: vi.fn(async ({ destinationPath }) => {
+        await writeFile(destinationPath, Buffer.from("RIFF derivative"));
+        return { bytes: 10, durationMs: 2_000 };
+      }),
+    };
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"text":"partial"'));
+      },
+    });
+    const fetcher = vi.fn(async () => new Response(body));
+    const adapter = new LiteLlmTranscriptionAdapter(
+      "http://service.internal:4000",
+      "sentinel-provider-key",
+      new Set(["synthetic/audio"]),
+      f.casRoot,
+      f.workRoot,
+      { derivative, fetcher, timeoutMs: 20, endpointLookup: privateEndpointLookup },
+    );
+
     await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
       kind: "timeout",
       retryable: true,
@@ -234,7 +270,7 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
       new Set(["synthetic/audio"]),
       f.casRoot,
       f.workRoot,
-      { derivative, fetcher },
+      { derivative, fetcher, endpointLookup: privateEndpointLookup },
     );
     const error = await adapter.transcribe(input(f.casPath)).catch((value: unknown) => value);
     expect(error).toBeInstanceOf(TranscriptionError);
@@ -262,6 +298,7 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
         derivative,
         fetcher: async () =>
           new Response(JSON.stringify({ text: "valid", language: "not a language" })),
+        endpointLookup: privateEndpointLookup,
       },
     );
     await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
@@ -271,13 +308,116 @@ require('fs').writeFileSync(process.argv.at(-1), Buffer.from('RIFF derivative'))
     await expect(readdir(f.workRoot)).resolves.toEqual([]);
   });
 
+  it("reports derivative cleanup failures without exposing their details", async () => {
+    const f = await fixture();
+    const derivative = {
+      prepare: vi.fn(async ({ destinationPath }) => {
+        await writeFile(destinationPath, Buffer.from("RIFF derivative"));
+        return { bytes: 10, durationMs: 2_000 };
+      }),
+    };
+    const adapter = new LiteLlmTranscriptionAdapter(
+      "http://service.internal:4000",
+      "sentinel-provider-key",
+      new Set(["synthetic/audio"]),
+      f.casRoot,
+      f.workRoot,
+      {
+        derivative,
+        fetcher: async () => new Response(JSON.stringify({ text: "safe result" })),
+        endpointLookup: privateEndpointLookup,
+        cleanup: async () => {
+          throw new Error("media cleanup sentinel");
+        },
+      },
+    );
+
+    const error = await adapter.transcribe(input(f.casPath)).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(TranscriptionError);
+    expect(error).toMatchObject({ kind: "cleanup-failed", retryable: true });
+    expect((error as Error).message).not.toContain("media cleanup sentinel");
+  });
+
+  it("rejects non-finite, negative, overlapping, and out-of-duration timings", async () => {
+    const f = await fixture();
+    const derivative = {
+      prepare: vi.fn(async ({ destinationPath }) => {
+        await writeFile(destinationPath, Buffer.from("RIFF derivative"));
+        return { bytes: 10, durationMs: 2_000 };
+      }),
+    };
+    const responses = [
+      { text: "bad", segments: [{ start: 1e999, end: 2, text: "bad" }] },
+      { text: "bad", segments: [{ start: -1, end: 1, text: "bad" }] },
+      {
+        text: "bad",
+        segments: [
+          { start: 0, end: 1.5, text: "first" },
+          { start: 1, end: 2, text: "overlap" },
+        ],
+      },
+      { text: "bad", segments: [{ start: 1, end: 2.001, text: "too long" }] },
+      { text: "bad", duration: 2.001 },
+    ];
+    for (const responseBody of responses) {
+      const adapter = new LiteLlmTranscriptionAdapter(
+        "http://service.internal:4000",
+        "sentinel-provider-key",
+        new Set(["synthetic/audio"]),
+        f.casRoot,
+        f.workRoot,
+        {
+          derivative,
+          fetcher: async () => new Response(JSON.stringify(responseBody)),
+          endpointLookup: privateEndpointLookup,
+        },
+      );
+      await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
+        kind: "invalid-response",
+        retryable: false,
+      });
+    }
+  });
+
   it("rejects public or credential-bearing endpoint configuration", () => {
     expect(() => transcriptionEndpoint("https://api.example.com")).toThrow("configuration");
+    expect(() => transcriptionEndpoint("https://fc00.example.com")).toThrow("configuration");
+    expect(transcriptionEndpoint("https://[fd00::1]:4000")).toBe(
+      "https://[fd00::1]:4000/audio/transcriptions",
+    );
     expect(() => transcriptionEndpoint("https://user:pass@localhost:4000")).toThrow(
       "configuration",
     );
     expect(transcriptionEndpoint("https://litellm.example.test/v1")).toBe(
       "https://litellm.example.test/v1/audio/transcriptions",
     );
+  });
+
+  it("rejects a private-looking hostname that resolves publicly", async () => {
+    const f = await fixture();
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ text: "must not run" })));
+    const adapter = new LiteLlmTranscriptionAdapter(
+      "http://service.internal:4000",
+      "sentinel-provider-key",
+      new Set(["synthetic/audio"]),
+      f.casRoot,
+      f.workRoot,
+      {
+        derivative: {
+          prepare: vi.fn(async ({ destinationPath }) => {
+            await writeFile(destinationPath, Buffer.from("RIFF derivative"));
+            return { bytes: 10, durationMs: 2_000 };
+          }),
+        },
+        fetcher,
+        endpointLookup: async () => ["203.0.113.7"],
+      },
+    );
+
+    await expect(adapter.transcribe(input(f.casPath))).rejects.toMatchObject({
+      kind: "configuration",
+      retryable: false,
+    });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

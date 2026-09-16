@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { lstat, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { spawn } from "node:child_process";
+import { isIP } from "node:net";
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import type {
@@ -49,12 +51,14 @@ export type TranscriptionFailureKind =
   | "provider-authentication"
   | "provider-rejected"
   | "invalid-response"
+  | "cleanup-failed"
   | "internal";
 
 const RETRYABLE = new Set<TranscriptionFailureKind>([
   "timeout",
   "provider-rate-limit",
   "provider-unavailable",
+  "cleanup-failed",
   "internal",
 ]);
 
@@ -130,6 +134,8 @@ export class FfmpegAudioDerivative implements AudioDerivativePort {
         "pcm_s16le",
         "-t",
         durationSeconds,
+        "-fs",
+        String(request.maxBytes),
         "-f",
         "wav",
         request.destinationPath,
@@ -162,7 +168,11 @@ export interface LiteLlmTranscriptionAdapterOptions extends LiteLlmTranscription
   readonly fetcher?: typeof fetch;
   readonly derivative?: AudioDerivativePort;
   readonly derivativeExecutable?: string;
+  readonly endpointLookup?: EndpointLookup;
+  readonly cleanup?: (temporaryDirectory: string) => Promise<void>;
 }
+
+export type EndpointLookup = (hostname: string) => Promise<readonly string[]>;
 
 /** Bounded, private LiteLLM transcription adapter.  The endpoint is derived
  * from configuration once; per-request URLs are not accepted. */
@@ -179,6 +189,8 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
   private readonly allowedModelIds: ReadonlySet<string>;
   private readonly casRoot: string;
   private readonly workRoot: string;
+  private readonly endpointLookup: EndpointLookup;
+  private readonly cleanup: (temporaryDirectory: string) => Promise<void>;
 
   public constructor(
     baseUrl: string,
@@ -203,6 +215,8 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
     this.fetcher = options.fetcher ?? fetch;
     this.derivative =
       options.derivative ?? new FfmpegAudioDerivative({ executable: options.derivativeExecutable });
+    this.endpointLookup = options.endpointLookup ?? resolveEndpointAddresses;
+    this.cleanup = options.cleanup ?? (async (path) => rm(path, { recursive: true, force: true }));
     if (!this.secret.trim() || this.allowedModelIds.size === 0)
       throw new TranscriptionError("configuration");
   }
@@ -234,18 +248,13 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
       if (
         !Number.isSafeInteger(derivative.durationMs) ||
         derivative.durationMs <= 0 ||
-        derivative.durationMs > this.maxDurationMs
+        derivative.durationMs > this.maxDurationMs ||
+        derivative.durationMs > attachment.durationMs
       )
         throw new TranscriptionError("duration-too-long");
 
       const audio = await readBounded(derivativePath, this.maxBytes);
-      const response = await this.request(input.selectedModel, audio);
-      const result = await parseTranscriptionResponse(
-        response,
-        this.maxResponseBytes,
-        this.maxTranscriptChars,
-        this.maxDurationMs,
-      );
+      const result = await this.request(input.selectedModel, audio, derivative.durationMs);
       return {
         mediaSha256: attachment.mediaSha256,
         model: input.selectedModel,
@@ -257,8 +266,13 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
       if (error instanceof TranscriptionError) throw error;
       throw new TranscriptionError("internal");
     } finally {
-      if (temporaryDirectory)
-        await rm(temporaryDirectory, { recursive: true, force: true }).catch(() => undefined);
+      if (temporaryDirectory) {
+        try {
+          await this.cleanup(temporaryDirectory);
+        } catch {
+          throw new TranscriptionError("cleanup-failed");
+        }
+      }
     }
   }
 
@@ -273,37 +287,61 @@ export class LiteLlmTranscriptionAdapter implements TranscriptionAdapterPort {
     return expected;
   }
 
-  private async request(model: string, audio: Buffer): Promise<Response> {
+  private async request(
+    model: string,
+    audio: Buffer,
+    mediaDurationMs: number,
+  ): Promise<ParsedTranscriptionResponse> {
     const form = new FormData();
     form.append("file", new Blob([new Uint8Array(audio)], { type: "audio/wav" }), "audio.wav");
     form.append("model", model);
     form.append("response_format", "verbose_json");
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const pending = this.fetcher(this.endpoint, {
-      method: "POST",
-      redirect: "error",
-      headers: { Accept: "application/json", Authorization: `Bearer ${this.secret}` },
-      body: form,
-      signal: controller.signal,
-    });
+    let timedOut = false;
     try {
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => {
+          timedOut = true;
           controller.abort();
           reject(new TranscriptionError("timeout"));
         }, this.timeoutMs);
       });
+      const pending = this.fetchAndParse(form, controller.signal, mediaDurationMs);
       try {
         return await Promise.race([pending, timeout]);
       } catch (error) {
         if (error instanceof TranscriptionError) throw error;
-        if (controller.signal.aborted) throw new TranscriptionError("timeout");
+        if (timedOut || controller.signal.aborted) throw new TranscriptionError("timeout");
         throw new TranscriptionError("provider-unavailable");
       }
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  private async fetchAndParse(
+    form: FormData,
+    signal: AbortSignal,
+    mediaDurationMs: number,
+  ): Promise<ParsedTranscriptionResponse> {
+    await assertPrivateEndpoint(this.endpoint, this.endpointLookup, signal);
+    if (signal.aborted) throw new TranscriptionError("timeout");
+    const response = await this.fetcher(this.endpoint, {
+      method: "POST",
+      redirect: "error",
+      headers: { Accept: "application/json", Authorization: `Bearer ${this.secret}` },
+      body: form,
+      signal,
+    });
+    if (signal.aborted) throw new TranscriptionError("timeout");
+    return parseTranscriptionResponse(
+      response,
+      this.maxResponseBytes,
+      this.maxTranscriptChars,
+      mediaDurationMs,
+      signal,
+    );
   }
 }
 
@@ -354,22 +392,43 @@ export function transcriptionEndpoint(baseUrl: string): string {
   return url.toString();
 }
 
+async function assertPrivateEndpoint(
+  endpoint: string,
+  endpointLookup: EndpointLookup,
+  signal: AbortSignal,
+): Promise<void> {
+  const url = new URL(endpoint);
+  const hostname = normalizeHostname(url.hostname);
+  if (!isPrivateHostname(hostname)) throw new TranscriptionError("configuration");
+  if (isIP(hostname)) {
+    if (!isPrivateAddress(hostname)) throw new TranscriptionError("configuration");
+    return;
+  }
+  let addresses: readonly string[];
+  try {
+    addresses = await endpointLookup(hostname);
+  } catch {
+    if (signal.aborted) throw new TranscriptionError("timeout");
+    throw new TranscriptionError("provider-unavailable");
+  }
+  if (signal.aborted) throw new TranscriptionError("timeout");
+  if (addresses.length === 0 || addresses.some((address) => !isPrivateAddress(address)))
+    throw new TranscriptionError("configuration");
+}
+
 async function parseTranscriptionResponse(
   response: Response,
   maxResponseBytes: number,
   maxTranscriptChars: number,
-  maxDurationMs: number,
-): Promise<{
-  readonly text: string;
-  readonly language?: string;
-  readonly segments?: TranscriptSegment[];
-}> {
+  mediaDurationMs: number,
+  signal: AbortSignal,
+): Promise<ParsedTranscriptionResponse> {
   if (response.status === 429) throw new TranscriptionError("provider-rate-limit");
   if (response.status >= 500) throw new TranscriptionError("provider-unavailable");
   if (response.status === 401 || response.status === 403)
     throw new TranscriptionError("provider-authentication");
   if (!response.ok) throw new TranscriptionError("provider-rejected");
-  const raw = await readResponseText(response, maxResponseBytes);
+  const raw = await readResponseText(response, maxResponseBytes, signal);
   let body: unknown;
   try {
     body = JSON.parse(raw);
@@ -381,12 +440,22 @@ async function parseTranscriptionResponse(
   const text = safeText(body.text, maxTranscriptChars);
   if (!text) throw new TranscriptionError("invalid-response");
   const language = body.language === undefined ? undefined : safeLanguage(body.language);
+  const responseDurationMs =
+    body.duration === undefined
+      ? mediaDurationMs
+      : secondsToMilliseconds(body.duration, mediaDurationMs);
   const segments =
     body.segments === undefined
       ? undefined
-      : safeSegments(body.segments, maxDurationMs, maxTranscriptChars);
+      : safeSegments(body.segments, responseDurationMs, maxTranscriptChars);
   return { text, ...(language ? { language } : {}), ...(segments ? { segments } : {}) };
 }
+
+type ParsedTranscriptionResponse = {
+  readonly text: string;
+  readonly language?: string;
+  readonly segments?: TranscriptSegment[];
+};
 
 function validateRequest(
   input: TranscriptionRequestInput,
@@ -427,23 +496,31 @@ function safeSegments(
 ): TranscriptSegment[] {
   if (!Array.isArray(value) || value.length > MAX_SEGMENTS)
     throw new TranscriptionError("invalid-response");
+  let previousEndMs = 0;
   return value.map((item) => {
     if (!isRecord(item) || typeof item.start !== "number" || typeof item.end !== "number")
       throw new TranscriptionError("invalid-response");
     const startMs = secondsToMilliseconds(item.start, maxDurationMs);
     const endMs = secondsToMilliseconds(item.end, maxDurationMs);
     if (
+      startMs < previousEndMs ||
       endMs < startMs ||
       typeof item.text !== "string" ||
       item.text.length > MAX_SEGMENT_TEXT_CHARS
     )
       throw new TranscriptionError("invalid-response");
+    previousEndMs = endMs;
     return { startMs, endMs, text: safeText(item.text, textLimit) };
   });
 }
 
-function secondsToMilliseconds(value: number, maxDurationMs: number): number {
-  if (!Number.isFinite(value) || value < 0 || value * 1000 > maxDurationMs)
+function secondsToMilliseconds(value: unknown, maxDurationMs: number): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value * 1000 > maxDurationMs
+  )
     throw new TranscriptionError("invalid-response");
   const result = Math.round(value * 1000);
   if (!Number.isSafeInteger(result)) throw new TranscriptionError("invalid-response");
@@ -474,34 +551,64 @@ async function readBounded(path: string, maxBytes: number): Promise<Buffer> {
   return Buffer.concat(chunks, size);
 }
 
-async function readResponseText(response: Response, maxBytes: number): Promise<string> {
+async function readResponseText(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<string> {
   const contentLength = response.headers.get("content-length");
+  const contentLengthBytes = contentLength === null ? null : Number(contentLength);
   if (
-    contentLength &&
-    Number.isSafeInteger(Number(contentLength)) &&
-    Number(contentLength) > maxBytes
+    contentLength !== null &&
+    (!Number.isSafeInteger(contentLengthBytes) ||
+      contentLengthBytes < 0 ||
+      contentLengthBytes > maxBytes)
   )
     throw new TranscriptionError("invalid-response");
-  if (!response.body) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > maxBytes)
-      throw new TranscriptionError("invalid-response");
-    return text;
-  }
+  if (!response.body) throw new TranscriptionError("invalid-response");
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for (;;) {
-    const next = await reader.read();
-    if (next.done) break;
-    size += next.value.byteLength;
-    if (size > maxBytes) {
-      await reader.cancel();
-      throw new TranscriptionError("invalid-response");
+  try {
+    for (;;) {
+      const next = await abortable(reader.read(), signal);
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > maxBytes) {
+        void reader.cancel().catch(() => undefined);
+        throw new TranscriptionError("invalid-response");
+      }
+      chunks.push(next.value);
     }
-    chunks.push(next.value);
+  } catch (error) {
+    if (signal.aborted) {
+      void reader.cancel().catch(() => undefined);
+      throw new TranscriptionError("timeout");
+    }
+    throw error;
   }
   return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+}
+
+function abortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new TranscriptionError("timeout"));
+  return new Promise<T>((resolveResult, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener("abort", onAbort);
+      reject(new TranscriptionError("timeout"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolveResult(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 async function runProcess(
@@ -522,11 +629,15 @@ async function runProcess(
       windowsHide: true,
     });
     let stderr = "";
+    let stderrBytes = 0;
     let timedOut = false;
     let spawnFailed = false;
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      if (stderr.length < maxStderrBytes) stderr += chunk.slice(0, maxStderrBytes - stderr.length);
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (stderrBytes < maxStderrBytes) {
+        const bytes = chunk.subarray(0, maxStderrBytes - stderrBytes);
+        stderr += bytes.toString("utf8");
+        stderrBytes += bytes.byteLength;
+      }
     });
     const timer = setTimeout(() => {
       timedOut = true;
@@ -575,7 +686,22 @@ function isPrivateHostname(hostname: string): boolean {
     return true;
   if (hostname.endsWith(".test") || (!hostname.includes(".") && /^[a-z0-9-]+$/u.test(hostname)))
     return true;
-  if (hostname === "::1" || hostname.startsWith("fc") || hostname.startsWith("fd")) return true;
+  if (isIP(hostname)) return isPrivateAddress(hostname);
+  return false;
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+}
+
+function isPrivateAddress(address: string): boolean {
+  const hostname = normalizeHostname(address);
+  const family = isIP(hostname);
+  if (family === 6) {
+    const firstByte = Number.parseInt(hostname.slice(0, 2), 16);
+    return hostname === "::1" || firstByte === 0xfc || firstByte === 0xfd;
+  }
+  if (family !== 4) return false;
   const octets = hostname.split(".").map(Number);
   if (
     octets.length !== 4 ||
@@ -588,6 +714,11 @@ function isPrivateHostname(hostname: string): boolean {
     (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
     (octets[0] === 192 && octets[1] === 168)
   );
+}
+
+async function resolveEndpointAddresses(hostname: string): Promise<readonly string[]> {
+  const results = await dnsLookup(hostname, { all: true, verbatim: true });
+  return results.map((result) => result.address);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
