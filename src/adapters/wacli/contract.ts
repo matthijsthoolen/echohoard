@@ -140,7 +140,8 @@ export interface WacliMessageEvent {
   readonly sourceEventKey: string;
   readonly chatKey: string;
   readonly messageKey: string;
-  readonly senderKey: string;
+  /** Delete-only upstream events may omit the sender. */
+  readonly senderKey?: string;
   readonly observedAt: string;
   readonly fromMe: boolean;
   readonly text?: string;
@@ -336,8 +337,7 @@ function parseDeleteForMe(value: Record<string, unknown>, accountKey: string): W
     optionalString(value, "MessageID") ??
     optionalString(value, "MessageId") ??
     requiredString(value, "ID");
-  const senderKey =
-    optionalString(value, "SenderJID") ?? optionalString(value, "Sender") ?? chatKey;
+  const senderKey = optionalString(value, "SenderJID") ?? optionalString(value, "Sender");
   const observedAt = timestamp(value, "Timestamp");
   const fromMe = optionalBoolean(value, "IsFromMe") ?? optionalBoolean(value, "FromMe") ?? false;
   return {
@@ -346,7 +346,7 @@ function parseDeleteForMe(value: Record<string, unknown>, accountKey: string): W
     sourceEventKey: `wacli:message:${accountKey}:${chatKey}:${messageKey}:delete`,
     chatKey,
     messageKey,
-    senderKey,
+    ...(senderKey === undefined ? {} : { senderKey }),
     observedAt,
     fromMe,
     edited: false,

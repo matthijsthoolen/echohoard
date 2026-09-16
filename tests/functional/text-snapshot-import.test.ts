@@ -358,8 +358,143 @@ describe("transactional normalized text snapshot import", () => {
     ).toBe(2);
   });
 
+  it("keeps established sender and media references when deletion omits sender metadata", async () => {
+    const account = await prisma.ownedAccount.findFirstOrThrow({
+      where: { archiveId: archiveOneId },
+    });
+    const sourceId = randomUUID();
+    const originalSnapshotId = randomUUID();
+    const deletionSnapshotId = randomUUID();
+    const originalJobId = randomUUID();
+    const deletionJobId = randomUUID();
+    const localConversationKey = `whatsapp:conversation:sender-retention-${randomUUID()}`;
+    const localMessageKey = `whatsapp:message:sender-retention-${randomUUID()}`;
+    const localPersonKey = `whatsapp:person:sender-retention-${randomUUID()}`;
+    const localIdentityKey = `whatsapp:identity:sender-retention-${randomUUID()}`;
+    await prisma.source.create({
+      data: {
+        id: sourceId,
+        archiveId: archiveOneId,
+        ownedAccountId: account.id,
+        kind: "live",
+        stableKey: `sender-retention-${sourceId}`,
+        sha256: "1".repeat(64),
+      },
+    });
+    for (const [snapshotId, jobId, sha256] of [
+      [originalSnapshotId, originalJobId, "2".repeat(64)],
+      [deletionSnapshotId, deletionJobId, "3".repeat(64)],
+    ] as const) {
+      await prisma.snapshot.create({
+        data: {
+          id: snapshotId,
+          archiveId: archiveOneId,
+          ownedAccountId: account.id,
+          sourceId,
+          sha256,
+        },
+      });
+      await prisma.importJob.create({
+        data: {
+          id: jobId,
+          archiveId: archiveOneId,
+          ownedAccountId: account.id,
+          sourceId,
+          snapshotId,
+          status: "queued",
+        },
+      });
+    }
+    const original: readonly ImportRecord[] = [
+      { kind: "person", stableKey: localPersonKey },
+      {
+        kind: "identity",
+        stableKey: localIdentityKey,
+        source: { namespace: "whatsapp", value: "sender@s.whatsapp.net" },
+        personKey: localPersonKey,
+      },
+      { kind: "conversation", stableKey: localConversationKey, conversationKind: "direct" },
+      {
+        kind: "participant",
+        conversationKey: localConversationKey,
+        identityKey: localIdentityKey,
+        role: "member",
+      },
+      {
+        kind: "message",
+        stableKey: localMessageKey,
+        source: { namespace: "wacli", value: "sender-retention-message" },
+        conversationKey: localConversationKey,
+        senderIdentityKey: localIdentityKey,
+        timestamp: observedAt.toISOString(),
+        direction: "received",
+        messageKind: "image",
+        body: "captured before deletion",
+        bodyState: "present",
+      },
+      {
+        kind: "attachment",
+        stableKey: `${localMessageKey}:media`,
+        messageKey: localMessageKey,
+        sha256: "4".repeat(64),
+        casKey: "4".repeat(64),
+        availability: "available",
+        originalName: "preserved.png",
+        mimeType: "image/png",
+      },
+    ];
+    await importer.import({
+      archiveId: archiveOneId,
+      ownedAccountId: account.id,
+      snapshotId: originalSnapshotId,
+      importJobId: originalJobId,
+      observedAt,
+      records: original,
+    });
+    await importer.import({
+      archiveId: archiveOneId,
+      ownedAccountId: account.id,
+      snapshotId: deletionSnapshotId,
+      importJobId: deletionJobId,
+      observedAt: new Date("2026-01-02T00:00:00.000Z"),
+      records: [
+        { kind: "conversation", stableKey: localConversationKey, conversationKind: "direct" },
+        {
+          kind: "message",
+          stableKey: localMessageKey,
+          source: { namespace: "wacli", value: "sender-retention-message" },
+          conversationKey: localConversationKey,
+          timestamp: observedAt.toISOString(),
+          direction: "unknown",
+          messageKind: "image",
+          bodyState: "unavailable",
+          sourceDeletion: {
+            kind: "delete",
+            eventKey: "sender-retention-delete",
+            observedAt: "2026-01-02T00:00:00.000Z",
+          },
+        },
+      ],
+    });
+    const message = await prisma.message.findFirstOrThrow({
+      where: { archiveId: archiveOneId, stableKey: localMessageKey },
+      include: { attachments: { include: { attachment: true } } },
+    });
+    expect(message).toMatchObject({
+      senderId: expect.any(String),
+      sourceDeleted: true,
+      ownerDeleted: false,
+      body: "captured before deletion",
+    });
+    expect(message.attachments).toHaveLength(1);
+    expect(message.attachments[0]?.attachment).toMatchObject({
+      casKey: "4".repeat(64),
+      availability: "available",
+    });
+  });
+
   it("keeps identical normalized keys isolated between archives", async () => {
-    expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(3);
+    expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(4);
     expect(await prisma.message.count({ where: { archiveId: archiveTwoId } })).toBe(1);
     expect(await prisma.person.count({ where: { archiveId: archiveOneId } })).toBe(1);
     expect(await prisma.person.count({ where: { archiveId: archiveTwoId } })).toBe(1);

@@ -103,6 +103,25 @@ describe("wacli observation normalization", () => {
     });
   });
 
+  it("does not invent a sender for a delete-only event without sender metadata", () => {
+    const records = normalizeWacliEvent(
+      parse({
+        EventType: "delete_for_me",
+        ChatJID: "120@g.us",
+        MessageID: "deleted-without-sender",
+        Timestamp: "2026-09-16T12:00:00Z",
+      }),
+    );
+    expect(records.filter((record) => record.kind === "person")).toHaveLength(0);
+    expect(records.filter((record) => record.kind === "identity")).toHaveLength(0);
+    expect(records.find((record) => record.kind === "message")).toMatchObject({
+      sourceDeletion: { kind: "delete" },
+    });
+    expect(
+      records.find((record) => record.kind === "message" && record.senderIdentityKey),
+    ).toBeUndefined();
+  });
+
   it.each(["android-current.v1", "android-legacy.v1"] as const)(
     "uses one scoped revision identity for live and backup edits (%s)",
     (version) => {

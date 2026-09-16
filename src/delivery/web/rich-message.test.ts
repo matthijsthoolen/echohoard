@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MessageRead } from "../../application/reads";
-import { mediaUrl, renderRichMessage } from "./components/rich-message";
+import { RichMessage, mediaUrl, renderRichMessage } from "./components/rich-message";
 
 const attachment = (overrides: Record<string, unknown> = {}) => ({
   id: "attachment/hostile?", // URL encoding is part of the contract test.
@@ -135,5 +135,16 @@ describe("rich message presentation", () => {
     );
     expect(tree.some((node) => node.type === "img" || node.type === "svg")).toBe(false);
     expect(tree.find((node) => node.type === "strong")?.props.children).toBe("Preserved contact");
+  });
+
+  it("renders an accessible source-deleted marker without replacing preserved content", () => {
+    const tree = elements(
+      RichMessage({ message: message("text", { sourceDeleted: true, text: "captured text" }) }),
+    );
+    const marker = tree.find((node) => node.props["aria-label"] === "Source deleted");
+    expect(marker).toMatchObject({ type: "div", props: { role: "status" } });
+    expect(tree.some((node) => node.type === "p" && node.props.children === "captured text")).toBe(
+      true,
+    );
   });
 });

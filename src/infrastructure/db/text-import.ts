@@ -146,7 +146,7 @@ async function bulkUpsertMessages(
         materialized boolean
       )
     ON CONFLICT ("archiveId", "stableKey") DO UPDATE
-      SET "senderId" = EXCLUDED."senderId",
+      SET "senderId" = COALESCE(EXCLUDED."senderId", "Message"."senderId"),
           "body" = CASE WHEN EXCLUDED."body" IS NOT NULL THEN EXCLUDED."body" ELSE "Message"."body" END,
           "messageType" = EXCLUDED."messageType",
           "lastSeenAt" = EXCLUDED."lastSeenAt",

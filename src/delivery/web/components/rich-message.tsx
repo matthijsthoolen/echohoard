@@ -47,6 +47,12 @@ type RichMetadata = Readonly<Record<string, unknown>>;
 export function RichMessage({ message }: { readonly message: MessageRead }): ReactNode {
   return (
     <div className="rich-message" data-rich-type={message.messageType}>
+      {message.sourceDeleted ? (
+        <div className="source-deleted-marker" role="status" aria-label="Source deleted">
+          <strong>Source deleted</strong>
+          <span>Preserved archive content remains available.</span>
+        </div>
+      ) : null}
       {renderRichMessage(message)}
     </div>
   );

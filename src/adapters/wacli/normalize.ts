@@ -30,12 +30,8 @@ export function normalizeWacliEvent(
 
 function normalizeMessage(event: WacliMessageEvent, accountScope: string): readonly ImportRecord[] {
   const conversationKey = whatsappConversationKey(accountScope, event.chatKey);
-  const identityKey = whatsappIdentityKey(accountScope, event.senderKey);
-  const personKey = whatsappPersonKey(accountScope, event.senderKey);
   const messageKey = whatsappMessageKey(accountScope, event.chatKey, event.messageKey);
   const records: ImportRecord[] = [
-    { kind: "person", stableKey: personKey },
-    { kind: "identity", stableKey: identityKey, source: source(event.senderKey), personKey },
     {
       kind: "conversation",
       stableKey: conversationKey,
@@ -43,17 +39,13 @@ function normalizeMessage(event: WacliMessageEvent, accountScope: string): reado
       conversationKind: event.chatKey.endsWith("@g.us") ? "group" : "direct",
     } satisfies ImportConversationRecord,
     {
-      kind: "participant",
-      conversationKey,
-      identityKey,
-      role: "unknown",
-    } satisfies ImportParticipantRecord,
-    {
       kind: "message",
       stableKey: messageKey,
       source: source(event.messageKey),
       conversationKey,
-      senderIdentityKey: identityKey,
+      ...(event.senderKey
+        ? { senderIdentityKey: whatsappIdentityKey(accountScope, event.senderKey) }
+        : {}),
       timestamp: event.observedAt,
       direction: event.fromMe ? "sent" : "received",
       messageKind: event.media?.type ?? (event.text === undefined ? "unsupported" : "text"),
@@ -74,6 +66,22 @@ function normalizeMessage(event: WacliMessageEvent, accountScope: string): reado
       ...(event.media ? { metadata: { media: event.media } } : {}),
     } satisfies ImportMessageRecord,
   ];
+  if (event.senderKey) {
+    const identityKey = whatsappIdentityKey(accountScope, event.senderKey);
+    const personKey = whatsappPersonKey(accountScope, event.senderKey);
+    records.splice(
+      0,
+      0,
+      { kind: "person", stableKey: personKey },
+      {
+        kind: "identity",
+        stableKey: identityKey,
+        source: source(event.senderKey),
+        personKey,
+      },
+    );
+    records.splice(3, 0, { kind: "participant", conversationKey, identityKey, role: "unknown" });
+  }
   if (event.edited)
     records.push({
       kind: "revision",
