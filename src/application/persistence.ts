@@ -62,6 +62,8 @@ export interface LiveEventInboxRecord extends PersistenceRecord {
   readonly sourceEventKey: string;
   readonly eventKind: string;
   readonly status: string;
+  readonly attempts: number;
+  readonly claimId?: string | null;
 }
 
 export interface LiveEventInboxPort {
@@ -79,6 +81,28 @@ export interface LiveEventInboxPort {
     readonly kind: "accepted" | "duplicate" | "backpressure";
     readonly row?: LiveEventInboxRecord;
   }>;
+  claimPending(input: {
+    readonly archiveId?: ArchiveId;
+    readonly limit: number;
+    readonly workerId: string;
+    readonly now: Date;
+    readonly claimExpiresAt: Date;
+  }): Promise<readonly (LiveEventInboxRecord & { readonly claimId: string })[]>;
+  completeClaim(input: {
+    readonly archiveId: ArchiveId;
+    readonly ownedAccountId: string;
+    readonly receiptId: string;
+    readonly claimId: string;
+  }): Promise<void>;
+  failClaim(input: {
+    readonly archiveId: ArchiveId;
+    readonly ownedAccountId: string;
+    readonly receiptId: string;
+    readonly claimId: string;
+    readonly retryable: boolean;
+    readonly errorClass: string;
+    readonly now: Date;
+  }): Promise<void>;
 }
 
 export interface AccountSettingsPersistencePort {

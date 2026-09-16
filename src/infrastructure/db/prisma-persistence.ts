@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import type {
   ArchiveScopedPort,
   PersistencePorts,
@@ -181,6 +182,64 @@ export class PrismaLiveEventInboxPersistence implements LiveEventInboxPort {
       return { kind: "accepted" as const, row };
     });
   }
+
+  public async claimPending(input: Parameters<LiveEventInboxPort["claimPending"]>[0]) {
+    const maxAttempts = 3;
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      WITH candidate AS (
+        SELECT id
+          FROM "LiveEventInbox"
+         WHERE (("status" = 'pending' AND "attempts" < ${maxAttempts})
+            OR ("status" = 'processing' AND "claimExpiresAt" <= ${input.now}))
+           AND (${input.archiveId ?? null}::uuid IS NULL OR "archiveId" = ${input.archiveId ?? null}::uuid)
+         ORDER BY "receivedAt" ASC, id ASC
+         FOR UPDATE SKIP LOCKED
+         LIMIT ${Math.max(1, Math.min(100, Math.trunc(input.limit)))}
+      )
+      UPDATE "LiveEventInbox" AS receipt
+         SET "status" = 'processing', "attempts" = receipt."attempts" + 1,
+             "claimId" = gen_random_uuid(), "claimExpiresAt" = ${input.claimExpiresAt},
+             "updatedAt" = CURRENT_TIMESTAMP
+        FROM candidate
+       WHERE receipt.id = candidate.id
+       RETURNING receipt.id
+    `);
+    if (rows.length === 0) return [];
+    const claimed = await this.prisma.liveEventInbox.findMany({
+      where: { id: { in: rows.map((row) => row.id) }, status: "processing" },
+      orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
+    });
+    return claimed.flatMap((row) => (row.claimId ? [{ ...row, claimId: row.claimId }] : []));
+  }
+
+  public async completeClaim(input: Parameters<LiveEventInboxPort["completeClaim"]>[0]) {
+    const result = await this.prisma.liveEventInbox.updateMany({
+      where: {
+        archiveId: input.archiveId,
+        ownedAccountId: input.ownedAccountId,
+        receiptId: input.receiptId,
+        claimId: input.claimId,
+        status: "processing",
+      },
+      data: { status: "normalized", claimId: null, claimExpiresAt: null, retryable: false },
+    });
+    if (result.count !== 1) throw new Error("live event claim changed during completion");
+  }
+
+  public async failClaim(input: Parameters<LiveEventInboxPort["failClaim"]>[0]) {
+    const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      UPDATE "LiveEventInbox"
+         SET "status" = CASE WHEN ${input.retryable} = false OR "attempts" >= 3 THEN 'failed' ELSE 'pending' END,
+             "errorClass" = ${input.errorClass}, "retryable" = ${input.retryable},
+             "claimId" = NULL, "claimExpiresAt" = NULL, "updatedAt" = ${input.now}
+       WHERE "archiveId" = ${input.archiveId}::uuid
+         AND "ownedAccountId" = ${input.ownedAccountId}::uuid
+         AND "receiptId" = ${input.receiptId}
+         AND "claimId" = ${input.claimId}::uuid AND "status" = 'processing'
+       RETURNING id
+    `);
+    if (rows.length !== 1) throw new Error("live event claim changed during failure handling");
+  }
 }
 
 export class PrismaLiveEventAccountResolver implements LiveEventAccountResolver {
@@ -209,6 +268,7 @@ export class PrismaLiveEventAccountResolver implements LiveEventAccountResolver 
  * pending and therefore retryable. */
 export class PrismaLiveEventNormalizer {
   private readonly importer: PrismaTextSnapshotImporter;
+  private readonly inbox: PrismaLiveEventInboxPersistence;
 
   public constructor(
     private readonly prisma: PrismaClient,
@@ -216,13 +276,41 @@ export class PrismaLiveEventNormalizer {
     private readonly normalizeEvent: (event: unknown) => readonly ImportRecord[],
   ) {
     this.importer = new PrismaTextSnapshotImporter(prisma);
+    this.inbox = new PrismaLiveEventInboxPersistence(prisma);
+  }
+
+  public claimPending(input: Parameters<LiveEventInboxPort["claimPending"]>[0]) {
+    return this.inbox.claimPending(input);
+  }
+
+  public failClaim(input: Parameters<LiveEventInboxPort["failClaim"]>[0]) {
+    return this.inbox.failClaim(input);
   }
 
   public async normalize(input: {
     readonly archiveId: string;
     readonly ownedAccountId: string;
     readonly receiptId: string;
+    readonly claimId?: string;
   }): Promise<{ readonly imported: number; readonly status: "normalized" | "duplicate" }> {
+    const claimId = input.claimId ?? randomUUID();
+    if (!input.claimId) {
+      const claimed = await this.prisma.liveEventInbox.updateMany({
+        where: {
+          archiveId: input.archiveId,
+          ownedAccountId: input.ownedAccountId,
+          receiptId: input.receiptId,
+          status: "pending",
+        },
+        data: {
+          status: "processing",
+          claimId,
+          claimExpiresAt: new Date(Date.now() + 60_000),
+          attempts: { increment: 1 },
+        },
+      });
+      if (claimed.count !== 1) throw new Error("live event receipt could not be claimed");
+    }
     const receipt = await this.prisma.liveEventInbox.findUnique({
       where: {
         archiveId_ownedAccountId_receiptId: {
@@ -235,12 +323,26 @@ export class PrismaLiveEventNormalizer {
     });
     if (!receipt) throw new Error("live event receipt is not in the archive scope");
     if (receipt.status === "normalized") return { imported: 0, status: "duplicate" };
-    const event = this.parseEvent(
-      new TextEncoder().encode(JSON.stringify(receipt.payload)),
-      receipt.ownedAccount.accountKey,
-    );
-    const records = this.normalizeEvent(event);
-    if (records.length === 0) throw new Error("live event adaptation produced no observation");
+    if (receipt.status !== "processing" || receipt.claimId !== claimId)
+      throw new Error("live event receipt is not claimed by this worker");
+    let records: readonly ImportRecord[];
+    try {
+      const event = this.parseEvent(
+        new TextEncoder().encode(JSON.stringify(receipt.payload)),
+        receipt.ownedAccount.accountKey,
+      );
+      records = this.normalizeEvent(event);
+    } catch {
+      throw Object.assign(new Error("live event payload is invalid"), {
+        retryable: false,
+        errorClass: "invalid-payload",
+      });
+    }
+    if (records.length === 0)
+      throw Object.assign(new Error("live event adaptation produced no observation"), {
+        retryable: false,
+        errorClass: "empty-observation",
+      });
     const sourceKey = `live:${receipt.ownedAccountId}`;
     const stable = (label: string): string => stableUuid(input.archiveId, `${sourceKey}:${label}`);
     return this.importer
@@ -251,25 +353,14 @@ export class PrismaLiveEventNormalizer {
         importJobId: stable(`job:${receipt.receiptId}`),
         observedAt: receipt.observedAt,
         records,
-        liveReceipt: { receiptId: receipt.receiptId, sourceId: stable("source"), sourceKey },
+        liveReceipt: {
+          receiptId: receipt.receiptId,
+          claimId,
+          sourceId: stable("source"),
+          sourceKey,
+        },
       })
       .then((result) => ({ ...result, status: "normalized" as const }));
-  }
-
-  public async listPending(limit: number): Promise<
-    readonly {
-      readonly archiveId: string;
-      readonly ownedAccountId: string;
-      readonly receiptId: string;
-    }[]
-  > {
-    const rows = await this.prisma.liveEventInbox.findMany({
-      where: { status: "pending" },
-      orderBy: [{ receivedAt: "asc" }, { id: "asc" }],
-      take: Math.max(1, Math.min(100, Math.trunc(limit))),
-      select: { archiveId: true, ownedAccountId: true, receiptId: true },
-    });
-    return rows;
   }
 }
 

@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { parseEnv, type EchohoardEnv } from "../config/env.js";
 import { DecryptJobRunner } from "../application/intake.js";
@@ -105,13 +106,30 @@ export class LiveEventNormalizationLoop {
 
   private async pump(): Promise<void> {
     try {
-      const receipts = await this.normalizer.listPending(this.batchSize);
+      const now = new Date();
+      const receipts = await this.normalizer.claimPending({
+        limit: this.batchSize,
+        workerId: randomUUID(),
+        now,
+        claimExpiresAt: new Date(now.getTime() + 60_000),
+      });
       for (const receipt of receipts) {
         if (this.stopping) return;
         try {
           await this.normalizer.normalize(receipt);
-        } catch {
-          // Pending receipts are intentionally left pending by the transaction.
+        } catch (error) {
+          await this.normalizer.failClaim({
+            ...receipt,
+            retryable:
+              error instanceof Error && "retryable" in error
+                ? (error as Error & { readonly retryable: boolean }).retryable
+                : true,
+            errorClass:
+              error instanceof Error && "errorClass" in error
+                ? (error as Error & { readonly errorClass: string }).errorClass
+                : "normalization-failure",
+            now: new Date(),
+          });
           this.onError("live event normalization failed");
         }
       }

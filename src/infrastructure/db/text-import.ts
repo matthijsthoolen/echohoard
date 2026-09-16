@@ -558,16 +558,19 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           phase: "finalization",
         });
       }
-      if (input.liveReceipt)
-        await tx.liveEventInbox.updateMany({
+      if (input.liveReceipt) {
+        const result = await tx.liveEventInbox.updateMany({
           where: {
             archiveId: input.archiveId,
             ownedAccountId,
             receiptId: input.liveReceipt.receiptId,
-            status: "pending",
+            claimId: input.liveReceipt.claimId,
+            status: "processing",
           },
-          data: { status: "normalized", attempts: { increment: 1 } },
+          data: { status: "normalized", claimId: null, claimExpiresAt: null, retryable: false },
         });
+        if (result.count !== 1) throw new LeaseFenceError("live event claim changed during import");
+      }
       return { imported: input.records.length };
     });
   }

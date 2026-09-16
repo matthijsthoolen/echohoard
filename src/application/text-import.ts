@@ -118,6 +118,7 @@ export interface TextSnapshotImportInput {
   readonly leaseCheckedAt?: Date;
   readonly liveReceipt?: {
     readonly receiptId: string;
+    readonly claimId: string;
     readonly sourceId: string;
     readonly sourceKey: string;
   };

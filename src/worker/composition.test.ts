@@ -78,9 +78,20 @@ describe("production live normalization composition", () => {
       .mockResolvedValueOnce({ imported: 1, status: "normalized" });
     let pending = true;
     const normalizer = {
-      listPending: vi.fn(async () =>
-        pending ? [{ archiveId: "archive", ownedAccountId: "account", receiptId: "receipt" }] : [],
+      claimPending: vi.fn(async () =>
+        pending
+          ? [
+              {
+                archiveId: "archive",
+                ownedAccountId: "account",
+                receiptId: "receipt",
+                claimId: "claim",
+                attempts: 1,
+              },
+            ]
+          : [],
       ),
+      failClaim: vi.fn(async () => {}),
       normalize: vi.fn(
         async (receipt: { archiveId: string; ownedAccountId: string; receiptId: string }) => {
           await normalize(receipt);
@@ -100,5 +111,6 @@ describe("production live normalization composition", () => {
     expect(normalizer.normalize).toHaveBeenCalledOnce();
     expect(errors).toEqual(["live event normalization failed"]);
     expect(pending).toBe(true);
+    expect(normalizer.failClaim).toHaveBeenCalledWith(expect.objectContaining({ retryable: true }));
   });
 });

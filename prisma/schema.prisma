@@ -187,6 +187,10 @@ model LiveEventInbox {
   receivedAt     DateTime     @default(now())
   status         String       @default("pending") @db.VarChar(32)
   attempts       Int          @default(0)
+  claimId        String?      @db.Uuid
+  claimExpiresAt DateTime?
+  errorClass     String?      @db.VarChar(64)
+  retryable      Boolean?
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
@@ -195,6 +199,7 @@ model LiveEventInbox {
   @@unique([archiveId, id])
   @@unique([archiveId, ownedAccountId, receiptId])
   @@index([archiveId, ownedAccountId, status, createdAt])
+  @@index([status, claimExpiresAt, receivedAt])
 }
 
 model Source {

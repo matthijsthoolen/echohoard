@@ -86,6 +86,21 @@ describe("live event inbox PostgreSQL durability", () => {
       (await inbox.enqueue(input(archiveId, accountId, randomUUID().replaceAll("-", ""), 1))).kind,
     ).toBe("backpressure");
     expect(await prisma.liveEventInbox.count({ where: { archiveId } })).toBe(1);
+    const claim = (
+      await normalizer.claimPending({
+        archiveId,
+        limit: 1,
+        workerId: "test",
+        now: new Date(),
+        claimExpiresAt: new Date(Date.now() + 60_000),
+      })
+    )[0]!;
+    await normalizer.failClaim({
+      ...claim,
+      retryable: false,
+      errorClass: "invalid-payload",
+      now: new Date(),
+    });
   });
 
   it("keeps account/archive scope in the durable key", async () => {
@@ -193,5 +208,104 @@ describe("live event inbox PostgreSQL durability", () => {
         },
       }),
     ).toBe(1);
+  });
+
+  it("terminates poison receipts without starving later valid receipts", async () => {
+    const poisonId = randomUUID().replaceAll("-", "");
+    const validId = randomUUID().replaceAll("-", "");
+    await inbox.enqueue(input(archiveId, accountId, poisonId));
+    await inbox.enqueue({
+      ...input(archiveId, accountId, validId),
+      payload: {
+        Chat: "15550000001@s.whatsapp.net",
+        ID: `synthetic-after-poison-${validId}`,
+        SenderJID: "15550000001@s.whatsapp.net",
+        Timestamp: "2026-01-01T00:00:00.000Z",
+        FromMe: false,
+        Text: "after poison",
+      },
+    });
+    const first = await normalizer.claimPending({
+      limit: 1,
+      archiveId,
+      workerId: "worker-a",
+      now: new Date("2026-01-01T00:01:00.000Z"),
+      claimExpiresAt: new Date("2026-01-01T00:02:00.000Z"),
+    });
+    expect(first[0]?.receiptId).toBe(poisonId);
+    await expect(normalizer.normalize(first[0]!)).rejects.toMatchObject({ retryable: false });
+    await normalizer.failClaim({
+      ...first[0]!,
+      retryable: false,
+      errorClass: "invalid-payload",
+      now: new Date("2026-01-01T00:01:00.000Z"),
+    });
+    const next = await normalizer.claimPending({
+      limit: 1,
+      archiveId,
+      workerId: "worker-a",
+      now: new Date("2026-01-01T00:01:00.000Z"),
+      claimExpiresAt: new Date("2026-01-01T00:02:00.000Z"),
+    });
+    expect(next[0]?.receiptId).toBe(validId);
+  });
+
+  it("retries transient claims, recovers a stale claim, and serializes concurrent claims", async () => {
+    const receiptId = randomUUID().replaceAll("-", "");
+    await inbox.enqueue(input(archiveId, accountId, receiptId));
+    const now = new Date("2026-02-01T00:00:00.000Z");
+    const [left, right] = await Promise.all([
+      normalizer.claimPending({
+        archiveId,
+        limit: 1,
+        workerId: "left",
+        now,
+        claimExpiresAt: new Date("2026-02-01T00:01:00.000Z"),
+      }),
+      normalizer.claimPending({
+        archiveId,
+        limit: 1,
+        workerId: "right",
+        now,
+        claimExpiresAt: new Date("2026-02-01T00:01:00.000Z"),
+      }),
+    ]);
+    const claimed = [...left, ...right];
+    expect(claimed).toHaveLength(1);
+    const stale = await normalizer.claimPending({
+      archiveId,
+      limit: 1,
+      workerId: "restart",
+      now: new Date("2026-02-01T00:02:00.000Z"),
+      claimExpiresAt: new Date("2026-02-01T00:03:00.000Z"),
+    });
+    expect(stale).toHaveLength(1);
+    await normalizer.failClaim({
+      ...stale[0]!,
+      retryable: true,
+      errorClass: "database-unavailable",
+      now,
+    });
+    const retried = await normalizer.claimPending({
+      archiveId,
+      limit: 1,
+      workerId: "restart",
+      now,
+      claimExpiresAt: new Date("2026-02-01T00:01:00.000Z"),
+    });
+    expect(retried).toHaveLength(1);
+    await normalizer.failClaim({
+      ...retried[0]!,
+      retryable: false,
+      errorClass: "invalid-payload",
+      now,
+    });
+    expect(
+      await prisma.liveEventInbox.findUnique({
+        where: {
+          archiveId_ownedAccountId_receiptId: { archiveId, ownedAccountId: accountId, receiptId },
+        },
+      }),
+    ).toMatchObject({ status: "failed", attempts: 2, retryable: false });
   });
 });
