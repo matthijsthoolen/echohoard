@@ -7,6 +7,7 @@ import type {
   ObservationPort,
   LiveEventInboxPort,
 } from "../../application/persistence";
+import type { ImportRecord } from "../../application/text-import";
 import type {
   ReadConversationPersistenceQuery,
   ReadMessagePersistenceQuery,
@@ -47,8 +48,6 @@ import {
   type UpdateConversationPrivacyRequest,
 } from "../../application/conversation-privacy";
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
-import { parseWacliWebhookEvent } from "../../adapters/wacli/contract.js";
-import { normalizeWacliEvent } from "../../adapters/wacli/normalize.js";
 import { PrismaTextSnapshotImporter } from "./text-import.js";
 import { createHash } from "node:crypto";
 
@@ -209,7 +208,11 @@ export class PrismaLiveEventAccountResolver implements LiveEventAccountResolver 
 export class PrismaLiveEventNormalizer {
   private readonly importer: PrismaTextSnapshotImporter;
 
-  public constructor(private readonly prisma: PrismaClient) {
+  public constructor(
+    private readonly prisma: PrismaClient,
+    private readonly parseEvent: (payload: Uint8Array, accountKey: string) => unknown,
+    private readonly normalizeEvent: (event: unknown) => readonly ImportRecord[],
+  ) {
     this.importer = new PrismaTextSnapshotImporter(prisma);
   }
 
@@ -230,7 +233,7 @@ export class PrismaLiveEventNormalizer {
     });
     if (!receipt) throw new Error("live event receipt is not in the archive scope");
     if (receipt.status === "normalized") return { imported: 0, status: "duplicate" };
-    const event = parseWacliWebhookEvent(
+    const event = this.parseEvent(
       new TextEncoder().encode(JSON.stringify(receipt.payload)),
       receipt.ownedAccount.accountKey,
     );
@@ -243,7 +246,7 @@ export class PrismaLiveEventNormalizer {
         snapshotId: stable("snapshot"),
         importJobId: stable(`job:${receipt.receiptId}`),
         observedAt: receipt.observedAt,
-        records: normalizeWacliEvent(event),
+        records: this.normalizeEvent(event),
         liveReceipt: { receiptId: receipt.receiptId, sourceId: stable("source"), sourceKey },
       })
       .then((result) => ({ ...result, status: "normalized" as const }));
