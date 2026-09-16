@@ -46,6 +46,10 @@ import {
   type UpdateConversationPrivacyRequest,
 } from "../../application/conversation-privacy";
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
+import { parseWacliWebhookEvent } from "../../adapters/wacli/contract.js";
+import { normalizeWacliEvent } from "../../adapters/wacli/normalize.js";
+import { PrismaTextSnapshotImporter } from "./text-import.js";
+import { createHash } from "node:crypto";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -177,6 +181,58 @@ export class PrismaLiveEventAccountResolver implements LiveEventAccountResolver 
       ? null
       : { archiveId: account.archiveId, ownedAccountId: account.id, secret };
   }
+}
+
+/** Drains one accepted receipt through the same observation/materialization
+ * transaction as backup imports. A failed adaptation leaves the receipt
+ * pending and therefore retryable. */
+export class PrismaLiveEventNormalizer {
+  private readonly importer: PrismaTextSnapshotImporter;
+
+  public constructor(private readonly prisma: PrismaClient) {
+    this.importer = new PrismaTextSnapshotImporter(prisma);
+  }
+
+  public async normalize(input: {
+    readonly archiveId: string;
+    readonly ownedAccountId: string;
+    readonly receiptId: string;
+  }): Promise<{ readonly imported: number; readonly status: "normalized" | "duplicate" }> {
+    const receipt = await this.prisma.liveEventInbox.findUnique({
+      where: {
+        archiveId_ownedAccountId_receiptId: {
+          archiveId: input.archiveId,
+          ownedAccountId: input.ownedAccountId,
+          receiptId: input.receiptId,
+        },
+      },
+      include: { ownedAccount: { select: { accountKey: true } } },
+    });
+    if (!receipt) throw new Error("live event receipt is not in the archive scope");
+    if (receipt.status === "normalized") return { imported: 0, status: "duplicate" };
+    const event = parseWacliWebhookEvent(
+      new TextEncoder().encode(JSON.stringify(receipt.payload)),
+      receipt.ownedAccount.accountKey,
+    );
+    const sourceKey = `live:${receipt.ownedAccountId}`;
+    const stable = (label: string): string => stableUuid(input.archiveId, `${sourceKey}:${label}`);
+    return this.importer
+      .import({
+        archiveId: input.archiveId,
+        ownedAccountId: input.ownedAccountId,
+        snapshotId: stable("snapshot"),
+        importJobId: stable(`job:${receipt.receiptId}`),
+        observedAt: receipt.observedAt,
+        records: normalizeWacliEvent(event),
+        liveReceipt: { receiptId: receipt.receiptId, sourceId: stable("source"), sourceKey },
+      })
+      .then((result) => ({ ...result, status: "normalized" as const }));
+  }
+}
+
+function stableUuid(archiveId: string, key: string): string {
+  const hex = createHash("sha256").update(`${archiveId}\0${key}`).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
 }
 
 type PrivacyConversationRow = {

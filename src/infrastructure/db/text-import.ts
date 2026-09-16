@@ -37,6 +37,53 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         input.ownedAccountId ?? (accounts.length === 1 ? accounts[0].id : undefined);
       if (!ownedAccountId || !accounts.some((account) => account.id === ownedAccountId))
         throw new Error("Text snapshot import requires an account in the archive scope");
+      if (input.liveReceipt) {
+        const sourceSha = createHash("sha256").update(input.liveReceipt.sourceKey).digest("hex");
+        await tx.source.upsert({
+          where: {
+            archiveId_ownedAccountId_kind_stableKey: {
+              archiveId: input.archiveId,
+              ownedAccountId,
+              kind: "live",
+              stableKey: input.liveReceipt.sourceKey,
+            },
+          },
+          create: {
+            id: input.liveReceipt.sourceId,
+            archiveId: input.archiveId,
+            ownedAccountId,
+            kind: "live",
+            stableKey: input.liveReceipt.sourceKey,
+            sha256: sourceSha,
+          },
+          update: {},
+        });
+        await tx.snapshot.upsert({
+          where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
+          create: {
+            id: input.snapshotId,
+            archiveId: input.archiveId,
+            ownedAccountId,
+            sourceId: input.liveReceipt.sourceId,
+            sha256: sourceSha,
+            lifecycle: "snapshotted",
+          },
+          update: {},
+        });
+        await tx.importJob.upsert({
+          where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
+          create: {
+            id: input.importJobId,
+            archiveId: input.archiveId,
+            ownedAccountId,
+            sourceId: input.liveReceipt.sourceId,
+            snapshotId: input.snapshotId,
+            status: "adapting",
+            adapterVersion: "wacli-webhook-contract.v1",
+          },
+          update: {},
+        });
+      }
       const job = await tx.importJob.findUnique({
         where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
         select: { ownedAccountId: true, sourceId: true, snapshotId: true, eligibility: true },
@@ -473,6 +520,16 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
         data: { status: "completed", finishedAt: input.observedAt },
       });
+      if (input.liveReceipt)
+        await tx.liveEventInbox.updateMany({
+          where: {
+            archiveId: input.archiveId,
+            ownedAccountId,
+            receiptId: input.liveReceipt.receiptId,
+            status: "pending",
+          },
+          data: { status: "normalized", attempts: { increment: 1 } },
+        });
       return { imported: input.records.length };
     });
   }

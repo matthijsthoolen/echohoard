@@ -1,13 +1,17 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { PrismaLiveEventInboxPersistence } from "../../src/infrastructure/db/prisma-persistence.js";
+import {
+  PrismaLiveEventInboxPersistence,
+  PrismaLiveEventNormalizer,
+} from "../../src/infrastructure/db/prisma-persistence.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
 
 const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
 const inbox = new PrismaLiveEventInboxPersistence(prisma);
+const normalizer = new PrismaLiveEventNormalizer(prisma);
 const userId = randomUUID();
 const archiveId = randomUUID();
 const otherArchiveId = randomUUID();
@@ -67,5 +71,32 @@ describe("live event inbox PostgreSQL durability", () => {
     );
     expect(await prisma.liveEventInbox.count({ where: { archiveId } })).toBe(1);
     expect(await prisma.liveEventInbox.count({ where: { archiveId: otherArchiveId } })).toBe(1);
+  });
+
+  it("finalizes a message receipt with observations in one retryable transaction", async () => {
+    const receiptId = randomUUID().replaceAll("-", "");
+    const event = {
+      Chat: "15550000001@s.whatsapp.net",
+      ID: `synthetic-live-${receiptId}`,
+      SenderJID: "15550000001@s.whatsapp.net",
+      Timestamp: "2026-01-01T00:00:00.000Z",
+      FromMe: false,
+      Text: "synthetic live history",
+    };
+    await inbox.enqueue({
+      ...input(archiveId, accountId, receiptId),
+      sourceEventKey: `wacli:message:${accountId}:${event.Chat}:${event.ID}`,
+      payload: event,
+    });
+    const result = await normalizer.normalize({ archiveId, ownedAccountId: accountId, receiptId });
+    expect(result.status).toBe("normalized");
+    expect(await prisma.liveEventInbox.findFirst({ where: { receiptId } })).toMatchObject({
+      status: "normalized",
+    });
+    expect(
+      await prisma.messageObservation.count({
+        where: { archiveId, observedValue: { path: ["body"], equals: "synthetic live history" } },
+      }),
+    ).toBe(1);
   });
 });

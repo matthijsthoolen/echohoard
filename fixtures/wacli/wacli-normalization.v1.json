@@ -1,0 +1,29 @@
+{
+  "contractVersion": "wacli-observation-normalization.v1",
+  "events": {
+    "history": {
+      "Chat": "15550000001@s.whatsapp.net",
+      "ID": "fixture-history-normalize-1",
+      "SenderJID": "15550000002@s.whatsapp.net",
+      "Timestamp": "2026-09-16T11:59:00Z",
+      "FromMe": false,
+      "Text": "synthetic history"
+    },
+    "editedMedia": {
+      "Chat": "120363000000000001@g.us",
+      "ID": "fixture-edited-media-1",
+      "SenderJID": "15550000002@s.whatsapp.net",
+      "Timestamp": "2026-09-16T12:02:00Z",
+      "FromMe": true,
+      "Text": "synthetic edited media",
+      "Edited": true,
+      "ReplyToID": "fixture-history-normalize-1",
+      "Media": {
+        "Type": "image",
+        "MimeType": "image/jpeg",
+        "Filename": "synthetic.jpg",
+        "FileLength": 42
+      }
+    }
+  }
+}

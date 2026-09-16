@@ -112,6 +112,11 @@ export interface TextSnapshotImportInput {
   readonly importJobId: string;
   readonly observedAt: Date;
   readonly records: readonly ImportRecord[];
+  readonly liveReceipt?: {
+    readonly receiptId: string;
+    readonly sourceId: string;
+    readonly sourceKey: string;
+  };
 }
 
 /** Persistence boundary for one normalized snapshot. Implementations must
