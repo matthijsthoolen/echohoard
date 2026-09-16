@@ -11,7 +11,9 @@ export const MESSAGE_FALLBACK_VERSION = "v1" as const;
 
 export interface MessageIdentityInput {
   readonly adapterVersion: WhatsAppAdapterVersion;
+  readonly accountScope?: string;
   readonly conversationKey: string;
+  readonly sourceConversationKey?: string;
   readonly senderIdentityKey?: string;
   readonly timestamp: string | null;
   readonly direction: NormalizedDirection;
@@ -51,17 +53,26 @@ const digest = (value: string): string => createHash("sha256").update(value, "ut
  * SQLite row ids are deliberately not accepted by this contract.
  */
 export function deriveMessageIdentity(input: MessageIdentityInput): DerivedMessageIdentity {
+  const accountScope = input.accountScope ?? "default";
   const sourceMessageId = clean(input.sourceMessageId);
   if (sourceMessageId)
     return {
-      stableKey: whatsappMessageKey(sourceMessageId),
+      stableKey: whatsappMessageKey(
+        accountScope,
+        input.sourceConversationKey ?? input.conversationKey,
+        sourceMessageId,
+      ),
       usedFallback: false,
       diagnostic: "source-id",
     };
   const stanzaId = clean(input.stanzaId);
   if (stanzaId)
     return {
-      stableKey: `whatsapp:message:stanza:${digest(stanzaId)}`,
+      stableKey: whatsappMessageKey(
+        accountScope,
+        input.sourceConversationKey ?? input.conversationKey,
+        `stanza:${stanzaId}`,
+      ),
       usedFallback: false,
       diagnostic: "stanza-id",
     };
@@ -69,6 +80,7 @@ export function deriveMessageIdentity(input: MessageIdentityInput): DerivedMessa
   const canonical = [
     MESSAGE_FALLBACK_VERSION,
     input.adapterVersion,
+    accountScope,
     input.conversationKey,
     input.senderIdentityKey ?? "",
     input.timestamp ?? "",
@@ -108,6 +120,7 @@ export class MessageIdentityRegistry {
 function canonicalInput(input: MessageIdentityInput): string {
   return JSON.stringify([
     input.adapterVersion,
+    input.accountScope ?? "default",
     clean(input.sourceMessageId) ?? null,
     clean(input.stanzaId) ?? null,
     input.conversationKey,

@@ -25,6 +25,7 @@ type Row = Readonly<Record<string, unknown>>;
 export interface MessageMappingOptions {
   /** Stable provenance supplied by the importer; fixtures default to this value. */
   readonly snapshotId?: string;
+  readonly accountScope?: string;
 }
 
 const source = (value: string) => ({ namespace: WHATSAPP_SOURCE_NAMESPACE, value });
@@ -40,6 +41,7 @@ export function normalizeWhatsAppMessages(
   options: MessageMappingOptions = {},
 ): readonly NormalizedRecord[] {
   const snapshotId = options.snapshotId ?? "fixture";
+  const accountScope = options.accountScope ?? "default";
   const version = fixture.version;
   const messageTable = version === "android-current.v1" ? "message" : "messages";
   const editTable = version === "android-current.v1" ? "message_edit" : "message_edits";
@@ -65,15 +67,17 @@ export function normalizeWhatsAppMessages(
   }
 
   for (const row of messages) {
-    const conversation = conversationFor(version, row, chatByRow);
-    const sender = senderFor(version, row, jidByRow);
+    const conversation = conversationFor(version, row, chatByRow, accountScope);
+    const sender = senderFor(version, row, jidByRow, accountScope);
     const direction = directionFor(version, row);
     const timestamp = timestampFor(row.timestamp);
     const nativeCode = number(row.message_type ?? row.media_wa_type);
     const messageKind = kindFor(nativeCode);
     const identityInput: MessageIdentityInput = {
       adapterVersion: version,
+      accountScope,
       conversationKey: conversation,
+      sourceConversationKey: conversationSourceFor(row, chatByRow),
       ...(sender ? { senderIdentityKey: sender } : {}),
       timestamp,
       direction,
@@ -84,7 +88,7 @@ export function normalizeWhatsAppMessages(
     const stableKey =
       registration.kind === "accepted"
         ? registration.identity.stableKey
-        : `whatsapp:message:collision:${whatsappMessageKey(JSON.stringify([timestamp, conversation]))}`;
+        : `whatsapp:message:collision:${whatsappMessageKey(accountScope, conversation, JSON.stringify([timestamp, conversation]))}`;
     const body = bodyFor(row.text_data ?? row.data);
     const record: NormalizedMessageRecord = {
       kind: "message",
@@ -169,25 +173,35 @@ function conversationFor(
   version: WhatsAppAdapterVersion,
   row: Row,
   chatByRow: ReadonlyMap<number, string>,
+  accountScope: string,
 ): string {
   const remote = stringValue(row.key_remote_jid);
-  if (remote) return conversationKey(remote);
+  if (remote) return conversationKey(accountScope, remote);
   const currentRemote = chatByRow.get(number(row.chat_row_id) ?? -1);
-  if (currentRemote) return conversationKey(currentRemote);
+  if (currentRemote) return conversationKey(accountScope, currentRemote);
   // Current rows carry a numeric JID reference. Keep the key deterministic
   // when the referenced JID is damaged or absent, without exposing row ids.
-  return conversationKey(`chat:${String(row.chat_row_id ?? "unknown")}`);
+  return conversationKey(accountScope, `chat:${String(row.chat_row_id ?? "unknown")}`);
+}
+
+function conversationSourceFor(row: Row, chatByRow: ReadonlyMap<number, string>): string {
+  return (
+    stringValue(row.key_remote_jid) ??
+    chatByRow.get(number(row.chat_row_id) ?? -1) ??
+    `chat:${String(row.chat_row_id ?? "unknown")}`
+  );
 }
 function senderFor(
   version: WhatsAppAdapterVersion,
   row: Row,
   jidByRow: ReadonlyMap<number, string>,
+  accountScope: string,
 ): string | undefined {
   const raw =
     stringValue(row.participant_hash) ??
     stringValue(row.sender_jid) ??
     jidByRow.get(number(row.sender_jid_row_id) ?? -1);
-  return raw ? identityKey(raw) : undefined;
+  return raw ? identityKey(accountScope, raw) : undefined;
 }
 function directionFor(version: WhatsAppAdapterVersion, row: Row): NormalizedDirection {
   const value = row.from_me ?? row.key_from_me;

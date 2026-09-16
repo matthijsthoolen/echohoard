@@ -59,22 +59,25 @@ describe("wacli observation normalization", () => {
         Text: "same evidence",
       }),
     );
-    const history = normalizeWhatsAppMessages({
-      ...buildWhatsAppSqliteFixture("android-legacy.v1"),
-      rows: {
-        messages: [
-          {
-            _id: 1,
-            key_remote_jid: "120@g.us",
-            key_from_me: false,
-            timestamp: Date.parse("2026-09-16T12:00:00Z"),
-            media_wa_type: 0,
-            data: "same evidence",
-            key_id: "shared-message-id",
-          },
-        ],
+    const history = normalizeWhatsAppMessages(
+      {
+        ...buildWhatsAppSqliteFixture("android-legacy.v1"),
+        rows: {
+          messages: [
+            {
+              _id: 1,
+              key_remote_jid: "120@g.us",
+              key_from_me: false,
+              timestamp: Date.parse("2026-09-16T12:00:00Z"),
+              media_wa_type: 0,
+              data: "same evidence",
+              key_id: "shared-message-id",
+            },
+          ],
+        },
       },
-    }).find((record) => record.kind === "message");
+      { accountScope: "fixture-account" },
+    ).find((record) => record.kind === "message");
     const liveMessage = live.find((record) => record.kind === "message");
     expect(liveMessage?.stableKey).toBe(history?.stableKey);
     expect(liveMessage?.source.namespace).toBe("whatsapp-android");

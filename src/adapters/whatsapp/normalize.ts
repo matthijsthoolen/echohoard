@@ -32,7 +32,9 @@ const source = (value: string) => ({ namespace: WHATSAPP_SOURCE_NAMESPACE, value
  */
 export function normalizeWhatsAppIdentitiesAndConversations(
   fixture: Pick<WhatsAppSqliteFixture, "version" | "rows">,
+  options: { readonly accountScope?: string } = {},
 ): readonly NormalizedRecord[] {
+  const accountScope = options.accountScope ?? "default";
   const identities = new Map<string, NormalizedIdentityRecord>();
   const people = new Map<string, NormalizedPersonRecord>();
   const conversations = new Map<string, NormalizedConversationRecord>();
@@ -42,10 +44,10 @@ export function normalizeWhatsAppIdentitiesAndConversations(
 
   const observeIdentity = (raw: unknown, displayName?: unknown): string => {
     const value = typeof raw === "string" && raw.length > 0 ? raw : "unknown";
-    const key = identityKey(value);
+    const key = identityKey(accountScope, value);
     const existing = identities.get(key);
     if (!existing) {
-      const person = isPersonIdentifier(value) ? personKey(value) : undefined;
+      const person = isPersonIdentifier(value) ? personKey(accountScope, value) : undefined;
       identities.set(key, {
         kind: "identity",
         stableKey: key,
@@ -76,7 +78,7 @@ export function normalizeWhatsAppIdentitiesAndConversations(
         number(row.jid_row_id) === undefined ? undefined : jidByRow.get(number(row.jid_row_id)!);
       const identity = jid ? identities.get(jid) : undefined;
       if (id === undefined || !identity) continue;
-      const key = conversationKey(identity.source.value);
+      const key = conversationKey(accountScope, identity.source.value);
       conversationByRow.set(id, key);
       if (!conversations.has(key))
         conversations.set(key, {
@@ -99,7 +101,7 @@ export function normalizeWhatsAppIdentitiesAndConversations(
       if (!jid) continue;
       const identity = identities.get(observeIdentity(jid));
       if (!identity) continue;
-      const key = conversationKey(jid);
+      const key = conversationKey(accountScope, jid);
       conversations.set(key, {
         kind: "conversation",
         stableKey: key,

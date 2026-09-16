@@ -37,8 +37,6 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         input.ownedAccountId ?? (accounts.length === 1 ? accounts[0].id : undefined);
       if (!ownedAccountId || !accounts.some((account) => account.id === ownedAccountId))
         throw new Error("Text snapshot import requires an account in the archive scope");
-      const scopedPersonKey = (stableKey: string): string => `${ownedAccountId}:${stableKey}`;
-      const scopedIdentityKind = (namespace: string): string => `${namespace}:${ownedAccountId}`;
       if (input.liveReceipt) {
         const sourceSha = createHash("sha256").update(input.liveReceipt.sourceKey).digest("hex");
         await tx.source.upsert({
@@ -100,11 +98,11 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             where: {
               archiveId_id: {
                 archiveId: input.archiveId,
-                id: stableUuid(input.archiveId, scopedPersonKey(record.stableKey)),
+                id: stableUuid(input.archiveId, record.stableKey),
               },
             },
             create: {
-              id: stableUuid(input.archiveId, scopedPersonKey(record.stableKey)),
+              id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               displayName: record.displayName,
             },
@@ -117,12 +115,26 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         if (record.kind === "identity") {
           const personId = record.personKey ? people.get(record.personKey) : undefined;
           if (!personId) continue;
+          const rawIdentity = await tx.identity.findUnique({
+            where: {
+              archiveId_kind_value: {
+                archiveId: input.archiveId,
+                kind: record.source.namespace,
+                value: record.source.value,
+              },
+            },
+            select: { personId: true },
+          });
+          const value =
+            rawIdentity && rawIdentity.personId !== personId
+              ? `${record.source.value}:${record.stableKey}`
+              : record.source.value;
           const prior = await tx.identity.findUnique({
             where: {
               archiveId_kind_value: {
                 archiveId: input.archiveId,
-                kind: scopedIdentityKind(record.source.namespace),
-                value: record.source.value,
+                kind: record.source.namespace,
+                value,
               },
             },
             select: { provenance: true },
@@ -131,16 +143,16 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             where: {
               archiveId_kind_value: {
                 archiveId: input.archiveId,
-                kind: scopedIdentityKind(record.source.namespace),
-                value: record.source.value,
+                kind: record.source.namespace,
+                value,
               },
             },
             create: {
-              id: stableUuid(input.archiveId, `${ownedAccountId}:${record.stableKey}`),
+              id: stableUuid(input.archiveId, record.stableKey),
               archiveId: input.archiveId,
               personId,
-              kind: scopedIdentityKind(record.source.namespace),
-              value: record.source.value,
+              kind: record.source.namespace,
+              value,
               displayName: record.displayName,
               provenance: json({
                 firstSeenSnapshotId: input.snapshotId,
@@ -551,7 +563,7 @@ async function importAttachment(
   const byHash = await tx.attachment.findUnique({
     where: { archiveId_sha256: { archiveId, sha256: record.sha256 } },
   });
-  const prior = byStableKey ?? byHash;
+  const prior = byHash ?? byStableKey;
   const observedAvailability: ImportAttachmentAvailability =
     record.availability === "available" && !record.casKey ? "unresolved" : record.availability;
   const availability = reconcileAttachmentAvailability(

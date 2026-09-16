@@ -25,6 +25,29 @@ describe("WhatsApp message identities", () => {
     expect(a.stableKey).not.toMatch(/row|_id/);
   });
 
+  it("scopes identical source IDs by account and chat", () => {
+    const first = deriveMessageIdentity({
+      ...base,
+      accountScope: "account-a",
+      sourceConversationKey: "chat",
+      sourceMessageId: "same-id",
+    });
+    const second = deriveMessageIdentity({
+      ...base,
+      accountScope: "account-b",
+      sourceConversationKey: "chat",
+      sourceMessageId: "same-id",
+    });
+    const otherChat = deriveMessageIdentity({
+      ...base,
+      accountScope: "account-a",
+      sourceConversationKey: "other-chat",
+      sourceMessageId: "same-id",
+    });
+    expect(first.stableKey).not.toBe(second.stableKey);
+    expect(first.stableKey).not.toBe(otherChat.stableKey);
+  });
+
   it("uses stanza IDs when source message IDs are absent", () => {
     const identity = deriveMessageIdentity({ ...base, stanzaId: "stanza-a" });
     expect(identity.diagnostic).toBe("stanza-id");
@@ -48,7 +71,7 @@ describe("WhatsApp message identities", () => {
     const conflicting = registry.register({
       ...base,
       sourceMessageId: "source-a",
-      conversationKey: "whatsapp:conversation:other",
+      timestamp: null,
     });
     expect(conflicting).toEqual({
       kind: "collision",

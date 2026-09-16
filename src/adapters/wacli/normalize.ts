@@ -25,10 +25,10 @@ export function normalizeWacliEvent(event: WacliWebhookEvent): readonly ImportRe
 }
 
 function normalizeMessage(event: WacliMessageEvent): readonly ImportRecord[] {
-  const conversationKey = whatsappConversationKey(event.chatKey);
-  const identityKey = whatsappIdentityKey(event.senderKey);
-  const personKey = whatsappPersonKey(event.senderKey);
-  const messageKey = whatsappMessageKey(event.messageKey);
+  const conversationKey = whatsappConversationKey(event.accountKey, event.chatKey);
+  const identityKey = whatsappIdentityKey(event.accountKey, event.senderKey);
+  const personKey = whatsappPersonKey(event.accountKey, event.senderKey);
+  const messageKey = whatsappMessageKey(event.accountKey, event.chatKey, event.messageKey);
   const records: ImportRecord[] = [
     { kind: "person", stableKey: personKey },
     { kind: "identity", stableKey: identityKey, source: source(event.senderKey), personKey },
@@ -55,7 +55,9 @@ function normalizeMessage(event: WacliMessageEvent): readonly ImportRecord[] {
       messageKind: event.media?.type ?? (event.text === undefined ? "unsupported" : "text"),
       ...(event.text === undefined ? {} : { body: event.text }),
       bodyState: event.text === undefined ? "unavailable" : "present",
-      ...(event.replyToKey ? { replyToKey: whatsappMessageKey(event.replyToKey) } : {}),
+      ...(event.replyToKey
+        ? { replyToKey: whatsappMessageKey(event.accountKey, event.chatKey, event.replyToKey) }
+        : {}),
       ...(event.media ? { metadata: { media: event.media } } : {}),
     } satisfies ImportMessageRecord,
   ];
@@ -74,7 +76,11 @@ function normalizeMessage(event: WacliMessageEvent): readonly ImportRecord[] {
       kind: "attachment",
       stableKey: `${messageKey}:media`,
       messageKey,
-      sha256: whatsappMessageKey(`${event.messageKey}\0media`).slice(-64),
+      sha256: whatsappMessageKey(
+        event.accountKey,
+        event.chatKey,
+        `${event.messageKey}\0media`,
+      ).slice(-64),
       availability: "missing",
       ...(event.media.filename ? { originalName: event.media.filename } : {}),
       ...(event.media.mimeType ? { mimeType: event.media.mimeType } : {}),
@@ -87,10 +93,14 @@ function normalizeMessage(event: WacliMessageEvent): readonly ImportRecord[] {
 function unsupportedEvent(
   event: Exclude<WacliWebhookEvent, WacliMessageEvent>,
 ): readonly ImportRecord[] {
-  const conversationKey = whatsappConversationKey(event.chatKey);
-  const identityKey = whatsappIdentityKey(event.senderKey);
-  const personKey = whatsappPersonKey(event.senderKey);
-  const key = whatsappMessageKey(`unsupported\0${event.sourceEventKey}`);
+  const conversationKey = whatsappConversationKey(event.accountKey, event.chatKey);
+  const identityKey = whatsappIdentityKey(event.accountKey, event.senderKey);
+  const personKey = whatsappPersonKey(event.accountKey, event.senderKey);
+  const key = whatsappMessageKey(
+    event.accountKey,
+    event.chatKey,
+    `unsupported\0${event.sourceEventKey}`,
+  );
   return [
     { kind: "person", stableKey: personKey },
     { kind: "identity", stableKey: identityKey, source: source(event.senderKey), personKey },
