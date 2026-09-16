@@ -47,8 +47,12 @@ describe("PostgreSQL archive statistics", () => {
       ],
     });
     accountOneId = await createFixtureOwnedAccount(prisma, archiveOneId);
-    accountTwoId = await createFixtureOwnedAccount(prisma, archiveOneId);
-    const accountTwoId = await createFixtureOwnedAccount(prisma, archiveTwoId);
+    accountTwoId = await createFixtureOwnedAccount(
+      prisma,
+      archiveOneId,
+      "fixture-statistics-second",
+    );
+    const archiveTwoAccountId = await createFixtureOwnedAccount(prisma, archiveTwoId);
     await prisma.source.createMany({
       data: [
         {
@@ -62,7 +66,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: sourceTwoId,
           archiveId: archiveTwoId,
-          ownedAccountId: accountTwoId,
+          ownedAccountId: archiveTwoAccountId,
           kind: "whatsapp",
           stableKey: "statistics-source-two",
           sha256: "2".repeat(64),
@@ -93,7 +97,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: finalizedOtherSnapshotId,
           archiveId: archiveTwoId,
-          ownedAccountId: accountTwoId,
+          ownedAccountId: archiveTwoAccountId,
           sourceId: sourceTwoId,
           sha256: "5".repeat(64),
           lifecycle: "completed",
@@ -124,7 +128,7 @@ describe("PostgreSQL archive statistics", () => {
         {
           id: finalizedOtherJobId,
           archiveId: archiveTwoId,
-          ownedAccountId: accountTwoId,
+          ownedAccountId: archiveTwoAccountId,
           sourceId: sourceTwoId,
           snapshotId: finalizedOtherSnapshotId,
           status: "completed",
@@ -304,16 +308,16 @@ describe("PostgreSQL archive statistics", () => {
     ]);
     expect(result.mostActiveConversations).toEqual([
       {
-        conversationId: conversationOneId,
-        title: "Alice and Bob",
-        messageCount: 1,
-        lastMessageAt: "2026-01-01T00:00:00.000Z",
-      },
-      {
         conversationId: conversationTwoId,
         title: "Unfinalized chat",
         messageCount: 1,
         lastMessageAt: "2026-01-02T00:00:00.000Z",
+      },
+      {
+        conversationId: conversationOneId,
+        title: "Alice and Bob",
+        messageCount: 1,
+        lastMessageAt: "2026-01-01T00:00:00.000Z",
       },
     ]);
   });
