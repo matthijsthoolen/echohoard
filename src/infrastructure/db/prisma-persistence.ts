@@ -770,18 +770,45 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         created_at: Date;
       }>
     >(Prisma.sql`
+      WITH group_sources AS (
+        SELECT c.id AS group_id, c.id AS source_id
+        FROM "Conversation" c
+        WHERE c."archiveId" = ${input.archiveId}::uuid
+          AND c."materialized" = true
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "SourceConversation" source_row
+            WHERE source_row."archiveId" = c."archiveId"
+              AND source_row.id = c.id
+          )
+        UNION
+        SELECT source."unifiedConversationId" AS group_id, source.id AS source_id
+        FROM "SourceConversation" source
+        JOIN "Conversation" group_conversation
+          ON group_conversation."archiveId" = source."archiveId"
+         AND group_conversation.id = source."unifiedConversationId"
+         AND group_conversation."materialized" = true
+        WHERE source."archiveId" = ${input.archiveId}::uuid
+      )
       SELECT c.id,
              COALESCE(c."ownerTitle", c.title) AS title,
              COUNT(DISTINCT participant.id)::bigint AS participant_count,
-             MAX(message."sentAt") AS last_message_at,
+             MAX(COALESCE(message."sentAt", message."createdAt")) AS last_message_at,
              c."createdAt" AS created_at
       FROM "Conversation" c
+      JOIN (SELECT DISTINCT group_id FROM group_sources) active_group
+        ON active_group.group_id = c.id
+      JOIN group_sources members ON members.group_id = c.id
       LEFT JOIN "ConversationParticipant" participant
         ON participant."archiveId" = c."archiveId"
-       AND participant."conversationId" = c.id
+       AND (participant."sourceConversationId" = members.source_id
+         OR (participant."sourceConversationId" IS NULL
+             AND participant."conversationId" = members.source_id))
       LEFT JOIN "Message" message
         ON message."archiveId" = c."archiveId"
-       AND message."conversationId" = c.id
+       AND (message."sourceConversationId" = members.source_id
+         OR (message."sourceConversationId" IS NULL
+             AND message."conversationId" = members.source_id))
        AND message."materialized" = true
       WHERE c."archiveId" = ${input.archiveId}::uuid
         AND c."materialized" = true

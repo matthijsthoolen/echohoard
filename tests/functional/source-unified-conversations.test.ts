@@ -7,6 +7,8 @@ import {
   type ConversationGroupingRequest,
 } from "../../src/application/conversation-grouping.js";
 import { PrismaConversationGroupingPersistence } from "../../src/infrastructure/db/conversation-grouping.js";
+import { ArchiveReadService, CursorCodec } from "../../src/application/reads.js";
+import { PrismaReadPersistence } from "../../src/infrastructure/db/prisma-persistence.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
@@ -361,5 +363,169 @@ describe("source and unified conversation persistence", () => {
     await expect(
       service.merge({ ...merge, expectedVersion: 2, idempotencyKey: `locked-${messageId}` }),
     ).rejects.toThrow("locked");
+  });
+
+  it("lists active unified groups once with aggregate summaries and policy filtering", async () => {
+    const accountId = randomUUID();
+    const targetId = randomUUID();
+    const sourceId = randomUUID();
+    const personOneId = randomUUID();
+    const personTwoId = randomUUID();
+    const messageOneId = randomUUID();
+    const messageTwoId = randomUUID();
+    const equalTimestamp = new Date("2026-01-03T12:00:00.000Z");
+    await prisma.ownedAccount.create({
+      data: { id: accountId, archiveId: archiveOneId, accountKey: `list-${accountId}` },
+    });
+    await prisma.person.createMany({
+      data: [
+        { id: personOneId, archiveId: archiveOneId, displayName: "One" },
+        { id: personTwoId, archiveId: archiveOneId, displayName: "Two" },
+      ],
+    });
+    await prisma.conversation.createMany({
+      data: [
+        {
+          id: targetId,
+          archiveId: archiveOneId,
+          kind: "direct",
+          stableKey: `list-target-${targetId}`,
+          title: "Target",
+        },
+        {
+          id: sourceId,
+          archiveId: archiveOneId,
+          kind: "direct",
+          stableKey: `list-source-${sourceId}`,
+          title: "Source",
+        },
+      ],
+    });
+    await prisma.sourceConversation.createMany({
+      data: [
+        {
+          id: targetId,
+          archiveId: archiveOneId,
+          ownedAccountId: accountId,
+          unifiedConversationId: targetId,
+          sourceNamespace: "synthetic",
+          sourceConversationKey: `target-${targetId}`,
+        },
+        {
+          id: sourceId,
+          archiveId: archiveOneId,
+          ownedAccountId: accountId,
+          unifiedConversationId: sourceId,
+          sourceNamespace: "synthetic",
+          sourceConversationKey: `source-${sourceId}`,
+        },
+      ],
+    });
+    await prisma.conversationParticipant.createMany({
+      data: [
+        {
+          archiveId: archiveOneId,
+          conversationId: targetId,
+          sourceConversationId: targetId,
+          personId: personOneId,
+        },
+        {
+          archiveId: archiveOneId,
+          conversationId: sourceId,
+          sourceConversationId: sourceId,
+          personId: personTwoId,
+        },
+      ],
+    });
+    await prisma.message.createMany({
+      data: [
+        {
+          id: messageOneId,
+          archiveId: archiveOneId,
+          conversationId: targetId,
+          sourceConversationId: targetId,
+          stableKey: `list-message-${messageOneId}`,
+          messageType: "text",
+          body: "one",
+          sentAt: equalTimestamp,
+        },
+        {
+          id: messageTwoId,
+          archiveId: archiveOneId,
+          conversationId: sourceId,
+          sourceConversationId: sourceId,
+          stableKey: `list-message-${messageTwoId}`,
+          messageType: "text",
+          body: "two",
+          sentAt: equalTimestamp,
+        },
+      ],
+    });
+
+    const reads = new ArchiveReadService(
+      new PrismaReadPersistence(prisma),
+      new CursorCodec("list-test"),
+    );
+    await expect(reads.listConversations({ archiveId: archiveOneId })).resolves.toMatchObject({
+      items: expect.arrayContaining([
+        expect.objectContaining({ id: targetId, participantCount: 1 }),
+        expect.objectContaining({ id: sourceId, participantCount: 1 }),
+      ]),
+    });
+    const grouping = new ConversationGroupingService(
+      new PrismaConversationGroupingPersistence(prisma),
+    );
+    await grouping.merge({
+      archiveId: archiveOneId,
+      targetConversationId: targetId,
+      sourceConversationIds: [sourceId],
+      expectedVersion: 0,
+      actor: "synthetic-owner",
+      reason: "aggregate test",
+      idempotencyKey: `list-merge-${targetId}`,
+      uiAccess: { authorizedConversationIds: [] },
+    });
+    const merged = await reads.listConversations({ archiveId: archiveOneId });
+    const mergedRows = merged.items.filter((item) => item.id === targetId || item.id === sourceId);
+    expect(mergedRows).toHaveLength(1);
+    expect(mergedRows[0]).toMatchObject({
+      id: targetId,
+      participantCount: 2,
+      lastMessageAt: equalTimestamp.toISOString(),
+    });
+
+    await prisma.conversation.update({ where: { id: sourceId }, data: { uiVisibility: "locked" } });
+    expect((await reads.listConversations({ archiveId: archiveOneId })).items).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: targetId })]),
+    );
+    expect(
+      (
+        await reads.listConversations({
+          archiveId: archiveOneId,
+          uiAccess: { mode: "locked", authorizedConversationIds: [sourceId] },
+        })
+      ).items,
+    ).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: targetId, participantCount: 2 })]),
+    );
+
+    await grouping.unmerge({
+      archiveId: archiveOneId,
+      targetConversationId: targetId,
+      sourceConversationIds: [sourceId],
+      expectedVersion: 1,
+      actor: "synthetic-owner",
+      reason: "aggregate test undo",
+      idempotencyKey: `list-unmerge-${targetId}`,
+      auditId: (
+        await grouping.getState(archiveOneId, targetId, { authorizedConversationIds: [sourceId] })
+      ).mergeAuditId!,
+      uiAccess: { authorizedConversationIds: [sourceId] },
+    });
+    await prisma.conversation.update({ where: { id: sourceId }, data: { uiVisibility: "normal" } });
+    const unmerged = await reads.listConversations({ archiveId: archiveOneId });
+    expect(
+      unmerged.items.filter((item) => item.id === targetId || item.id === sourceId),
+    ).toHaveLength(2);
   });
 });
