@@ -80,6 +80,8 @@ export function createControlBridge(overrides = {}) {
 
 class AccountController {
   pairProcess;
+  pairProcessClosed;
+  pairingCancellation;
   followProcess;
   followRestartTimer;
   followWanted = true;
@@ -96,8 +98,10 @@ class AccountController {
 
   async pair() {
     await this.stopFollow();
+    if (this.pairingCancellation) await this.pairingCancellation;
     if (this.pairProcess) await this.cancelPairing();
     await this.prepareStore();
+    this.pairingCancellation = undefined;
     this.pairingCancelled = false;
     const child = this.startProcess([
       "--account",
@@ -107,9 +111,16 @@ class AccountController {
       "--qr-format",
       "text",
     ]);
+    let resolveClosed;
+    const closed = new Promise((resolve) => {
+      resolveClosed = resolve;
+    });
     this.pairProcess = child;
+    this.pairProcessClosed = closed;
     child.once("close", () => {
+      resolveClosed();
       if (this.pairProcess === child) this.pairProcess = undefined;
+      if (this.pairProcessClosed === closed) this.pairProcessClosed = undefined;
     });
     try {
       const qr = await readQr(child);
@@ -121,10 +132,27 @@ class AccountController {
   }
 
   async cancelPairing() {
-    if (this.pairProcess) {
-      const child = this.pairProcess;
+    if (this.pairingCancellation) return this.pairingCancellation;
+    const cancellation = this.cancelPairingNow();
+    this.pairingCancellation = cancellation;
+    try {
+      return await cancellation;
+    } finally {
+      if (this.pairingCancellation === cancellation) this.pairingCancellation = undefined;
+    }
+  }
+
+  async cancelPairingNow() {
+    const child = this.pairProcess;
+    if (child) {
+      const closed = this.pairProcessClosed;
       await terminate(child);
-      if (this.pairProcess === child) this.pairProcess = undefined;
+      if (closed) await waitForClose(closed);
+      // exitCode can be observable before the close callback clears
+      // pairProcess. Always verify the durable upstream store after that
+      // transition; never turn an exited authenticated process into a
+      // successful cancellation.
+      if (await this.authenticated()) throw new Error("pairing invalidation unavailable");
       this.pairingCancelled = true;
       return { cancelled: true };
     }
@@ -494,6 +522,18 @@ function terminate(child) {
       globalThis.clearTimeout(timer);
       resolve();
     }
+  });
+}
+
+function waitForClose(closed) {
+  return new Promise((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => {
+      reject(new Error("pairing process close timed out"));
+    }, TERMINATE_TIMEOUT_MS);
+    closed.then(() => {
+      globalThis.clearTimeout(timer);
+      resolve();
+    });
   });
 }
 
