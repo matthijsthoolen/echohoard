@@ -35,7 +35,7 @@ export function createStatisticsRoute({ getRuntime }: StatisticsRouteDependencie
     if (!principal) return unauthorized();
     if (!runtime.reads.archiveStatistics) return unavailable();
     const parsed = parseQuery(new URL(request.url).searchParams);
-    if (!parsed.ok) return Response.json({ error: parsed.error }, { status: 400 });
+    if ("error" in parsed) return Response.json({ error: parsed.error }, { status: 400 });
     try {
       const statistics = await runtime.reads.archiveStatistics({
         archiveId: principal.archiveId,
