@@ -23,7 +23,6 @@ import type {
   MediaPersistenceRow,
   TimelinePersistenceRow,
   SearchMediaType,
-  UiReadMode,
 } from "../../application/reads";
 import type {
   HealthJobPersistenceRow,
@@ -50,6 +49,7 @@ import {
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
 import { PrismaTextSnapshotImporter } from "./text-import";
 import { createHash } from "node:crypto";
+import { uiConversationPredicate } from "./ui-privacy";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -580,11 +580,11 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     if (input.fuzzyText) conditions.push(Prisma.sql`message.body % ${input.fuzzyText}`);
     if (input.conversationId ?? input.unifiedConversationId)
       conditions.push(
-        Prisma.sql`COALESCE(source."unifiedConversationId", message."conversationId") = ${(input.unifiedConversationId ?? input.conversationId)!}::uuid`,
+        Prisma.sql`COALESCE(source."unifiedConversationId", message."conversationId")::text = ${(input.unifiedConversationId ?? input.conversationId)!}`,
       );
     if (input.sourceAccountId)
-      conditions.push(Prisma.sql`source."ownedAccountId" = ${input.sourceAccountId}::uuid`);
-    if (input.personId) conditions.push(Prisma.sql`message."senderId" = ${input.personId}::uuid`);
+      conditions.push(Prisma.sql`source."ownedAccountId"::text = ${input.sourceAccountId}`);
+    if (input.personId) conditions.push(Prisma.sql`message."senderId"::text = ${input.personId}`);
     if (input.senderDirection)
       conditions.push(
         Prisma.sql`CASE WHEN message.metadata->>'direction' IN ('sent', 'received')
@@ -656,92 +656,108 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   public async listConversations(
     input: ReadConversationPersistenceQuery,
   ): Promise<readonly ConversationPersistenceRow[]> {
-    const where = {
-      archiveId: input.archiveId,
-      materialized: true,
-      uiVisibility: uiVisibilityValue(input.uiMode),
-      ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
-      ...(input.search
-        ? {
-            OR: [
-              { title: { contains: input.search, mode: "insensitive" } },
-              { stableKey: { contains: input.search, mode: "insensitive" } },
-            ],
-          }
-        : {}),
-      ...cursorWhere(input.after, input.direction, "createdAt"),
-    };
-    const rows = await (this.prisma.conversation as unknown as ReadDelegate).findMany({
-      where,
-      orderBy: [
-        { createdAt: input.direction === "backward" ? "desc" : "asc" },
-        { id: input.direction === "backward" ? "desc" : "asc" },
-      ],
-      take: input.limit,
-      include: {
-        _count: { select: { participants: true } },
-        messages: {
-          where: { materialized: true },
-          select: { sentAt: true },
-          orderBy: { sentAt: "desc" },
-          take: 1,
-        },
-      },
-    });
-    return (
-      rows as Array<{
+    const cursor = conversationCursor(input);
+    const search = input.search
+      ? Prisma.sql`AND (c.title ILIKE '%' || ${input.search} || '%'
+          OR c."stableKey" ILIKE '%' || ${input.search} || '%')`
+      : Prisma.empty;
+    const order =
+      input.direction === "backward"
+        ? Prisma.sql`c."createdAt" DESC, c.id DESC`
+        : Prisma.sql`c."createdAt" ASC, c.id ASC`;
+    const rows = await this.prisma.$queryRaw<
+      Array<{
         id: string;
         title: string | null;
-        createdAt: Date;
-        _count: { participants: number };
-        messages: Array<{ sentAt: Date | null }>;
+        participant_count: bigint | number;
+        last_message_at: Date | null;
+        created_at: Date;
       }>
-    ).map((row) => ({
+    >(Prisma.sql`
+      SELECT c.id,
+             COALESCE(c."ownerTitle", c.title) AS title,
+             COUNT(DISTINCT participant.id)::bigint AS participant_count,
+             MAX(message."sentAt") AS last_message_at,
+             c."createdAt" AS created_at
+      FROM "Conversation" c
+      LEFT JOIN "ConversationParticipant" participant
+        ON participant."archiveId" = c."archiveId"
+       AND participant."conversationId" = c.id
+      LEFT JOIN "Message" message
+        ON message."archiveId" = c."archiveId"
+       AND message."conversationId" = c.id
+       AND message."materialized" = true
+      WHERE c."archiveId" = ${input.archiveId}::uuid
+        AND c."materialized" = true
+        AND ${uiConversationPredicate("c", input)}
+        ${search}
+        ${cursor}
+      GROUP BY c.id, c."ownerTitle", c.title, c."createdAt"
+      ORDER BY ${order}
+      LIMIT ${input.limit}
+    `);
+    return rows.map((row) => ({
       id: row.id,
       title: row.title ?? undefined,
-      createdAt: row.createdAt.toISOString(),
-      participantCount: row._count.participants,
-      lastMessageAt: iso(row.messages[0]?.sentAt),
+      createdAt: row.created_at.toISOString(),
+      participantCount: countValue(row.participant_count),
+      lastMessageAt: iso(row.last_message_at),
     }));
   }
 
   public async listPeople(
     input: ReadPersonPersistenceQuery,
   ): Promise<readonly PersonPersistenceRow[]> {
-    const where = {
-      archiveId: input.archiveId,
-      ...(input.uiMode === "ordinary"
-        ? {}
-        : {
-            participants: {
-              some: {
-                conversation: {
-                  uiVisibility: uiVisibilityValue(input.uiMode),
-                  ...(input.uiMode === "locked"
-                    ? { id: { in: input.authorizedConversationIds } }
-                    : {}),
-                },
-              },
-            },
-          }),
-      ...(input.search ? { displayName: { contains: input.search, mode: "insensitive" } } : {}),
-      ...cursorWhere(input.after, input.direction, "displayName"),
-    };
-    const rows = await (this.prisma.person as unknown as ReadDelegate).findMany({
-      where,
-      orderBy: [
-        { displayName: input.direction === "backward" ? "desc" : "asc" },
-        { id: input.direction === "backward" ? "desc" : "asc" },
-      ],
-      take: input.limit,
-      include: { _count: { select: { identities: true } } },
-    });
-    return (
-      rows as Array<{ id: string; displayName: string | null; _count: { identities: number } }>
-    ).map((row) => ({
+    const search = input.search
+      ? Prisma.sql`AND p."displayName" ILIKE '%' || ${input.search} || '%'`
+      : Prisma.empty;
+    const cursor = personCursor(input);
+    const order =
+      input.direction === "backward"
+        ? Prisma.sql`p."displayName" DESC NULLS LAST, p.id DESC`
+        : Prisma.sql`p."displayName" ASC NULLS LAST, p.id ASC`;
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        id: string;
+        display_name: string | null;
+        identity_count: bigint | number;
+      }>
+    >(Prisma.sql`
+      SELECT p.id,
+             p."displayName" AS display_name,
+             COUNT(DISTINCT identity.id)::bigint AS identity_count
+      FROM "Person" p
+      LEFT JOIN "Identity" identity
+        ON identity."archiveId" = p."archiveId" AND identity."personId" = p.id
+      WHERE p."archiveId" = ${input.archiveId}::uuid
+        AND (
+          NOT EXISTS (
+            SELECT 1
+            FROM "ConversationParticipant" any_participant
+            WHERE any_participant."archiveId" = p."archiveId"
+              AND any_participant."personId" = p.id
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM "ConversationParticipant" visible_participant
+            JOIN "Conversation" visible_conversation
+              ON visible_conversation."archiveId" = visible_participant."archiveId"
+             AND visible_conversation.id = visible_participant."conversationId"
+            WHERE visible_participant."archiveId" = p."archiveId"
+              AND visible_participant."personId" = p.id
+              AND ${uiConversationPredicate("visible_conversation", input)}
+          )
+        )
+        ${search}
+        ${cursor}
+      GROUP BY p.id, p."displayName"
+      ORDER BY ${order}
+      LIMIT ${input.limit}
+    `);
+    return rows.map((row) => ({
       id: row.id,
-      displayName: row.displayName ?? undefined,
-      identityCount: row._count.identities,
+      displayName: row.display_name ?? undefined,
+      identityCount: countValue(row.identity_count),
     }));
   }
 
@@ -770,8 +786,8 @@ export class PrismaReadPersistence implements ReadPersistencePort {
           ON sc.id = m."sourceConversationId" AND sc."archiveId" = m."archiveId"
         WHERE m."archiveId" = ${input.archiveId}::uuid
           AND m."materialized" = true
-          AND (m."conversationId" = ${input.conversationId}::uuid
-            OR sc."unifiedConversationId" = ${input.conversationId}::uuid)
+           AND (m."conversationId"::text = ${input.conversationId}
+             OR sc."unifiedConversationId"::text = ${input.conversationId})
            AND ${uiConversationPredicate("conversation", input)}
         ${afterPredicate}
         ORDER BY COALESCE(m."sentAt", m."createdAt")
@@ -954,66 +970,68 @@ export class PrismaReadPersistence implements ReadPersistencePort {
   public async listMedia(
     input: ReadMediaPersistenceQuery,
   ): Promise<readonly MediaPersistenceRow[]> {
-    const rows = await (this.prisma.messageAttachment as unknown as ReadDelegate).findMany({
-      where: {
-        archiveId: input.archiveId,
-        materialized: true,
-        message: {
-          conversation: {
-            uiVisibility: uiVisibilityValue(input.uiMode),
-            ...(input.uiMode === "locked" ? { id: { in: input.authorizedConversationIds } } : {}),
-          },
-        },
-        ...(input.messageId ? { messageId: input.messageId } : {}),
-        ...(input.attachmentId ? { attachmentId: input.attachmentId } : {}),
-        ...(input.mediaType ? { attachment: mediaTypeWhere(input.mediaType) } : {}),
-        ...cursorWhere(input.after, input.direction, "createdAt"),
-      },
-      orderBy: [
-        { createdAt: input.direction === "backward" ? "desc" : "asc" },
-        { id: input.direction === "backward" ? "desc" : "asc" },
-      ],
-      take: input.limit,
-      include: {
-        attachment: {
-          select: {
-            id: true,
-            mimeType: true,
-            availability: true,
-            byteSize: true,
-            width: true,
-            height: true,
-            durationMs: true,
-          },
-        },
-      },
-    });
-    return (
-      rows as Array<{
-        attachmentId: string;
-        messageId: string;
-        createdAt: Date;
-        attachment: {
-          mimeType: string | null;
-          availability: string;
-          byteSize: bigint | null;
-          width: number | null;
-          height: number | null;
-          durationMs: number | null;
-        };
+    const filters = [
+      Prisma.sql`ma."archiveId" = ${input.archiveId}::uuid`,
+      Prisma.sql`ma."materialized" = true`,
+      Prisma.sql`message."materialized" = true`,
+      uiConversationPredicate("conversation", input),
+    ];
+    if (input.messageId) filters.push(Prisma.sql`ma."messageId"::text = ${input.messageId}`);
+    if (input.attachmentId)
+      filters.push(Prisma.sql`ma."attachmentId"::text = ${input.attachmentId}`);
+    if (input.mediaType) filters.push(mediaTypeSqlPredicate(input.mediaType));
+    const cursor = mediaCursor(input);
+    const order =
+      input.direction === "backward"
+        ? Prisma.sql`ma."createdAt" DESC, ma.id DESC`
+        : Prisma.sql`ma."createdAt" ASC, ma.id ASC`;
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        attachment_id: string;
+        message_id: string;
+        created_at: Date;
+        mime_type: string | null;
+        availability: string;
+        byte_size: bigint | null;
+        width: number | null;
+        height: number | null;
+        duration_ms: number | null;
       }>
-    ).map((row) => ({
-      id: row.attachmentId,
-      messageId: row.messageId,
-      availability: row.attachment.availability,
-      ...(row.attachment.mimeType ? { mimeType: row.attachment.mimeType } : {}),
-      ...(row.attachment.byteSize !== null
-        ? { byteSize: countValue(row.attachment.byteSize) }
-        : {}),
-      ...(row.attachment.width !== null ? { width: row.attachment.width } : {}),
-      ...(row.attachment.height !== null ? { height: row.attachment.height } : {}),
-      ...(row.attachment.durationMs !== null ? { durationMs: row.attachment.durationMs } : {}),
-      createdAt: row.createdAt.toISOString(),
+    >(Prisma.sql`
+      SELECT ma."attachmentId" AS attachment_id,
+             ma."messageId" AS message_id,
+             ma."createdAt" AS created_at,
+             attachment."mimeType" AS mime_type,
+             attachment.availability,
+             attachment."byteSize" AS byte_size,
+             attachment.width,
+             attachment.height,
+             attachment."durationMs" AS duration_ms
+      FROM "MessageAttachment" ma
+      JOIN "Message" message
+        ON message."archiveId" = ma."archiveId" AND message.id = ma."messageId"
+      LEFT JOIN "SourceConversation" source
+        ON source."archiveId" = message."archiveId" AND source.id = message."sourceConversationId"
+      JOIN "Conversation" conversation
+        ON conversation."archiveId" = message."archiveId"
+       AND conversation.id = COALESCE(source."unifiedConversationId", message."conversationId")
+      JOIN "Attachment" attachment
+        ON attachment."archiveId" = ma."archiveId" AND attachment.id = ma."attachmentId"
+      WHERE ${Prisma.join(filters, " AND ")}
+        ${cursor}
+      ORDER BY ${order}
+      LIMIT ${input.limit}
+    `);
+    return rows.map((row) => ({
+      id: row.attachment_id,
+      messageId: row.message_id,
+      availability: attachmentAvailability(row.availability),
+      ...(row.mime_type ? { mimeType: row.mime_type } : {}),
+      ...(row.byte_size !== null ? { byteSize: countValue(row.byte_size) } : {}),
+      ...(row.width !== null ? { width: row.width } : {}),
+      ...(row.height !== null ? { height: row.height } : {}),
+      ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
+      createdAt: row.created_at.toISOString(),
     }));
   }
 
@@ -1367,22 +1385,6 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
  * aggregate rather than its delivery concern. */
 export const PrismaArchiveStatisticsPersistence = PrismaStatisticsPersistence;
 
-function uiConversationPredicate(
-  alias: string,
-  input: { readonly uiMode: UiReadMode; readonly authorizedConversationIds: readonly string[] },
-): Prisma.Sql {
-  const visibility = Prisma.sql`${Prisma.raw(alias)}."uiVisibility" = ${input.uiMode === "ordinary" ? "normal" : input.uiMode}`;
-  if (input.uiMode !== "locked") return visibility;
-  if (input.authorizedConversationIds.length === 0) return Prisma.sql`FALSE`;
-  return Prisma.sql`${visibility} AND ${Prisma.raw(alias)}.id IN (${Prisma.join(
-    input.authorizedConversationIds.map((id) => Prisma.sql`${id}::uuid`),
-  )})`;
-}
-
-function uiVisibilityValue(mode: UiReadMode): "normal" | "hidden" | "locked" {
-  return mode === "ordinary" ? "normal" : mode;
-}
-
 function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): Prisma.Sql {
   return Prisma.sql`
     WITH finalized_messages AS (
@@ -1402,8 +1404,8 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
        AND conversation."archiveId" = message."archiveId"
       WHERE message."archiveId" = ${input.archiveId}::uuid
         AND message."materialized" = true
-         ${input.sourceAccountId ? Prisma.sql`AND source."ownedAccountId" = ${input.sourceAccountId}::uuid` : Prisma.empty}
-         ${input.unifiedConversationId ? Prisma.sql`AND COALESCE(source."unifiedConversationId", message."conversationId") = ${input.unifiedConversationId}::uuid` : Prisma.empty}
+          ${input.sourceAccountId ? Prisma.sql`AND source."ownedAccountId"::text = ${input.sourceAccountId}` : Prisma.empty}
+          ${input.unifiedConversationId ? Prisma.sql`AND COALESCE(source."unifiedConversationId", message."conversationId")::text = ${input.unifiedConversationId}` : Prisma.empty}
         AND EXISTS (
           SELECT 1
           FROM "Snapshot" snapshot
@@ -1584,11 +1586,47 @@ function mediaTypePredicate(mediaType: SearchMediaType): Prisma.Sql {
   )`;
 }
 
-function mediaTypeWhere(mediaType: SearchMediaType): Record<string, unknown> {
+function mediaTypeSqlPredicate(mediaType: SearchMediaType): Prisma.Sql {
   if (mediaType === "image" || mediaType === "video" || mediaType === "audio")
-    return { mimeType: { startsWith: `${mediaType}/`, mode: "insensitive" } };
-  if (mediaType === "other") return { mimeType: null };
-  return { mimeType: { not: null } };
+    return Prisma.sql`attachment."mimeType" ILIKE ${`${mediaType}/%`}`;
+  if (mediaType === "other") return Prisma.sql`attachment."mimeType" IS NULL`;
+  return Prisma.sql`attachment."mimeType" IS NOT NULL
+    AND attachment."mimeType" NOT ILIKE 'image/%'
+    AND attachment."mimeType" NOT ILIKE 'video/%'
+    AND attachment."mimeType" NOT ILIKE 'audio/%'`;
+}
+
+function conversationCursor(input: ReadConversationPersistenceQuery): Prisma.Sql {
+  if (!input.after) return Prisma.empty;
+  const [createdAt, id] = input.after;
+  if (typeof createdAt !== "string" || typeof id !== "string")
+    throw new Error("Invalid read cursor position");
+  const operator = input.direction === "backward" ? "<" : ">";
+  return Prisma.sql`AND (c."createdAt" ${Prisma.raw(operator)} CAST(${createdAt} AS timestamp)
+    OR (c."createdAt" = CAST(${createdAt} AS timestamp)
+      AND c.id ${Prisma.raw(operator)} ${id}::uuid))`;
+}
+
+function personCursor(input: ReadPersonPersistenceQuery): Prisma.Sql {
+  if (!input.after) return Prisma.empty;
+  const [displayName, id] = input.after;
+  if (typeof displayName !== "string" || typeof id !== "string")
+    throw new Error("Invalid read cursor position");
+  const operator = input.direction === "backward" ? "<" : ">";
+  return Prisma.sql`AND (COALESCE(p."displayName", '') ${Prisma.raw(operator)} ${displayName}
+    OR (COALESCE(p."displayName", '') = ${displayName}
+      AND p.id ${Prisma.raw(operator)} ${id}::uuid))`;
+}
+
+function mediaCursor(input: ReadMediaPersistenceQuery): Prisma.Sql {
+  if (!input.after) return Prisma.empty;
+  const [createdAt, id] = input.after;
+  if (typeof createdAt !== "string" || typeof id !== "string")
+    throw new Error("Invalid read cursor position");
+  const operator = input.direction === "backward" ? "<" : ">";
+  return Prisma.sql`AND (ma."createdAt" ${Prisma.raw(operator)} CAST(${createdAt} AS timestamp)
+    OR (ma."createdAt" = CAST(${createdAt} AS timestamp)
+      AND ma.id ${Prisma.raw(operator)} ${id}::uuid))`;
 }
 
 function cursorWhere(

@@ -1,3 +1,5 @@
+import type { UiReadAccess } from "./reads.js";
+
 /** The small, archive-scoped contract used by HTTP media delivery.  It
  * deliberately exposes a stream factory, never a filesystem path. */
 export interface MediaByteRange {
@@ -16,7 +18,11 @@ export interface MediaDeliveryAttachment {
 }
 
 export interface MediaDeliveryPort {
-  /** Return only an attachment owned by archiveId.  Implementations must not
-   * accept or resolve a source path supplied by a caller. */
-  find(archiveId: string, attachmentId: string): Promise<MediaDeliveryAttachment | null>;
+  /** Return only an attachment visible in the requested UI policy.  The
+   * attachment ID remains an opaque archive-scoped handle. */
+  find(
+    archiveId: string,
+    attachmentId: string,
+    uiAccess?: UiReadAccess,
+  ): Promise<MediaDeliveryAttachment | null>;
 }

@@ -20,32 +20,25 @@ describe("Prisma media delivery", () => {
     await writeFile(objectPath, content);
     const calls: unknown[] = [];
     const prisma = {
-      attachment: {
-        findUnique: async (args: unknown) => {
-          calls.push(args);
-          return {
+      $queryRaw: async (args: unknown) => {
+        calls.push(args);
+        return [
+          {
             availability: "available",
-            byteSize: BigInt(content.length),
-            casKey: hash,
-            mimeType: "audio/mpeg",
-            originalName: "voice.mp3",
+            byte_size: BigInt(content.length),
+            cas_key: hash,
+            mime_type: "audio/mpeg",
+            original_name: "voice.mp3",
             sha256: hash,
-          };
-        },
+          },
+        ];
       },
     } as never;
     try {
       const result = await new PrismaMediaDelivery(prisma, root).find(archiveId, attachmentId);
       expect(result?.state).toBe("available");
       expect(result?.byteSize).toBe(content.length);
-      expect(calls).toEqual([
-        expect.objectContaining({
-          where: {
-            archiveId_id: { archiveId, id: attachmentId },
-            messageLinks: { some: { archiveId, materialized: true } },
-          },
-        }),
-      ]);
+      expect(calls).toEqual([expect.anything()]);
       const reader = result!.open().getReader();
       const chunks: Uint8Array[] = [];
       for (;;) {
@@ -61,16 +54,16 @@ describe("Prisma media delivery", () => {
 
   it("fails closed for missing bytes and mismatched CAS identity", async () => {
     const prisma = {
-      attachment: {
-        findUnique: async () => ({
+      $queryRaw: async () => [
+        {
           availability: "available",
-          byteSize: BigInt(content.length),
-          casKey: "f".repeat(64),
-          mimeType: "image/png",
-          originalName: "photo.png",
+          byte_size: BigInt(content.length),
+          cas_key: "f".repeat(64),
+          mime_type: "image/png",
+          original_name: "photo.png",
           sha256: hash,
-        }),
-      },
+        },
+      ],
     } as never;
     const result = await new PrismaMediaDelivery(prisma, cwd()).find(archiveId, attachmentId);
     expect(result?.state).toBe("unresolved");

@@ -54,6 +54,24 @@ describe("archive statistics service", () => {
     });
   });
 
+  it("passes the shared UI authorization context to aggregate reads", async () => {
+    let received: StatisticsPersistenceInput | undefined;
+    const service = new ArchiveStatisticsService({
+      getStatistics: async (input) => {
+        received = input;
+        return result;
+      },
+    });
+    await service.getStatistics({
+      archiveId: "archive-a",
+      uiAccess: { mode: "locked", authorizedConversationIds: ["conversation-a"] },
+    });
+    expect(received).toMatchObject({
+      uiMode: "locked",
+      authorizedConversationIds: ["conversation-a"],
+    });
+  });
+
   it.each([
     [{ archiveId: "" }, "archiveId is required"],
     [{ archiveId: "archive-a", from: "bad-date" }, "from must be a valid ISO timestamp"],
