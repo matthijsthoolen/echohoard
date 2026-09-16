@@ -48,6 +48,33 @@ export interface TranscriptionRequestPort extends ArchiveScopedPort {}
 export interface TranscriptionRunPort extends ArchiveScopedPort {}
 export interface TranscriptVersionPort extends ArchiveScopedPort {}
 
+export interface LiveEventInboxRecord extends PersistenceRecord {
+  readonly id: string;
+  readonly archiveId: string;
+  readonly ownedAccountId: string;
+  readonly receiptId: string;
+  readonly sourceEventKey: string;
+  readonly eventKind: string;
+  readonly status: string;
+}
+
+export interface LiveEventInboxPort {
+  enqueue(input: {
+    readonly archiveId: ArchiveId;
+    readonly ownedAccountId: string;
+    readonly receiptId: string;
+    readonly sourceEventKey: string;
+    readonly eventKind: string;
+    readonly payload: PersistenceInput;
+    readonly observedAt: Date;
+    readonly receivedAt: Date;
+    readonly maxPending: number;
+  }): Promise<{
+    readonly kind: "accepted" | "duplicate" | "backpressure";
+    readonly row?: LiveEventInboxRecord;
+  }>;
+}
+
 export interface ObservationPort extends ArchiveScopedPort {
   /** Return a bounded provenance page for one typed normalized entity. */
   listForEntity(
@@ -79,6 +106,7 @@ export interface PersistencePorts {
   transcriptionRequests: TranscriptionRequestPort;
   transcriptionRuns: TranscriptionRunPort;
   transcriptVersions: TranscriptVersionPort;
+  liveEventInbox: LiveEventInboxPort;
   conversationObservations: ObservationPort;
   messageObservations: ObservationPort;
   revisionObservations: ObservationPort;

@@ -54,6 +54,7 @@ model Archive {
   admittedIdentities              ArchiveIdentity[]
   authSessions                    AuthSession[]
   privacyAudits                   ConversationPrivacyAudit[]
+  liveEventInbox                  LiveEventInbox[]
 
   @@unique([id, userId])
   @@unique([userId, name])
@@ -110,10 +111,33 @@ model OwnedAccount {
   revisionObservations            RevisionObservation[]
   reactionObservations            ReactionObservation[]
   attachmentReferenceObservations AttachmentReferenceObservation[]
+  liveEventInbox                  LiveEventInbox[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, accountKey])
   @@index([archiveId])
+}
+
+model LiveEventInbox {
+  id             String       @id @default(uuid()) @db.Uuid
+  archiveId      String       @db.Uuid
+  ownedAccountId String       @db.Uuid
+  receiptId      String       @db.VarChar(64)
+  sourceEventKey String       @db.VarChar(512)
+  eventKind      String       @db.VarChar(64)
+  payload        Json
+  observedAt     DateTime
+  receivedAt     DateTime     @default(now())
+  status         String       @default("pending") @db.VarChar(32)
+  attempts       Int          @default(0)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  ownedAccount   OwnedAccount @relation(fields: [ownedAccountId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
+  @@unique([archiveId, id])
+  @@unique([archiveId, ownedAccountId, receiptId])
+  @@index([archiveId, ownedAccountId, status, createdAt])
 }
 
 model Source {

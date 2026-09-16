@@ -5,6 +5,7 @@ import type {
   PersistenceRecord,
   PersistenceInput,
   ObservationPort,
+  LiveEventInboxPort,
 } from "../../application/persistence";
 import type {
   ReadConversationPersistenceQuery,
@@ -44,6 +45,7 @@ import {
   type ConversationPrivacyPolicy,
   type UpdateConversationPrivacyRequest,
 } from "../../application/conversation-privacy";
+import type { LiveEventAccountResolver } from "../../application/live-event-intake";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
@@ -112,6 +114,68 @@ class PrismaObservationAdapter extends PrismaArchiveScopedAdapter implements Obs
     } as never);
     if (!Array.isArray(value)) throw new Error("Persistence adapter returned a non-list");
     return value.map(asRecord);
+  }
+}
+
+export class PrismaLiveEventInboxPersistence implements LiveEventInboxPort {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async enqueue(input: Parameters<LiveEventInboxPort["enqueue"]>[0]) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(
+        Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.archiveId + ":" + input.ownedAccountId}, 0))`,
+      );
+      const existing = await tx.liveEventInbox.findUnique({
+        where: {
+          archiveId_ownedAccountId_receiptId: {
+            archiveId: input.archiveId,
+            ownedAccountId: input.ownedAccountId,
+            receiptId: input.receiptId,
+          },
+        },
+      });
+      if (existing) return { kind: "duplicate" as const };
+      const pending = await tx.liveEventInbox.count({
+        where: {
+          archiveId: input.archiveId,
+          ownedAccountId: input.ownedAccountId,
+          status: "pending",
+        },
+      });
+      if (pending >= input.maxPending) return { kind: "backpressure" as const };
+      const row = await tx.liveEventInbox.create({
+        data: {
+          archiveId: input.archiveId,
+          ownedAccountId: input.ownedAccountId,
+          receiptId: input.receiptId,
+          sourceEventKey: input.sourceEventKey,
+          eventKind: input.eventKind,
+          payload: input.payload as Prisma.InputJsonValue,
+          observedAt: input.observedAt,
+          receivedAt: input.receivedAt,
+        },
+      });
+      return { kind: "accepted" as const, row };
+    });
+  }
+}
+
+export class PrismaLiveEventAccountResolver implements LiveEventAccountResolver {
+  public constructor(
+    private readonly prisma: PrismaClient,
+    private readonly archiveId: string,
+    private readonly secrets: ReadonlyMap<string, string>,
+  ) {}
+
+  public async resolve(accountKey: string) {
+    const secret = this.secrets.get(accountKey);
+    if (!secret) return null;
+    const account = await this.prisma.ownedAccount.findUnique({
+      where: { archiveId_accountKey: { archiveId: this.archiveId, accountKey } },
+    });
+    return account === null
+      ? null
+      : { archiveId: account.archiveId, ownedAccountId: account.id, secret };
   }
 }
 
@@ -274,6 +338,7 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
     transcriptionRequests: scoped(prisma.transcriptionRequest as unknown as Delegate),
     transcriptionRuns: scoped(prisma.transcriptionRun as unknown as Delegate),
     transcriptVersions: scoped(prisma.transcriptVersion as unknown as Delegate),
+    liveEventInbox: new PrismaLiveEventInboxPersistence(prisma),
     conversationObservations: observations(
       prisma.conversationObservation as unknown as Delegate,
       "sourceConversationId",
