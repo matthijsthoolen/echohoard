@@ -91,6 +91,7 @@ function toResponse(page: ReadPage<MessageRead>) {
       ...(message.replyTo ? { replyTo: message.replyTo } : {}),
       revisions: message.revisions,
       reactions: message.reactions,
+      ...(message.provenance ? { provenance: message.provenance } : {}),
     })),
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     hasMore: page.hasMore,
