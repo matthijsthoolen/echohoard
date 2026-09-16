@@ -4,15 +4,21 @@
 starts a fresh disposable PostgreSQL 16 container and runs the complete
 synthetic functional suite inside the Dockerfile build stage. That suite
 covers import lifecycle and duplicate convergence, rich media and safe media
-delivery, conversation browsing, search, health/statistics, and all seven
-private MCP tools.
+delivery, conversation browsing, search, health/statistics, and the private
+MCP tools through the application seam. The harness also seeds a disposable
+archive, posts a correctly account-bound signed webhook to the packaged HTTP
+endpoint, waits for the packaged worker to normalize and persist it, and then
+calls the packaged MCP endpoint over HTTP. Those calls cover discovery, all
+seven bounded reads, authentication, archive isolation, and MCP privacy
+denial.
 
 The same packaged image is then started as the web and worker roles. The
 harness probes web liveness (`/health`) and migration readiness (`/ready`),
-delivers only the example worker secret, sends `SIGKILL` to the worker, and
-checks that a restarted worker converges back to `ready`. The synthetic intake
-tests provide the durable lease/recovery and no-duplicate assertions; the
-current worker composition root does not yet own a queue-consuming job loop.
+delivers only the example worker secret, posts the synthetic webhook, verifies
+the normalized message and missing-media state over packaged MCP, sends
+`SIGKILL` to the worker, and checks that a restarted worker writes a fresh
+`ready` status. The synthetic intake tests provide the durable lease/recovery
+and no-duplicate assertions.
 
 Only synthetic values are used. The report is written to
 `.tmp/eh-10-05/acceptance.json` (or `ECHOHOARD_ACCEPTANCE_REPORT_DIR`) and

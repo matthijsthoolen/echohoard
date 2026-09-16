@@ -69,6 +69,11 @@ run_iteration() {
     "$test_image" sh -lc \
     'pnpm exec prisma migrate deploy && pnpm exec prisma generate && pnpm exec vitest run tests/functional'
 
+  docker run --rm --name "${project}-fixture-${iteration}" \
+    --network "$network" \
+    --env DATABASE_URL="$database_url" \
+    "$test_image" node scripts/seed-container-acceptance.mjs
+
   echo "Starting packaged web role and checking liveness/readiness"
   docker volume create "$work_volume" >/dev/null
   docker volume create "$data_volume" >/dev/null
@@ -84,7 +89,7 @@ run_iteration() {
     --env OIDC_ISSUER=https://auth.example.invalid/ \
     --env OIDC_CLIENT_ID=synthetic-client \
     --env OIDC_REDIRECT_URI=http://localhost:3000/auth/callback \
-    --env OIDC_ARCHIVE_ID=00000000-0000-0000-0000-000000000000 \
+    --env OIDC_ARCHIVE_ID=00000000-0000-4000-8000-000000000011 \
     --env OIDC_CLIENT_SECRET_FILE=/run/echohoard/secrets/oidc-client-secret \
     --env ECHOHOARD_MCP_CREDENTIAL_FILE=/run/echohoard/secrets/mcp-read-token \
     --env ECHOHOARD_MCP_USER_ID=synthetic-user \
@@ -98,12 +103,7 @@ run_iteration() {
   wait_for_http "http://127.0.0.1:${host_port}/health" "ok"
   wait_for_http "http://127.0.0.1:${host_port}/ready" "ready"
 
-  echo "Checking packaged authenticated MCP transport"
-  ECHOHOARD_MCP_BASE_URL="http://127.0.0.1:${host_port}" \
-    ECHOHOARD_MCP_TOKEN="$(cat "$mcp_token_file")" \
-    pnpm test:mcp-transport
-
-  echo "Starting packaged worker, killing it, and checking restart convergence"
+  echo "Starting packaged worker and checking initial readiness"
   docker run --detach --name "$worker_container" --user 10002:10002 \
     --network "$network" --read-only --tmpfs /tmp \
     --cap-drop ALL --security-opt no-new-privileges:true \
@@ -114,10 +114,23 @@ run_iteration() {
     --mount "type=bind,source=$worker_key_file,destination=/run/echohoard/secrets/worker.key,readonly" \
     "$runtime_image" >/dev/null
   wait_for_worker_status ready
+
+  echo "Checking packaged signed intake, worker persistence, and authenticated MCP transport"
+  ECHOHOARD_MCP_BASE_URL="http://127.0.0.1:${host_port}" \
+    ECHOHOARD_MCP_TOKEN="$(cat "$mcp_token_file")" \
+    ECHOHOARD_WACLI_WEBHOOK_SECRET="$(cat "$wacli_secret_file")" \
+    ECHOHOARD_ACCEPTANCE_ACCOUNT_KEY="synthetic-acceptance-account" \
+    ECHOHOARD_ACCEPTANCE_ARCHIVE_ID="00000000-0000-4000-8000-000000000011" \
+    ECHOHOARD_ACCEPTANCE_DENIED_CONVERSATION_ID="00000000-0000-4000-8000-000000000031" \
+    ECHOHOARD_ACCEPTANCE_OTHER_CONVERSATION_ID="00000000-0000-4000-8000-000000000032" \
+    pnpm test:mcp-transport
+
+  echo "Killing packaged worker and checking restart convergence"
+  worker_status="$(docker exec "$worker_container" sh -c 'cat /work/worker.status')"
   docker kill --signal KILL "$worker_container" >/dev/null
   wait_for_container_exit "$worker_container"
   docker start "$worker_container" >/dev/null
-  wait_for_worker_status ready
+  wait_for_worker_status ready "$worker_status"
 
   echo "Iteration ${iteration}/2 passed"
 }
@@ -142,9 +155,11 @@ wait_for_http() {
 }
 
 wait_for_worker_status() {
-  local expected="$1"
+  local expected="$1" previous="${2:-}"
   for _attempt in $(seq 1 40); do
-    if [ "$(docker exec "$worker_container" sh -c 'cat /work/worker.status 2>/dev/null' || true)" = "$expected" ]; then
+    local status
+    status="$(docker exec "$worker_container" sh -c 'cat /work/worker.status 2>/dev/null' || true)"
+    if [[ "$status" == "$expected"* && ( -z "$previous" || "$status" != "$previous" ) ]]; then
       return
     fi
     sleep 1
@@ -177,10 +192,11 @@ cat > "$report_file" <<EOF
   "testImage": "${test_image}",
   "checks": [
     "fresh migrations and PostgreSQL functional suite",
+    "synthetic account-bound signed webhook and worker normalization/persistence",
     "packaged web liveness and readiness",
     "packaged worker SIGKILL and restart status convergence",
-    "synthetic import/media/search/conversation/health/statistics",
-    "packaged authenticated MCP transport and seven-tool allowlist"
+    "packaged authenticated MCP discovery and seven tool calls",
+    "packaged MCP authentication, archive isolation, and privacy denial"
   ],
   "privateData": "not used"
 }

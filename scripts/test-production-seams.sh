@@ -33,7 +33,7 @@ if [[ "$mode" == "--dry-run" || "$mode" == "dry-run" ]]; then
   printf '  - Compose lifecycle/readiness checks\n'
   printf '  - two-iteration synthetic container acceptance\n'
   printf '  - viewer accessibility and anonymous/auth boundary\n'
-  printf '  - packaged MCP transport denial/auth/session/allowlist (inside acceptance)\n'
+  printf '  - packaged signed intake, worker normalization, MCP calls, and negative boundaries\n'
   exit 0
 fi
 

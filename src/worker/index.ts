@@ -1,5 +1,6 @@
 import { env } from "../config/env.js";
 import { mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { dirname } from "node:path";
 import { installSignalHandlers, WorkerLifecycle } from "./lifecycle.js";
 import { createProductionWorker } from "./composition.js";
@@ -9,7 +10,7 @@ if (env.ECHOHOARD_ROLE !== "worker") throw new Error("ECHOHOARD_ROLE must be wor
 const statusFile = process.env.ECHOHOARD_WORKER_STATUS_FILE ?? "/work/worker.status";
 const writeStatus = async (status: "ready" | "draining" | "stopped"): Promise<void> => {
   await mkdir(dirname(statusFile), { recursive: true });
-  await writeFile(statusFile, `${status}\n`, { mode: 0o600 });
+  await writeFile(statusFile, `${status}\n${randomUUID()}\n`, { mode: 0o600 });
 };
 
 const production = createProductionWorker(env, undefined, (message) => {
