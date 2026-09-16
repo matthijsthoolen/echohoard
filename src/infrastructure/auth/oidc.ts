@@ -4,6 +4,7 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import type {
   ArchivePrincipal,
   AuthBootstrapState,
+  OidcAuthorizationOptions,
   OidcClaims,
   OidcProvider,
   PendingIdentity,
@@ -27,7 +28,12 @@ export class HttpOidcProvider implements OidcProvider {
     private readonly fetcher: typeof fetch = fetch,
     private readonly diagnostic: AuthDiagnostic = noopAuthDiagnostic,
   ) {}
-  public authorizationUrl(state: string, nonce?: string, codeChallenge?: string): string {
+  public authorizationUrl(
+    state: string,
+    nonce?: string,
+    codeChallenge?: string,
+    options?: OidcAuthorizationOptions,
+  ): string {
     // Authentik keeps the issuer provider-specific but exposes one global
     // authorization endpoint. The provider slug belongs in discovery/JWKS,
     // not in the authorization URL.
@@ -42,6 +48,8 @@ export class HttpOidcProvider implements OidcProvider {
       url.searchParams.set("code_challenge", codeChallenge);
       url.searchParams.set("code_challenge_method", "S256");
     }
+    if (options?.prompt) url.searchParams.set("prompt", options.prompt);
+    if (options?.maxAge !== undefined) url.searchParams.set("max_age", String(options.maxAge));
     return url.toString();
   }
   public async exchange(code: string, nonce?: string, codeVerifier?: string): Promise<OidcClaims> {

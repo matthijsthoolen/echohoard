@@ -53,6 +53,8 @@ model Archive {
   transcriptVersions              TranscriptVersion[]
   admittedIdentities              ArchiveIdentity[]
   authSessions                    AuthSession[]
+  unlockChallenges                UnlockChallenge[]
+  unlockGrants                    UnlockGrant[]
   privacyAudits                   ConversationPrivacyAudit[]
 
   @@unique([id, userId])
@@ -88,9 +90,60 @@ model AuthSession {
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
   archive   Archive   @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  unlockChallenges UnlockChallenge[]
+  unlockGrants     UnlockGrant[]
 
   @@index([expiresAt, revokedAt])
   @@index([archiveId, expiresAt])
+  @@unique([id, archiveId])
+}
+
+/// A one-use, process-bound OIDC step-up challenge. The browser state is
+/// never persisted in plaintext and cannot be replayed after consumption.
+model UnlockChallenge {
+  id             String       @id @default(uuid()) @db.Uuid
+  tokenHash      String       @unique @db.VarChar(64)
+  runtimeId      String       @db.VarChar(64)
+  sessionHash    String       @db.VarChar(64)
+  authSessionId  String       @db.Uuid
+  archiveId      String       @db.Uuid
+  conversationId String       @db.Uuid
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  authSession    AuthSession  @relation(fields: [authSessionId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
+  @@unique([archiveId, id])
+  @@index([runtimeId, expiresAt, consumedAt, revokedAt])
+  @@index([sessionHash, archiveId, conversationId])
+}
+
+/// A short-lived server-side grant. runtimeId deliberately makes all grants
+/// fail closed after a web-process restart; the owner must perform step-up
+/// again even though the durable OIDC session remains valid.
+model UnlockGrant {
+  id             String       @id @default(uuid()) @db.Uuid
+  tokenHash      String       @unique @db.VarChar(64)
+  runtimeId      String       @db.VarChar(64)
+  sessionHash    String       @db.VarChar(64)
+  authSessionId  String       @db.Uuid
+  archiveId      String       @db.Uuid
+  conversationId String       @db.Uuid
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  authSession    AuthSession  @relation(fields: [authSessionId, archiveId], references: [id, archiveId], onDelete: Cascade)
+  archive        Archive      @relation(fields: [archiveId], references: [id], onDelete: Cascade)
+  conversation   Conversation @relation(fields: [conversationId, archiveId], references: [id, archiveId], onDelete: Cascade)
+
+  @@unique([archiveId, id])
+  @@index([runtimeId, expiresAt, revokedAt])
+  @@index([sessionHash, archiveId, conversationId])
 }
 
 model OwnedAccount {
@@ -279,6 +332,8 @@ model Conversation {
   sourceConversations          SourceConversation[]
   mergeAudits                  ConversationMergeAudit[]
   privacyAudits                ConversationPrivacyAudit[]
+  unlockChallenges             UnlockChallenge[]
+  unlockGrants                 UnlockGrant[]
 
   @@unique([archiveId, id])
   @@unique([archiveId, stableKey])

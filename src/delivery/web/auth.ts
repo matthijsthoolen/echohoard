@@ -11,6 +11,10 @@ const STATE_COOKIE = "echohoard_oidc_state";
 const NONCE_COOKIE = "echohoard_oidc_nonce";
 const VERIFIER_COOKIE = "echohoard_oidc_verifier";
 const SESSION_COOKIE = "echohoard_session";
+const UNLOCK_STATE_COOKIE = "echohoard_unlock_state";
+const UNLOCK_NONCE_COOKIE = "echohoard_unlock_nonce";
+const UNLOCK_VERIFIER_COOKIE = "echohoard_unlock_verifier";
+const UNLOCK_GRANT_COOKIE = "echohoard_unlock_grant";
 const cookieOptions = "Path=/; HttpOnly; SameSite=Lax; Secure";
 
 export type AuthResponse = Response;
@@ -104,7 +108,61 @@ export class WebAuthBoundary {
     await this.auth.logout(readCookie(request, SESSION_COOKIE));
     return new Response(null, {
       status: 302,
-      headers: { Location: "/", "Set-Cookie": clearCookie(SESSION_COOKIE) },
+      headers: {
+        Location: "/",
+        "Set-Cookie": `${clearCookie(SESSION_COOKIE)}, ${clearCookie(UNLOCK_GRANT_COOKIE)}`,
+      },
+    });
+  }
+
+  async unlockStart(
+    request: Request,
+    archiveId: string,
+    conversationId: string,
+  ): Promise<AuthResponse> {
+    const session = readCookie(request, SESSION_COOKIE);
+    const state = randomToken();
+    const nonce = randomToken();
+    const pkce = pkcePair();
+    const location = await this.auth.beginUnlock(session, {
+      state,
+      nonce,
+      codeChallenge: pkce.challenge,
+      archiveId,
+      conversationId,
+    });
+    if (!location) return browserError("access-denied", 403);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: location,
+        "Set-Cookie": `${UNLOCK_STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_NONCE_COOKIE}=${encodeURIComponent(nonce)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_VERIFIER_COOKIE}=${encodeURIComponent(pkce.verifier)}; ${cookieOptions}; Max-Age=300`,
+      },
+    });
+  }
+
+  async unlockCallback(request: Request): Promise<AuthResponse> {
+    const url = new URL(request.url);
+    const state = url.searchParams.get("state");
+    const expectedState = readCookie(request, UNLOCK_STATE_COOKIE);
+    const code = url.searchParams.get("code");
+    const nonce = readCookie(request, UNLOCK_NONCE_COOKIE);
+    const verifier = readCookie(request, UNLOCK_VERIFIER_COOKIE);
+    if (!state || !expectedState || state !== expectedState || !code || !nonce || !verifier)
+      return browserError("bad-request", 400);
+    const grant = await this.auth.completeUnlock(readCookie(request, SESSION_COOKIE), {
+      state,
+      code,
+      nonce,
+      codeVerifier: verifier,
+    });
+    if (!grant) return browserError("access-denied", 403);
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: this.callbackUrl,
+        "Set-Cookie": `${UNLOCK_GRANT_COOKIE}=${encodeURIComponent(grant)}; ${cookieOptions}; Max-Age=300, ${clearCookie(UNLOCK_STATE_COOKIE)}, ${clearCookie(UNLOCK_NONCE_COOKIE)}, ${clearCookie(UNLOCK_VERIFIER_COOKIE)}`,
+      },
     });
   }
 
@@ -116,6 +174,22 @@ export class WebAuthBoundary {
    * Callers must use the returned archiveId rather than trusting request input. */
   async principalForRequest(request: Request): Promise<ArchivePrincipal | null> {
     return this.auth.validate(readCookie(request, SESSION_COOKIE));
+  }
+
+  /** Locked direct routes must use this guard before selecting any content or
+   * metadata. Invalid, expired, restarted, and cross-archive grants all look
+   * like an absent principal. */
+  async lockedPrincipal(
+    request: Request,
+    archiveId: string,
+    conversationId: string,
+  ): Promise<ArchivePrincipal | null> {
+    return this.auth.validateUnlock(
+      readCookie(request, SESSION_COOKIE),
+      readCookie(request, UNLOCK_GRANT_COOKIE),
+      archiveId,
+      conversationId,
+    );
   }
 
   async approveIdentity(request: Request, issuer: string, subject: string): Promise<AuthResponse> {
@@ -147,4 +221,13 @@ function browserError(kind: "access-denied" | "bad-request", status: number): Re
   });
 }
 
-export { NONCE_COOKIE, SESSION_COOKIE, STATE_COOKIE, VERIFIER_COOKIE };
+export {
+  NONCE_COOKIE,
+  SESSION_COOKIE,
+  STATE_COOKIE,
+  UNLOCK_GRANT_COOKIE,
+  UNLOCK_NONCE_COOKIE,
+  UNLOCK_STATE_COOKIE,
+  UNLOCK_VERIFIER_COOKIE,
+  VERIFIER_COOKIE,
+};

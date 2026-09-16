@@ -13,6 +13,7 @@ import {
 import { PrismaMediaDelivery } from "../../infrastructure/db/media-delivery";
 import { HttpOidcProvider, PrismaPrincipalDirectory } from "../../infrastructure/auth/oidc";
 import { PrismaSessionStore } from "../../infrastructure/auth/sessions";
+import { PrismaUnlockStore } from "../../infrastructure/auth/unlocks";
 import { WebAuthBoundary } from "./auth";
 import type { WebRuntime } from "./runtime";
 import { productionAuthDiagnostic } from "../../application/auth-diagnostics";
@@ -34,6 +35,7 @@ function createProductionWebRuntime(): WebRuntime {
   const secret = readFileSync(settings.OIDC_CLIENT_SECRET_FILE, "utf8").trim();
   if (!secret) throw new Error("OIDC client secret file is empty");
   const prisma = new PrismaClient();
+  const unlocks = new PrismaUnlockStore(prisma);
   const reads = new ArchiveReadService(new PrismaReadPersistence(prisma), new CursorCodec(secret));
   return {
     auth: new WebAuthBoundary(
@@ -49,6 +51,7 @@ function createProductionWebRuntime(): WebRuntime {
         new PrismaPrincipalDirectory(prisma, settings.OIDC_ISSUER, settings.OIDC_ARCHIVE_ID),
         new PrismaSessionStore(prisma),
         productionAuthDiagnostic,
+        unlocks,
       ),
       "/",
       productionAuthDiagnostic,
