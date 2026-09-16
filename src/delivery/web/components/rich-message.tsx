@@ -45,12 +45,19 @@ const ACTIVE_EXTENSIONS = new Set([
 type RichMetadata = Readonly<Record<string, unknown>>;
 
 export function RichMessage({ message }: { readonly message: MessageRead }): ReactNode {
+  const deletionLabel = message.contentUnavailable
+    ? "Source deleted; content unavailable"
+    : "Source deleted";
   return (
     <div className="rich-message" data-rich-type={message.messageType}>
       {message.sourceDeleted ? (
-        <div className="source-deleted-marker" role="status" aria-label="Source deleted">
-          <strong>Source deleted</strong>
-          <span>Preserved archive content remains available.</span>
+        <div className="source-deleted-marker" role="status" aria-label={deletionLabel}>
+          <strong>{deletionLabel}</strong>
+          <span>
+            {message.contentUnavailable
+              ? "The message content was not captured before deletion."
+              : "The captured message content is preserved."}
+          </span>
         </div>
       ) : null}
       {renderRichMessage(message)}

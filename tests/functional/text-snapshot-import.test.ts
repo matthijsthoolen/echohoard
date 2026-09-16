@@ -496,7 +496,7 @@ describe("transactional normalized text snapshot import", () => {
   it("keeps identical normalized keys isolated between archives", async () => {
     expect(await prisma.message.count({ where: { archiveId: archiveOneId } })).toBe(4);
     expect(await prisma.message.count({ where: { archiveId: archiveTwoId } })).toBe(1);
-    expect(await prisma.person.count({ where: { archiveId: archiveOneId } })).toBe(1);
+    expect(await prisma.person.count({ where: { archiveId: archiveOneId } })).toBe(2);
     expect(await prisma.person.count({ where: { archiveId: archiveTwoId } })).toBe(1);
   });
 

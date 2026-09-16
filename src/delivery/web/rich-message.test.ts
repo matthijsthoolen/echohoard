@@ -147,4 +147,32 @@ describe("rich message presentation", () => {
       true,
     );
   });
+
+  it("distinguishes a source-deleted tombstone with unavailable content", () => {
+    const tree = elements(
+      RichMessage({
+        message: message("text", { sourceDeleted: true, contentUnavailable: true }),
+      }),
+    );
+    const marker = tree.find(
+      (node) => node.props["aria-label"] === "Source deleted; content unavailable",
+    );
+    expect(marker).toMatchObject({
+      type: "div",
+      props: { role: "status", "aria-label": "Source deleted; content unavailable" },
+    });
+    expect(
+      tree.some(
+        (node) =>
+          node.type === "strong" && node.props.children === "Source deleted; content unavailable",
+      ),
+    ).toBe(true);
+    expect(
+      tree.some(
+        (node) =>
+          node.type === "span" &&
+          node.props.children === "The message content was not captured before deletion.",
+      ),
+    ).toBe(true);
+  });
 });
