@@ -14,6 +14,9 @@ network="${project}_default"
 database_url="postgresql://echohoard_test:echohoard_test@postgres:5432/echohoard_functional?schema=public"
 host_port="${ECHOHOARD_ACCEPTANCE_HTTP_PORT:-33105}"
 worker_key_file="$(pwd)/container/secrets/worker-key.example"
+oidc_secret_file="$(pwd)/container/secrets/oidc-client-secret.example"
+mcp_token_file="$(pwd)/container/secrets/mcp-read-token.example"
+wacli_secret_file="$(pwd)/container/secrets/wacli-webhook-key.example"
 report_dir="${ECHOHOARD_ACCEPTANCE_REPORT_DIR:-.tmp/eh-10-05}"
 report_file="${report_dir}/acceptance.json"
 
@@ -75,13 +78,31 @@ run_iteration() {
     'chown 10002:10002 /work /data'
   docker run --detach --name "$web_container" \
     --network "$network" --publish "127.0.0.1:${host_port}:3000" \
-    --env DATABASE_URL="$database_url" --env ECHOHOARD_ROLE=web "$runtime_image" >/dev/null
+    --read-only --tmpfs /tmp --tmpfs /app/src/delivery/web/.next/cache \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    --env DATABASE_URL="$database_url" --env ECHOHOARD_ROLE=web \
+    --env OIDC_ISSUER=https://auth.example.invalid/ \
+    --env OIDC_CLIENT_ID=synthetic-client \
+    --env OIDC_REDIRECT_URI=http://localhost:3000/auth/callback \
+    --env OIDC_ARCHIVE_ID=00000000-0000-0000-0000-000000000000 \
+    --env OIDC_CLIENT_SECRET_FILE=/run/echohoard/secrets/oidc-client-secret \
+    --env ECHOHOARD_MCP_CREDENTIAL_FILE=/run/echohoard/secrets/mcp-read-token \
+    --env ECHOHOARD_MCP_USER_ID=synthetic-user \
+    --env ECHOHOARD_MCP_SUBJECT=synthetic-subject \
+    --env ECHOHOARD_MCP_ISSUER=https://auth.example.invalid/ \
+    --env ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE=/run/echohoard/secrets/wacli-webhook-key \
+    --mount "type=bind,source=$oidc_secret_file,destination=/run/echohoard/secrets/oidc-client-secret,readonly" \
+    --mount "type=bind,source=$mcp_token_file,destination=/run/echohoard/secrets/mcp-read-token,readonly" \
+    --mount "type=bind,source=$wacli_secret_file,destination=/run/echohoard/secrets/wacli-webhook-key,readonly" \
+    "$runtime_image" >/dev/null
   wait_for_http "http://127.0.0.1:${host_port}/health" "ok"
   wait_for_http "http://127.0.0.1:${host_port}/ready" "ready"
 
   echo "Starting packaged worker, killing it, and checking restart convergence"
   docker run --detach --name "$worker_container" --user 10002:10002 \
-    --network "$network" --env DATABASE_URL="$database_url" \
+    --network "$network" --read-only --tmpfs /tmp \
+    --cap-drop ALL --security-opt no-new-privileges:true \
+    --env DATABASE_URL="$database_url" \
     --env ECHOHOARD_ROLE=worker --env ECHOHOARD_WORKER_STATUS_FILE=/work/worker.status \
     --mount "type=volume,source=$work_volume,destination=/work" \
     --mount "type=volume,source=$data_volume,destination=/data" \

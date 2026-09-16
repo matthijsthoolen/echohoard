@@ -13,9 +13,10 @@ The worker owns the only application write paths:
 The worker secret directory is `/run/echohoard/secrets`. Secret files are
 provided by the deployment as read-only mounts and are never copied into the
 image or passed as command-line arguments. The web role is intentionally not
-given the worker data, work, or secret mounts. A private deployment may mount a
-separate read-only media view for the web role when its composition contract
-requires it.
+given the worker data, work, or worker-key mount; it may receive only the
+explicitly configured read-only OIDC/MCP/webhook mounts. A private deployment
+may mount a separate read-only media view for the web role when its composition
+contract requires it.
 
 The container-level sentinel test in `scripts/test-container.sh` verifies the
 effective UID, approved writes, forbidden writes, read-only secret mounts,

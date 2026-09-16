@@ -89,7 +89,8 @@ RUN groupadd --gid "${ECHOHOARD_WEB_GID}" echohoard-web \
     && chown -R "${ECHOHOARD_WEB_UID}:${ECHOHOARD_WEB_GID}" /app/src/delivery/web/.next/cache \
     && mkdir -p /data /work /run/echohoard/secrets \
     && chown "${ECHOHOARD_WORKER_UID}:${ECHOHOARD_WORKER_GID}" /data /work /run/echohoard/secrets \
-    && chmod 0700 /data /work /run/echohoard/secrets \
+    && chmod 0700 /data /work \
+    && chmod 0711 /run/echohoard/secrets \
     && chmod 0555 /usr/local/bin/echohoard \
     && node --version \
     && python --version

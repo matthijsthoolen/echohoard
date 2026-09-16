@@ -31,8 +31,8 @@ case "${ECHOHOARD_ROLE:-web}" in
     exec node /app/dist/worker/index.js
     ;;
   migrate)
-    : "${ECHOHOARD_DATABASE_URL_FILE:?ECHOHOARD_DATABASE_URL_FILE is required for migrations}"
     load_database_url_file
+    : "${DATABASE_URL:?DATABASE_URL or ECHOHOARD_DATABASE_URL_FILE is required for migrations}"
     exec node /app/node_modules/prisma/build/index.js migrate deploy
     ;;
   *)

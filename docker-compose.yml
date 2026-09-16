@@ -9,6 +9,11 @@ services:
     environment:
       NODE_ENV: production
       ECHOHOARD_ROLE: web
+      OIDC_ISSUER: ${ECHOHOARD_OIDC_ISSUER:-https://auth.example.invalid/}
+      OIDC_CLIENT_ID: ${ECHOHOARD_OIDC_CLIENT_ID:-replace-me}
+      OIDC_REDIRECT_URI: ${ECHOHOARD_OIDC_REDIRECT_URI:-http://localhost:3000/auth/callback}
+      OIDC_ARCHIVE_ID: ${ECHOHOARD_OIDC_ARCHIVE_ID:-00000000-0000-0000-0000-000000000000}
+      OIDC_CLIENT_SECRET_FILE: /run/echohoard/secrets/oidc-client-secret
       ECHOHOARD_MCP_CREDENTIAL_FILE: /run/echohoard/secrets/mcp-read-token
       ECHOHOARD_MCP_USER_ID: ${ECHOHOARD_MCP_USER_ID:-replace-me}
       ECHOHOARD_MCP_SUBJECT: ${ECHOHOARD_MCP_SUBJECT:-replace-me}
@@ -16,10 +21,19 @@ services:
       ECHOHOARD_WACLI_CONTROL_URL: ${ECHOHOARD_WACLI_CONTROL_URL:-http://wacli-control:8080/}
       ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE: /run/echohoard/secrets/wacli-webhook-key
       DATABASE_URL: ${ECHOHOARD_DATABASE_URL:-postgresql://echohoard:replace-me@postgres.example.invalid:5432/echohoard?schema=public}
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+      - /app/src/delivery/web/.next/cache
     ports:
       - "${ECHOHOARD_HTTP_PORT:-3000}:3000"
     secrets:
-      - oidc_client_secret
+      - source: oidc_client_secret
+        target: /run/echohoard/secrets/oidc-client-secret
       - source: mcp_read_token
         target: /run/echohoard/secrets/mcp-read-token
       - source: wacli_webhook_key
@@ -30,7 +44,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+          "fetch('http://127.0.0.1:3000/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
         ]
       interval: 10s
       timeout: 5s
@@ -40,6 +54,12 @@ services:
   worker:
     image: ${ECHOHOARD_IMAGE:-echohoard:local}
     user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     environment:
       NODE_ENV: production
       ECHOHOARD_ROLE: worker
