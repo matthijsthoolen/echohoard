@@ -273,7 +273,10 @@ export class PrismaLiveEventNormalizer {
   public constructor(
     private readonly prisma: PrismaClient,
     private readonly parseEvent: (payload: Uint8Array, accountKey: string) => unknown,
-    private readonly normalizeEvent: (event: unknown) => readonly ImportRecord[],
+    private readonly normalizeEvent: (
+      event: unknown,
+      accountScope?: string,
+    ) => readonly ImportRecord[],
   ) {
     this.importer = new PrismaTextSnapshotImporter(prisma);
     this.inbox = new PrismaLiveEventInboxPersistence(prisma);
@@ -331,7 +334,7 @@ export class PrismaLiveEventNormalizer {
         new TextEncoder().encode(JSON.stringify(receipt.payload)),
         receipt.ownedAccount.accountKey,
       );
-      records = this.normalizeEvent(event);
+      records = this.normalizeEvent(event, input.ownedAccountId);
     } catch {
       throw Object.assign(new Error("live event payload is invalid"), {
         retryable: false,

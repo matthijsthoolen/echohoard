@@ -458,8 +458,26 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             (candidate): candidate is ImportMessageRecord =>
               candidate.kind === "message" && candidate.stableKey === record.messageKey,
           );
+          const revisionSourceIdentity = messageRecord
+            ? conversationSourceIdentity(input.records, messageRecord.conversationKey)
+            : undefined;
           const revisionSourceConversationId = messageRecord
-            ? sourceConversations.get(messageRecord.conversationKey)
+            ? (sourceConversations.get(messageRecord.conversationKey) ??
+              (revisionSourceIdentity
+                ? (
+                    await tx.sourceConversation.findUnique({
+                      where: {
+                        archiveId_ownedAccountId_sourceNamespace_sourceConversationKey: {
+                          archiveId: input.archiveId,
+                          ownedAccountId,
+                          sourceNamespace: revisionSourceIdentity.namespace,
+                          sourceConversationKey: revisionSourceIdentity.key,
+                        },
+                      },
+                      select: { id: true },
+                    })
+                  )?.id
+                : undefined))
             : undefined;
           if (revisionSourceConversationId)
             await upsertObservation(tx.revisionObservation, {
@@ -477,7 +495,11 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
                 : "unknown",
               sourceEntityKey: record.stableKey,
               logicalEntityKey: record.stableKey,
-              observationKey: record.stableKey,
+              // The revision key is shared across adapters; the observation
+              // key also records which source made this observation so a
+              // live confirmation and backup confirmation both remain
+              // queryable even when their normalized values match.
+              observationKey: `${record.stableKey}:${input.liveReceipt ? "live" : "backup"}`,
               revisionId: revision.id,
               value: record,
               eligibility: jobEligibility,

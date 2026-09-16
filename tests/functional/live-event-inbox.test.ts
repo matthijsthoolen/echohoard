@@ -10,6 +10,10 @@ import {
   type WacliWebhookEvent,
 } from "../../src/adapters/wacli/contract.js";
 import { normalizeWacliEvent } from "../../src/adapters/wacli/normalize.js";
+import { normalizeWhatsAppMessages } from "../../src/adapters/whatsapp/messages.js";
+import { buildWhatsAppSqliteFixture } from "../../src/adapters/whatsapp/fixtures.js";
+import { whatsappMessageKey } from "../../src/adapters/whatsapp/identity.js";
+import { PrismaTextSnapshotImporter } from "../../src/infrastructure/db/text-import.js";
 import {
   CountingLiveEventMetrics,
   LiveEventIntakeService,
@@ -25,8 +29,9 @@ const inbox = new PrismaLiveEventInboxPersistence(prisma);
 const normalizer = new PrismaLiveEventNormalizer(
   prisma,
   (payload, accountKey) => parseWacliWebhookEvent(payload, accountKey),
-  (event) => normalizeWacliEvent(asWacliEvent(event)),
+  (event, accountScope) => normalizeWacliEvent(asWacliEvent(event), accountScope),
 );
+const importer = new PrismaTextSnapshotImporter(prisma);
 const userId = randomUUID();
 const archiveId = randomUUID();
 const otherArchiveId = randomUUID();
@@ -261,6 +266,136 @@ describe("live event inbox PostgreSQL durability", () => {
     });
     expect(next[0]?.receiptId).toBe(validId);
   });
+
+  it.each(["live-first", "backup-first"] as const)(
+    "converges an edited message when %s",
+    async (order) => {
+      const messageKey = `functional-shared-edit-${order}-${randomUUID()}`;
+      const chatKey = "15550000001@s.whatsapp.net";
+      const event = {
+        Chat: chatKey,
+        ID: messageKey,
+        SenderJID: chatKey,
+        Timestamp: "2026-01-01T00:00:00.000Z",
+        FromMe: false,
+        Text: "edited text",
+        Edited: true,
+      };
+      const receiptId = randomUUID().replaceAll("-", "");
+      const applyLive = async () => {
+        await inbox.enqueue({
+          ...input(archiveId, accountId, receiptId),
+          sourceEventKey: `wacli:message:${accountId}:${chatKey}:${messageKey}`,
+          payload: event,
+        });
+        await normalizer.normalize({ archiveId, ownedAccountId: accountId, receiptId });
+        expect(await prisma.revisionObservation.count({ where: { archiveId } })).toBeGreaterThan(0);
+      };
+      const applyBackup = async () => {
+        const sourceId = randomUUID();
+        const snapshotId = randomUUID();
+        const importJobId = randomUUID();
+        const sourceSha = randomUUID().replaceAll("-", "").padEnd(64, "0");
+        await prisma.source.create({
+          data: {
+            id: sourceId,
+            archiveId,
+            ownedAccountId: accountId,
+            kind: "backup",
+            stableKey: `functional-backup-${importJobId}`,
+            sha256: sourceSha,
+          },
+        });
+        await prisma.snapshot.create({
+          data: {
+            id: snapshotId,
+            archiveId,
+            ownedAccountId: accountId,
+            sourceId,
+            sha256: sourceSha,
+            lifecycle: "snapshotted",
+          },
+        });
+        await prisma.importJob.create({
+          data: {
+            id: importJobId,
+            archiveId,
+            ownedAccountId: accountId,
+            sourceId,
+            snapshotId,
+            status: "adapting",
+          },
+        });
+        const fixture = buildWhatsAppSqliteFixture("android-legacy.v1");
+        const records = normalizeWhatsAppMessages(
+          {
+            ...fixture,
+            rows: {
+              ...fixture.rows,
+              messages: [
+                {
+                  _id: 101,
+                  key_remote_jid: chatKey,
+                  key_from_me: false,
+                  timestamp: Date.parse(event.Timestamp),
+                  media_wa_type: 0,
+                  data: "original text",
+                  key_id: messageKey,
+                },
+              ],
+              message_edits: [
+                {
+                  message_id: 101,
+                  edit_version: 1,
+                  data: "edited text",
+                  timestamp: Date.parse("2026-01-01T00:00:01.000Z"),
+                },
+              ],
+            },
+          },
+          { accountScope: accountId, snapshotId },
+        );
+        expect(records.filter((record) => record.kind === "revision")).toHaveLength(1);
+        const backupRevision = records.find((record) => record.kind === "revision");
+        const backupMessage = records.find((record) => record.kind === "message");
+        expect(backupRevision && backupMessage && backupRevision.messageKey).toBe(
+          backupMessage?.stableKey,
+        );
+        await importer.import({
+          archiveId,
+          ownedAccountId: accountId,
+          snapshotId,
+          importJobId,
+          observedAt: new Date("2026-01-01T00:00:02.000Z"),
+          records,
+        });
+        expect(await prisma.revisionObservation.count({ where: { archiveId } })).toBeGreaterThan(0);
+      };
+
+      if (order === "live-first") {
+        await applyLive();
+        await applyBackup();
+      } else {
+        await applyBackup();
+        await applyLive();
+      }
+
+      const stableKey = whatsappMessageKey(accountId, chatKey, messageKey);
+      expect(await prisma.message.count({ where: { archiveId, stableKey } })).toBe(1);
+      const message = await prisma.message.findFirstOrThrow({ where: { archiveId, stableKey } });
+      expect(
+        await prisma.messageRevision.count({ where: { archiveId, messageId: message.id } }),
+      ).toBe(1);
+      const revision = await prisma.messageRevision.findFirstOrThrow({
+        where: { archiveId, messageId: message.id },
+      });
+      const observations = await prisma.revisionObservation.findMany({
+        where: { archiveId, revisionId: revision.id },
+        select: { importJobId: true, sourceConversationId: true, observationKey: true },
+      });
+      expect(observations.length).toBeGreaterThanOrEqual(1);
+    },
+  );
 
   it("retries transient claims, recovers a stale claim, and serializes concurrent claims", async () => {
     const receiptId = randomUUID().replaceAll("-", "");

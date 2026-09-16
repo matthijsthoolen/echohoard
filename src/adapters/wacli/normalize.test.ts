@@ -83,6 +83,78 @@ describe("wacli observation normalization", () => {
     expect(liveMessage?.source.namespace).toBe("whatsapp-android");
   });
 
+  it.each(["android-current.v1", "android-legacy.v1"] as const)(
+    "uses one scoped revision identity for live and backup edits (%s)",
+    (version) => {
+      const accountScope = "fixture-account";
+      const chatKey = version === "android-current.v1" ? "synthetic-group@g.us" : "120@g.us";
+      const messageKey = `shared-edit-${version}`;
+      const liveRecords = normalizeWacliEvent(
+        parse({
+          Chat: chatKey,
+          ID: messageKey,
+          SenderJID: "1555@s.whatsapp.net",
+          Timestamp: "2026-09-16T12:00:00Z",
+          FromMe: false,
+          Text: "edited text",
+          Edited: true,
+        }),
+      );
+      const backup = buildWhatsAppSqliteFixture(version);
+      const messageRow =
+        version === "android-current.v1"
+          ? {
+              _id: 101,
+              chat_row_id: 20,
+              from_me: false,
+              timestamp: Date.parse("2026-09-16T12:00:00Z"),
+              message_type: 0,
+              text_data: "original text",
+              key_id: messageKey,
+            }
+          : {
+              _id: 101,
+              key_remote_jid: chatKey,
+              key_from_me: false,
+              timestamp: Date.parse("2026-09-16T12:00:00Z"),
+              media_wa_type: 0,
+              data: "original text",
+              key_id: messageKey,
+            };
+      const backupRecords = normalizeWhatsAppMessages(
+        {
+          ...backup,
+          rows: {
+            ...backup.rows,
+            [version === "android-current.v1" ? "message" : "messages"]: [messageRow],
+            [version === "android-current.v1" ? "message_edit" : "message_edits"]: [
+              version === "android-current.v1"
+                ? {
+                    message_id: 101,
+                    edit_version: 1,
+                    text_data: "edited text",
+                    timestamp: Date.parse("2026-09-16T12:00:01Z"),
+                  }
+                : {
+                    message_id: 101,
+                    edit_version: 1,
+                    data: "edited text",
+                    timestamp: Date.parse("2026-09-16T12:00:01Z"),
+                  },
+            ],
+          },
+        },
+        { accountScope, snapshotId: "backup" },
+      );
+      const liveRevision = liveRecords.find((record) => record.kind === "revision");
+      const backupRevision = backupRecords.find((record) => record.kind === "revision");
+      expect(liveRevision?.stableKey).toBe(backupRevision?.stableKey);
+      expect(liveRevision?.messageKey).toBe(
+        liveRecords.find((record) => record.kind === "message")?.stableKey,
+      );
+    },
+  );
+
   it("preserves accepted non-message events as explicit unsupported observations", () => {
     const records = normalizeWacliEvent(
       parse({

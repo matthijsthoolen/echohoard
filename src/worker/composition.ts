@@ -190,7 +190,7 @@ export function createProductionWorker(
   const liveNormalizer = new PrismaLiveEventNormalizer(
     prisma,
     (payload, accountKey) => parseWacliWebhookEvent(payload, accountKey),
-    (event) => normalizeWacliEvent(asWacliEvent(event)),
+    (event, accountScope) => normalizeWacliEvent(asWacliEvent(event), accountScope),
   );
   const runner = new DecryptJobRunner(
     jobs,
