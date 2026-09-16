@@ -1,5 +1,5 @@
-import { getWebRuntime } from "../../../../runtime.js";
-import { createLiveEventRoute } from "./route-handler.js";
+import { getWebRuntime } from "../../../../runtime";
+import { createLiveEventRoute } from "./route-handler";
 
 export const POST = createLiveEventRoute({
   getIntake: () => getWebRuntime()?.liveEventIntake,

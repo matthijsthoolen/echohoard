@@ -1,7 +1,7 @@
 import {
   LIVE_EVENT_MAX_BYTES,
   type LiveEventIntakeService,
-} from "../../../../../../application/live-event-intake.js";
+} from "../../../../../../application/live-event-intake";
 
 export interface LiveEventRouteDependencies {
   readonly getIntake: () => LiveEventIntakeService | undefined;
@@ -24,7 +24,7 @@ export function createLiveEventRoute({ getIntake }: LiveEventRouteDependencies) 
       timestamp: request.headers.get("x-echohoard-timestamp"),
       body,
     });
-    if (result.status === "accepted" || result.status === "duplicate") {
+    if (result.status !== "rejected") {
       return Response.json({ status: result.status, receiptId: result.receiptId }, { status: 202 });
     }
     if (result.reason === "backpressure") {
