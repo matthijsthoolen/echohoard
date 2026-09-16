@@ -98,6 +98,11 @@ run_iteration() {
   wait_for_http "http://127.0.0.1:${host_port}/health" "ok"
   wait_for_http "http://127.0.0.1:${host_port}/ready" "ready"
 
+  echo "Checking packaged authenticated MCP transport"
+  ECHOHOARD_MCP_BASE_URL="http://127.0.0.1:${host_port}" \
+    ECHOHOARD_MCP_TOKEN="$(cat "$mcp_token_file")" \
+    pnpm test:mcp-transport
+
   echo "Starting packaged worker, killing it, and checking restart convergence"
   docker run --detach --name "$worker_container" --user 10002:10002 \
     --network "$network" --read-only --tmpfs /tmp \
@@ -164,7 +169,7 @@ run_iteration 2
 
 cat > "$report_file" <<EOF
 {
-  "story": "EH-10-05",
+  "story": "EHV2-10-05",
   "result": "passed",
   "iterations": 2,
   "database": "synthetic-postgresql-16",
@@ -175,7 +180,7 @@ cat > "$report_file" <<EOF
     "packaged web liveness and readiness",
     "packaged worker SIGKILL and restart status convergence",
     "synthetic import/media/search/conversation/health/statistics",
-    "seven in-process MCP tools and duplicate convergence"
+    "packaged authenticated MCP transport and seven-tool allowlist"
   ],
   "privateData": "not used"
 }

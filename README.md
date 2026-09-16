@@ -15,6 +15,7 @@ V1 implementation and private deployment work are in progress. Remaining V1 acce
 - [Validated initiative, feature, and story graph](docs/TASK_GRAPH.md)
 - [Upstream references](docs/UPSTREAM.md)
 - [Plane publication record](docs/PLANE.md)
+- [CI and production seam evidence](docs/ci.md)
 
 Implementation is assigned only through leaf stories. V1 uses `EH-xx-yy`; the required pre-real-data V1.1 foundation uses `EH-13-yy`; V2 uses `EHV2-xx-yy`. Feature/workstream records are trackers, not assignments to implement in one pass.
 
