@@ -20,7 +20,7 @@ describe("live event HTTP route", () => {
         headers: {
           "x-echohoard-account": "account-a",
           "x-echohoard-timestamp": timestamp,
-          "x-echohoard-signature": signLiveEvent(body, Number(timestamp), "secret"),
+          "x-echohoard-signature": signLiveEvent(body, Number(timestamp), "secret", "account-a"),
         },
         body,
       }),
@@ -28,7 +28,7 @@ describe("live event HTTP route", () => {
     expect(response.status).toBe(202);
     expect(accept).toHaveBeenCalledWith({
       accountKey: "account-a",
-      signature: signLiveEvent(body, Number(timestamp), "secret"),
+      signature: signLiveEvent(body, Number(timestamp), "secret", "account-a"),
       timestamp,
       body,
     });

@@ -95,7 +95,13 @@ export class LiveEventIntakeService {
     if (!account) return this.reject("unknown_account");
     if (
       !request.signature ||
-      !verifySignature(request.body, request.signature, timestamp, account.secret)
+      !verifySignature(
+        request.body,
+        request.signature,
+        timestamp,
+        request.accountKey,
+        account.secret,
+      )
     )
       return this.reject("invalid_signature");
 
@@ -138,9 +144,21 @@ export function stableReceiptId(accountKey: string, sourceEventKey: string): str
     .digest("hex");
 }
 
-export function signLiveEvent(body: Uint8Array, timestamp: number, secret: string): string {
+/**
+ * Sign the transport metadata together with the exact body. The account key is
+ * deliberately outside the JSON payload, so it must still be part of the
+ * authenticated input to prevent cross-account reassignment.
+ */
+export function signLiveEvent(
+  body: Uint8Array,
+  timestamp: number,
+  secret: string,
+  accountKey: string,
+): string {
   return `${LIVE_EVENT_SIGNATURE_HEADER}=${createHmac("sha256", secret)
     .update(String(timestamp))
+    .update(".")
+    .update(accountKey)
     .update(".")
     .update(body)
     .digest("hex")}`;
@@ -150,11 +168,12 @@ function verifySignature(
   body: Uint8Array,
   header: string,
   timestamp: number,
+  accountKey: string,
   secret: string,
 ): boolean {
   if (!/^sha256=[0-9a-f]{64}$/.test(header) || secret.length === 0) return false;
   const expected = Buffer.from(
-    signLiveEvent(body, timestamp, secret).slice("sha256=".length),
+    signLiveEvent(body, timestamp, secret, accountKey).slice("sha256=".length),
     "hex",
   );
   const supplied = Buffer.from(header.slice("sha256=".length), "hex");

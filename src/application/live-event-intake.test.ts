@@ -77,7 +77,7 @@ describe("signed live event intake", () => {
     const result = await intake.accept({
       accountKey: "account-a",
       timestamp: "1767225600",
-      signature: signLiveEvent(body, 1767225600, "secret"),
+      signature: signLiveEvent(body, 1767225600, "secret", "account-a"),
       body,
     });
     expect(result.status).toBe("accepted");
@@ -100,7 +100,7 @@ describe("signed live event intake", () => {
     const base = {
       accountKey: "account-a",
       timestamp: "1767225600",
-      signature: signLiveEvent(body, 1767225600, "secret"),
+      signature: signLiveEvent(body, 1767225600, "secret", "account-a"),
       body,
     };
     expect((await intake.accept({ ...base, body: new Uint8Array([...body, 1]) })).status).toBe(
@@ -113,7 +113,12 @@ describe("signed live event intake", () => {
         await intake.accept({
           ...base,
           body: new TextEncoder().encode("{}"),
-          signature: signLiveEvent(new TextEncoder().encode("{}"), 1767225600, "secret"),
+          signature: signLiveEvent(
+            new TextEncoder().encode("{}"),
+            1767225600,
+            "secret",
+            "account-a",
+          ),
         })
       ).status,
     ).toBe("rejected");
@@ -126,5 +131,11 @@ describe("signed live event intake", () => {
       "rejected:unknown_account",
       "rejected:invalid_payload",
     ]);
+  });
+
+  it("binds the account key to the signed transport input", () => {
+    expect(signLiveEvent(body, 1767225600, "secret", "account-a")).not.toBe(
+      signLiveEvent(body, 1767225600, "secret", "account-b"),
+    );
   });
 });

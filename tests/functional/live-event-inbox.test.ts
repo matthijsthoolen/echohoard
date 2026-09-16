@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import {
   PrismaLiveEventInboxPersistence,
   PrismaLiveEventNormalizer,
+  PrismaLiveEventAccountResolver,
 } from "../../src/infrastructure/db/prisma-persistence.js";
 import {
   parseWacliWebhookEvent,
@@ -36,6 +37,7 @@ const userId = randomUUID();
 const archiveId = randomUUID();
 const otherArchiveId = randomUUID();
 const accountId = randomUUID();
+const sameArchiveOtherAccountId = randomUUID();
 const otherAccountId = randomUUID();
 
 function input(archive: string, account: string, receiptId: string, maxPending = 10) {
@@ -73,6 +75,12 @@ describe("live event inbox PostgreSQL durability", () => {
     await prisma.ownedAccount.createMany({
       data: [
         { id: accountId, archiveId, accountKey: `account-${accountId}`, liveEnabled: true },
+        {
+          id: sameArchiveOtherAccountId,
+          archiveId,
+          accountKey: `account-${sameArchiveOtherAccountId}`,
+          liveEnabled: true,
+        },
         { id: otherAccountId, archiveId: otherArchiveId, accountKey: `account-${otherAccountId}` },
       ],
     });
@@ -166,10 +174,7 @@ describe("live event inbox PostgreSQL durability", () => {
     const body = new TextEncoder().encode(JSON.stringify(event));
     const timestamp = Math.floor(Date.now() / 1000);
     const intake = new LiveEventIntakeService(
-      {
-        resolve: async (key) =>
-          key === accountKey ? { archiveId, ownedAccountId: accountId, secret } : null,
-      },
+      new PrismaLiveEventAccountResolver(prisma, archiveId, secret),
       inbox,
       new CountingLiveEventMetrics(),
       {
@@ -185,17 +190,29 @@ describe("live event inbox PostgreSQL durability", () => {
       },
     );
     const route = createLiveEventRoute({ getIntake: () => intake });
-    const response = await route(
+    const request = () =>
       new Request(`http://web:3000/api/internal/live-events?account=${accountKey}`, {
         method: "POST",
         headers: {
           "x-echohoard-timestamp": String(timestamp),
-          "x-echohoard-signature": signLiveEvent(body, timestamp, secret),
+          "x-echohoard-signature": signLiveEvent(body, timestamp, secret, accountKey),
         },
         body,
-      }),
-    );
+      });
+    const response = await route(request());
+    const retry = await route(request());
     expect(response.status).toBe(202);
+    expect(retry.status).toBe(202);
+    const accepted = (await response.json()) as {
+      readonly receiptId: string;
+      readonly status: string;
+    };
+    const duplicate = (await retry.json()) as {
+      readonly receiptId: string;
+      readonly status: string;
+    };
+    expect(accepted.status).toBe("accepted");
+    expect(duplicate).toEqual({ status: "duplicate", receiptId: accepted.receiptId });
     const receipt = await prisma.liveEventInbox.findFirstOrThrow({
       where: {
         archiveId,
@@ -204,6 +221,7 @@ describe("live event inbox PostgreSQL durability", () => {
       },
       orderBy: { createdAt: "desc" },
     });
+    expect(receipt.receiptId).toBe(accepted.receiptId);
     expect(
       (
         await normalizer.normalize({
@@ -221,6 +239,53 @@ describe("live event inbox PostgreSQL durability", () => {
         },
       }),
     ).toBe(1);
+  });
+
+  it("rejects a valid account-A signature when the route assigns the event to account B", async () => {
+    const accountAKey = `account-${accountId}`;
+    const accountBKey = `account-${sameArchiveOtherAccountId}`;
+    const secret = "synthetic-webhook-secret";
+    const event = {
+      Chat: "15550000001@s.whatsapp.net",
+      ID: `synthetic-cross-account-${randomUUID()}`,
+      SenderJID: "15550000001@s.whatsapp.net",
+      Timestamp: "2026-01-01T00:00:00.000Z",
+      FromMe: false,
+      Text: "must not be reassigned",
+    };
+    const body = new TextEncoder().encode(JSON.stringify(event));
+    const timestamp = Math.floor(Date.now() / 1000);
+    const intake = new LiveEventIntakeService(
+      new PrismaLiveEventAccountResolver(prisma, archiveId, secret),
+      inbox,
+      new CountingLiveEventMetrics(),
+      {
+        validate: (payload, key) => {
+          const parsed = parseWacliWebhookEvent(payload, key);
+          return {
+            kind: parsed.kind,
+            sourceEventKey: parsed.sourceEventKey,
+            observedAt: parsed.observedAt,
+            payload: JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>,
+          };
+        },
+      },
+    );
+    const route = createLiveEventRoute({ getIntake: () => intake });
+    const response = await route(
+      new Request(`http://web:3000/api/internal/live-events?account=${accountBKey}`, {
+        method: "POST",
+        headers: {
+          "x-echohoard-timestamp": String(timestamp),
+          "x-echohoard-signature": signLiveEvent(body, timestamp, secret, accountAKey),
+        },
+        body,
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: "invalid_signature" });
+    expect(await prisma.liveEventInbox.count({ where: { archiveId } })).toBe(0);
   });
 
   it("terminates poison receipts without starving later valid receipts", async () => {
