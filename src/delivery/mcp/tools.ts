@@ -12,8 +12,8 @@ import {
   type ReadPorts,
   type SearchResultRead,
   type TimelineRead,
-} from "../../application/reads.js";
-import type { ArchiveHealthRead } from "../../application/health-reads.js";
+} from "../../application/reads";
+import type { ArchiveHealthRead } from "../../application/health-reads";
 
 export const MCP_MAX_SEARCH_TEXT = 5000;
 export const MCP_MAX_CURSOR_LENGTH = MAX_CURSOR_LENGTH;
@@ -719,7 +719,7 @@ function resultForSearch(
 }
 
 function resultForPeople(
-  result: ReadPage<import("../../application/reads.js").PersonRead>,
+  result: ReadPage<import("../../application/reads").PersonRead>,
   provenance: McpProvenance,
 ): CallToolResult {
   const items = result.items.slice(0, MAX_READ_LIMIT).map((item) => ({

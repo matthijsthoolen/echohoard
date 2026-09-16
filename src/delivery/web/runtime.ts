@@ -7,6 +7,7 @@ import type { LiveEventIntakeService } from "../../application/live-event-intake
 import type { TranscriptionSettingsService } from "../../application/transcription-catalog.js";
 import type { AccountSettingsServicePort } from "../../application/account-pairing.js";
 import type { ConversationGroupingService } from "../../application/conversation-grouping.js";
+import type { PrivateMcpServer } from "../../delivery/mcp/index";
 import { productionWebRuntime } from "./composition";
 
 export type WebReadServices = Pick<
@@ -22,6 +23,8 @@ export type WebReadServices = Pick<
 export interface WebRuntime {
   readonly auth: WebAuthBoundary;
   readonly reads: WebReadServices;
+  /** Packaged private transport; it is absent from test runtimes by default. */
+  readonly mcp?: PrivateMcpServer;
   readonly media?: MediaDeliveryPort;
   readonly liveEventIntake: LiveEventIntakeService;
   readonly transcription?: TranscriptionSettingsService;

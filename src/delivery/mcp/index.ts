@@ -5,23 +5,25 @@ import {
   type McpServer as McpServerType,
 } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import type { ArchivePrincipal } from "../../application/auth.js";
-import type { ReadPorts } from "../../application/reads.js";
+import type { ArchivePrincipal } from "../../application/auth";
+import type { ReadPorts } from "../../application/reads";
 import {
   assertMcpToolAllowlist,
   registerArchiveReadTools,
   registerConversationReadTools,
+  MCP_MAX_PAYLOAD_BYTES,
   type McpAuditPrincipal,
   type McpAuditSink,
-} from "./tools.js";
-import type { McpHealthService } from "./tools.js";
-export * from "./tools.js";
+} from "./tools";
+import type { McpHealthService } from "./tools";
+export * from "./tools";
 
 export const mcpDelivery = "mcp";
 export const MCP_SERVER_NAME = "echohoard-private-readonly";
 export const MCP_SERVER_VERSION = "0.1.0";
 export const MCP_SESSION_HEADER = "mcp-session-id";
 export const MCP_MAX_CREDENTIAL_BYTES = 4096;
+export const MCP_MAX_REQUEST_BYTES = MCP_MAX_PAYLOAD_BYTES;
 
 export type McpPrincipal = Readonly<ArchivePrincipal>;
 
@@ -110,9 +112,9 @@ type McpSession = {
 };
 
 /**
- * Private Streamable HTTP composition root. EH-09-01 intentionally registers
- * no tools yet; later stories add read mappings through `reads`, never SQL or
- * filesystem handlers in this delivery module.
+ * Private Streamable HTTP composition root. Read mappings are supplied through
+ * application ports; this delivery module never reaches SQL or filesystem
+ * handlers.
  */
 export class PrivateMcpServer {
   private readonly sessions = new Map<string, McpSession>();
@@ -218,9 +220,22 @@ function isPrincipal(value: McpPrincipal): boolean {
 }
 
 function unauthorized(): Response {
-  return Response.json({ error: "MCP authentication failed" }, { status: 401 });
+  return Response.json(
+    { error: "MCP authentication failed" },
+    { status: 401, headers: privateErrorHeaders() },
+  );
 }
 
 function notFound(): Response {
-  return Response.json({ error: "MCP session not found" }, { status: 404 });
+  return Response.json(
+    { error: "MCP session not found" },
+    { status: 404, headers: privateErrorHeaders() },
+  );
+}
+
+function privateErrorHeaders(): HeadersInit {
+  return {
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+  };
 }

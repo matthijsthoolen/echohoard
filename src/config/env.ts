@@ -9,6 +9,10 @@ const schema = z.object({
   OIDC_SUBJECT: z.string().min(1).optional(),
   OIDC_ARCHIVE_ID: z.string().uuid().optional(),
   OIDC_CLIENT_SECRET_FILE: z.string().min(1).optional(),
+  ECHOHOARD_MCP_CREDENTIAL_FILE: z.string().min(1).optional(),
+  ECHOHOARD_MCP_USER_ID: z.string().min(1).optional(),
+  ECHOHOARD_MCP_SUBJECT: z.string().min(1).optional(),
+  ECHOHOARD_MCP_ISSUER: z.string().url().optional(),
   LITELLM_BASE_URL: z.string().url().optional(),
   LITELLM_API_KEY_FILE: z.string().min(1).optional(),
   ECHOHOARD_TRANSCRIPTION_MODELS: z.string().default(""),
@@ -53,6 +57,12 @@ export function parseEnv(input: NodeJS.ProcessEnv = process.env): EchohoardEnv {
     OIDC_ARCHIVE_ID: input.OIDC_ARCHIVE_ID ?? input.ECHOHOARD_OIDC_ARCHIVE_ID,
     OIDC_CLIENT_SECRET_FILE:
       input.OIDC_CLIENT_SECRET_FILE ?? input.ECHOHOARD_OIDC_CLIENT_SECRET_FILE,
+    ECHOHOARD_MCP_CREDENTIAL_FILE:
+      input.ECHOHOARD_MCP_CREDENTIAL_FILE ??
+      `${input.ECHOHOARD_SECRET_DIR ?? "/run/echohoard/secrets"}/mcp-read-token`,
+    ECHOHOARD_MCP_USER_ID: input.ECHOHOARD_MCP_USER_ID,
+    ECHOHOARD_MCP_SUBJECT: input.ECHOHOARD_MCP_SUBJECT,
+    ECHOHOARD_MCP_ISSUER: input.ECHOHOARD_MCP_ISSUER,
     LITELLM_BASE_URL: input.LITELLM_BASE_URL ?? input.ECHOHOARD_LITELLM_BASE_URL,
     LITELLM_API_KEY_FILE: input.LITELLM_API_KEY_FILE ?? input.ECHOHOARD_LITELLM_API_KEY_FILE,
     ECHOHOARD_TRANSCRIPTION_MODELS: input.ECHOHOARD_TRANSCRIPTION_MODELS,

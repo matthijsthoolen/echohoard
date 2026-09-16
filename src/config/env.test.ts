@@ -38,6 +38,22 @@ describe("environment configuration", () => {
     expect("UNRELATED" in parsed).toBe(false);
   });
 
+  it("derives the MCP credential mount from the secret directory and keeps principal metadata explicit", () => {
+    expect(
+      parseEnv({
+        ECHOHOARD_SECRET_DIR: "/run/echohoard/secrets",
+        ECHOHOARD_MCP_USER_ID: "owner",
+        ECHOHOARD_MCP_SUBJECT: "mcp-client",
+        ECHOHOARD_MCP_ISSUER: "https://auth.example.test/",
+      }),
+    ).toMatchObject({
+      ECHOHOARD_MCP_CREDENTIAL_FILE: "/run/echohoard/secrets/mcp-read-token",
+      ECHOHOARD_MCP_USER_ID: "owner",
+      ECHOHOARD_MCP_SUBJECT: "mcp-client",
+      ECHOHOARD_MCP_ISSUER: "https://auth.example.test/",
+    });
+  });
+
   it("rejects malformed OIDC URLs and empty identifiers", () => {
     expect(() => parseEnv({ OIDC_ISSUER: "not-a-url" })).toThrow();
     expect(() => parseEnv({ OIDC_CLIENT_ID: "" })).toThrow();

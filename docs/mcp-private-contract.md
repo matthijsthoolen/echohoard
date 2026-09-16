@@ -29,6 +29,18 @@ content, mutates an archive, or exposes raw SQL/database access.
 
 ## Private deployment requirements
 
+The packaged production route is `/mcp` on the private web role. It uses the
+official Streamable HTTP transport and is not a separately published service
+or public listener.
+
+The web role receives `ECHOHOARD_MCP_CREDENTIAL_FILE` as a mounted file (by
+default `/run/echohoard/secrets/mcp-read-token`; the generic Compose example
+uses `ECHOHOARD_MCP_CREDENTIAL_HOST_FILE` only to locate that file on the host).
+The non-secret
+`ECHOHOARD_MCP_USER_ID`, `ECHOHOARD_MCP_SUBJECT`, and `ECHOHOARD_MCP_ISSUER`
+settings identify the single principal bound to `OIDC_ARCHIVE_ID`; incomplete
+principal configuration fails closed.
+
 The deployment owner must provide the following without placing credentials in
 the repository, images, command arguments, logs, tool output, or client
 configuration committed to source control:

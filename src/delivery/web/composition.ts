@@ -43,6 +43,7 @@ import {
 } from "../../infrastructure/db/prisma-persistence";
 import { parseWacliWebhookEvent } from "../../adapters/wacli/contract";
 import { normalizeWacliEvent } from "../../adapters/wacli/normalize";
+import { createPrivateMcpServer, McpCredentialAuthenticator } from "../../delivery/mcp/index";
 
 let activeProductionRuntime: WebRuntime | undefined;
 export function productionWebRuntime(): WebRuntime {
@@ -74,6 +75,8 @@ export function createProductionWebRuntime(): WebRuntime {
     ),
   );
   const reads = new ArchiveReadService(new PrismaReadPersistence(prisma), new CursorCodec(secret));
+  const health = new ArchiveHealthService(new PrismaHealthReadPersistence(prisma));
+  const mcp = createProductionMcpServer(settings, reads, health);
   const accountSettings = createProductionAccountSettings(
     prisma,
     persistence.ownedAccounts,
@@ -104,17 +107,54 @@ export function createProductionWebRuntime(): WebRuntime {
       listPeople: (query) => reads.listPeople(query),
       listMessages: (query) => reads.listMessages(query),
       search: (query) => reads.search(query),
-      archiveHealth: (query) =>
-        new ArchiveHealthService(new PrismaHealthReadPersistence(prisma)).getArchiveHealth(query),
+      archiveHealth: (query) => health.getArchiveHealth(query),
       archiveStatistics: (query) =>
         new ArchiveStatisticsService(new PrismaStatisticsPersistence(prisma)).getStatistics(query),
     },
+    mcp,
     media: new PrismaMediaDelivery(prisma, `${process.env.ECHOHOARD_DATA_DIR ?? "/data"}/media`),
     transcription: new OwnerTranscriptionSettings(persistence.transcriptionSettings, catalog),
     grouping: new ConversationGroupingService(new PrismaConversationGroupingPersistence(prisma)),
     accountSettings,
     liveEventIntake,
   };
+}
+
+function createProductionMcpServer(
+  settings: EchohoardEnv,
+  reads: ArchiveReadService,
+  health: ArchiveHealthService,
+) {
+  if (
+    !settings.ECHOHOARD_MCP_CREDENTIAL_FILE ||
+    !settings.ECHOHOARD_MCP_USER_ID ||
+    !settings.ECHOHOARD_MCP_SUBJECT ||
+    !settings.ECHOHOARD_MCP_ISSUER ||
+    !settings.OIDC_ARCHIVE_ID
+  )
+    throw new Error("MCP configuration is incomplete");
+
+  return createPrivateMcpServer({
+    authenticator: new McpCredentialAuthenticator(settings.ECHOHOARD_MCP_CREDENTIAL_FILE, {
+      userId: settings.ECHOHOARD_MCP_USER_ID,
+      archiveId: settings.OIDC_ARCHIVE_ID,
+      subject: settings.ECHOHOARD_MCP_SUBJECT,
+      issuer: settings.ECHOHOARD_MCP_ISSUER,
+    }),
+    reads,
+    health,
+    audit: (record) => {
+      productionAuthDiagnostic("mcp.tool", {
+        tool: record.tool,
+        user_id: record.principal.userId,
+        archive_id: record.principal.archiveId,
+        duration_ms: record.durationMs,
+        item_count: record.itemCount,
+        payload_bytes: record.payloadBytes,
+        status: record.status,
+      });
+    },
+  });
 }
 
 export function createProductionLiveEventIntake(
