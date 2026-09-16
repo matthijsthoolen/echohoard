@@ -47,6 +47,10 @@ export interface TranscriptPort extends ArchiveScopedPort {}
 export interface TranscriptionRequestPort extends ArchiveScopedPort {}
 export interface TranscriptionRunPort extends ArchiveScopedPort {}
 export interface TranscriptVersionPort extends ArchiveScopedPort {}
+export interface TranscriptionSettingsPort {
+  get(archiveId: ArchiveId): Promise<string | null>;
+  set(archiveId: ArchiveId, modelId: string | null): Promise<string | null>;
+}
 
 export interface LiveEventInboxRecord extends PersistenceRecord {
   readonly id: string;
@@ -107,6 +111,7 @@ export interface PersistencePorts {
   transcriptionRuns: TranscriptionRunPort;
   transcriptVersions: TranscriptVersionPort;
   liveEventInbox: LiveEventInboxPort;
+  transcriptionSettings: TranscriptionSettingsPort;
   conversationObservations: ObservationPort;
   messageObservations: ObservationPort;
   revisionObservations: ObservationPort;

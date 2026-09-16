@@ -4,6 +4,7 @@ import type { ArchiveStatisticsRead } from "../../application/statistics.js";
 import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
 import type { LiveEventIntakeService } from "../../application/live-event-intake.js";
+import type { TranscriptionSettingsService } from "../../application/transcription-catalog.js";
 import { productionWebRuntime } from "./composition";
 
 export type WebReadServices = Pick<
@@ -21,6 +22,7 @@ export interface WebRuntime {
   readonly reads: WebReadServices;
   readonly media?: MediaDeliveryPort;
   readonly liveEventIntake?: LiveEventIntakeService;
+  readonly transcription?: TranscriptionSettingsService;
 }
 
 let activeRuntime: WebRuntime | undefined;

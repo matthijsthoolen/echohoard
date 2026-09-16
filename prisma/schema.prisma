@@ -57,6 +57,7 @@ model Archive {
   unlockGrants                    UnlockGrant[]
   privacyAudits                   ConversationPrivacyAudit[]
   liveEventInbox                  LiveEventInbox[]
+  transcriptionModel              String?
 
   @@unique([id, userId])
   @@unique([userId, name])
