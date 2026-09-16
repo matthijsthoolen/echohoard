@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [master]
+  workflow_call:
 
 permissions:
   contents: read
@@ -19,6 +20,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -47,6 +50,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -69,6 +74,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -89,6 +96,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:
@@ -111,6 +120,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
         with:

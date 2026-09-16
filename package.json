@@ -35,6 +35,7 @@
     "test:container-acceptance": "bash scripts/test-container-acceptance.sh",
     "test:wacli-sidecar": "sh scripts/test-wacli-sidecar.sh",
     "test:compose-lifecycle": "sh scripts/test-compose-lifecycle.sh",
+    "test:release-workflow": "vitest run tests/release-workflow.test.ts",
     "profile:viewer-memory": "node scripts/profile-viewer-memory.mjs",
     "supply-chain:verify": "node scripts/verify-supply-chain.mjs",
     "supply-chain:rollback": "node scripts/rollback-dry-run.mjs",
