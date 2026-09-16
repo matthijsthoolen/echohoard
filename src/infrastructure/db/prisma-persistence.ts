@@ -43,7 +43,7 @@ import {
   type ConversationPrivacyPersistence,
   type ConversationPrivacyPolicy,
   type UpdateConversationPrivacyRequest,
-} from "../../application/conversation-privacy.js";
+} from "../../application/conversation-privacy";
 
 type Delegate = {
   findUnique(args: never): Promise<unknown>;
