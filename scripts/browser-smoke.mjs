@@ -98,14 +98,14 @@ const main = async () => {
     if (anonymousMedia.status !== 401)
       throw new Error(`anonymous media status was ${anonymousMedia.status}`);
     const anonymousAccounts = await fetch(`${baseUrl}/api/admin/accounts`);
-    if (![403, 503].includes(anonymousAccounts.status))
+    if (anonymousAccounts.status !== 403)
       throw new Error(`anonymous account settings status was ${anonymousAccounts.status}`);
     if (anonymousAccounts.headers.get("cache-control") !== "private, no-store")
       throw new Error("anonymous account settings response was cacheable");
     const anonymousPairing = await fetch(
       `${baseUrl}/api/admin/accounts/synthetic-account/pair?sessionId=synthetic-session`,
     );
-    if (![403, 503].includes(anonymousPairing.status))
+    if (anonymousPairing.status !== 403)
       throw new Error(`anonymous pairing status was ${anonymousPairing.status}`);
     if (anonymousPairing.headers.get("cache-control") !== "private, no-store")
       throw new Error("anonymous pairing response was cacheable");

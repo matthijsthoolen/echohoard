@@ -13,9 +13,9 @@ export interface AdminAccountRouteDependencies {
 export function createAdminAccountGetRoute({ getRuntime }: AdminAccountRouteDependencies) {
   return async function GET(request: Request, context: Context): Promise<Response> {
     const runtime = getRuntime();
-    if (!runtime?.accountSettings) return unavailable();
-    const principal = await runtime.auth.principalForRequest(request);
+    const principal = await runtime?.auth.principalForRequest(request);
     if (!principal || principal.role !== "admin") return forbidden();
+    if (!runtime.accountSettings) return unavailable();
     const { accountId } = await context.params;
     try {
       const account = await runtime.accountSettings.read(principal.archiveId, accountId);
@@ -29,9 +29,9 @@ export function createAdminAccountGetRoute({ getRuntime }: AdminAccountRouteDepe
 export function createAdminAccountActionRoute({ getRuntime }: AdminAccountRouteDependencies) {
   return async function POST(request: Request, context: Context): Promise<Response> {
     const runtime = getRuntime();
-    if (!runtime?.accountSettings) return unavailable();
-    const principal = await runtime.auth.principalForRequest(request);
+    const principal = await runtime?.auth.principalForRequest(request);
     if (!principal || principal.role !== "admin") return forbidden();
+    if (!runtime.accountSettings) return unavailable();
     const input = await parseAction(request);
     if (!input) return error("Invalid account action", 400);
     const { accountId } = await context.params;
@@ -70,6 +70,7 @@ function mapError(caught: unknown): Response {
   const message = caught instanceof Error ? caught.message : "";
   if (message === "account not found") return error(message, 404);
   if (message === "pause confirmation required") return error(message, 409);
+  if (message === "account is not paired") return error(message, 409);
   return unavailable();
 }
 

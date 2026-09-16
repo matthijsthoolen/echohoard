@@ -9,6 +9,7 @@ services:
     environment:
       NODE_ENV: production
       ECHOHOARD_ROLE: web
+      ECHOHOARD_WACLI_CONTROL_URL: ${ECHOHOARD_WACLI_CONTROL_URL:-http://wacli-control:8080/}
       DATABASE_URL: ${ECHOHOARD_DATABASE_URL:-postgresql://echohoard:replace-me@postgres.example.invalid:5432/echohoard?schema=public}
     ports:
       - "${ECHOHOARD_HTTP_PORT:-3000}:3000"

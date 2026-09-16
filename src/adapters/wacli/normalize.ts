@@ -5,15 +5,15 @@ import type {
   ImportRecord,
   ImportRevisionRecord,
   ImportAttachmentRecord,
-} from "../../application/text-import.js";
-import type { WacliMessageEvent, WacliWebhookEvent } from "./contract.js";
+} from "../../application/text-import";
+import type { WacliMessageEvent, WacliWebhookEvent } from "./contract";
 import {
   whatsappConversationKey,
   whatsappIdentityKey,
   whatsappMessageKey,
   whatsappPersonKey,
   WHATSAPP_SOURCE_NAMESPACE,
-} from "../whatsapp/identity.js";
+} from "../whatsapp/identity";
 
 const source = (value: string) => ({ namespace: WHATSAPP_SOURCE_NAMESPACE, value });
 

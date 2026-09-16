@@ -43,8 +43,10 @@ type PairingSession = {
   readonly archiveId: string;
   readonly accountId: string;
   readonly accountKey: string;
-  readonly qr: string;
+  qr?: string;
   readonly qrExpiresAt: Date;
+  state: "awaiting_qr" | "connected" | "expired";
+  followSyncStart?: Promise<void>;
 };
 
 /** Process-local pairing state. QR material deliberately never reaches a
@@ -74,7 +76,10 @@ export class PairingSessionController {
       if (existing.archiveId === archiveId && existing.accountId === accountId)
         this.sessions.delete(sessionId);
     }
-    if (this.sessions.size >= this.maxSessions) throw new Error("pairing capacity reached");
+    const activeSessions = [...this.sessions.values()].filter(
+      (session) => session.state === "awaiting_qr",
+    ).length;
+    if (activeSessions >= this.maxSessions) throw new Error("pairing capacity reached");
     const result = await this.sidecar.pair(account.accountKey);
     if (new TextEncoder().encode(result.qr).byteLength > MAX_PAIRING_QR_BYTES)
       throw new Error("pairing QR exceeds limit");
@@ -86,6 +91,7 @@ export class PairingSessionController {
       accountKey: account.accountKey,
       qr: result.qr,
       qrExpiresAt,
+      state: "awaiting_qr",
     };
     this.sessions.set(session.sessionId, session);
     return this.read(session, current.connection, "awaiting_qr");
@@ -99,11 +105,36 @@ export class PairingSessionController {
     this.prune();
     const session = this.sessions.get(sessionId);
     if (!session || session.archiveId !== archiveId || session.accountId !== accountId) return null;
-    const health = await this.safeHealth(session.accountKey);
-    if (health.connection === "connected")
+    if (session.state === "expired") return this.read(session, "disconnected", "expired");
+    if (session.state === "connected") {
+      const health = await this.safeHealth(session.accountKey);
       return this.read(session, health.connection, "connected");
-    if (this.now().getTime() >= session.qrExpiresAt.getTime())
+    }
+    if (this.now().getTime() >= session.qrExpiresAt.getTime()) {
+      this.expire(session);
+      return this.read(session, "disconnected", "expired");
+    }
+    const health = await this.safeHealth(session.accountKey);
+    if (this.now().getTime() >= session.qrExpiresAt.getTime()) {
+      this.expire(session);
       return this.read(session, health.connection, "expired");
+    }
+    if (health.connection === "connected") {
+      try {
+        session.followSyncStart ??= this.sidecar.startFollowSync(session.accountKey);
+        await session.followSyncStart;
+      } catch {
+        // Pairing succeeded, but capture must stay disabled until the fixed
+        // follow-sync operation is ready. A later status poll may retry it.
+        delete session.followSyncStart;
+        delete session.qr;
+        return this.read(session, health.connection, "awaiting_qr");
+      }
+      delete session.followSyncStart;
+      session.state = "connected";
+      delete session.qr;
+      return this.read(session, health.connection, "connected");
+    }
     return this.read(session, health.connection, "awaiting_qr");
   }
 
@@ -117,7 +148,7 @@ export class PairingSessionController {
       accountId: session.accountId,
       state,
       qrExpiresAt: session.qrExpiresAt.toISOString(),
-      ...(state === "awaiting_qr" ? { qr: session.qr } : {}),
+      ...(state === "awaiting_qr" && session.qr !== undefined ? { qr: session.qr } : {}),
       connection,
     };
   }
@@ -138,8 +169,15 @@ export class PairingSessionController {
   private prune(): void {
     const now = this.now().getTime();
     for (const [id, session] of this.sessions) {
+      if (session.state === "awaiting_qr" && session.qrExpiresAt.getTime() <= now)
+        this.expire(session);
       if (session.qrExpiresAt.getTime() < now - PAIRING_SESSION_TTL_MS) this.sessions.delete(id);
     }
+  }
+
+  private expire(session: PairingSession): void {
+    session.state = "expired";
+    delete session.qr;
   }
 }
 
@@ -215,11 +253,14 @@ export class AccountSettingsService implements AccountSettingsServicePort {
     const account = await this.accounts.findById(archiveId, accountId);
     if (!account) throw new Error("account not found");
     if (input.rePair && !input.confirm) throw new Error("pairing confirmation required");
+    if (input.rePair) {
+      await this.sidecar.stopFollowSync(accountRecord(account).accountKey);
+      await this.accounts.update(archiveId, accountId, {
+        liveEnabled: false,
+        pausedAt: this.now(),
+      });
+    }
     const result = await this.pairing.begin(archiveId, accountId, input.rePair);
-    await this.accounts.update(archiveId, accountId, {
-      liveEnabled: true,
-      pausedAt: null,
-    });
     return result;
   }
 
@@ -230,7 +271,11 @@ export class AccountSettingsService implements AccountSettingsServicePort {
   ): Promise<PairingSessionRead | null> {
     return this.pairing.status(archiveId, accountId, sessionId).then(async (result) => {
       if (result?.state === "connected")
-        await this.accounts.update(archiveId, accountId, { pairedAt: this.now() });
+        await this.accounts.update(archiveId, accountId, {
+          liveEnabled: true,
+          pairedAt: this.now(),
+          pausedAt: null,
+        });
       return result;
     });
   }
@@ -252,6 +297,7 @@ export class AccountSettingsService implements AccountSettingsServicePort {
 
   public async resume(archiveId: string, accountId: string): Promise<AccountSettingsRead> {
     const account = await this.requireAccount(archiveId, accountId);
+    if (!account.pairedAt) throw new Error("account is not paired");
     await this.sidecar.startFollowSync(account.accountKey);
     const updated = await this.accounts.update(archiveId, accountId, {
       liveEnabled: true,

@@ -321,7 +321,10 @@ function LiveAccountsSettings({
           if (!response.ok) throw new Error("pairing status unavailable");
           return (await response.json()) as PairingSession;
         })
-        .then(setPairing, () => undefined);
+        .then(setPairing, () => {
+          setPairing(null);
+          setMessage("Pairing status is temporarily unavailable. The QR session was closed.");
+        });
     }, 2_000);
     return () => window.clearInterval(timer);
   }, [pairing]);
@@ -443,7 +446,9 @@ function LiveAccountsSettings({
           <p>
             {pairing.state === "expired"
               ? "This QR code expired. Start a new pairing session."
-              : pairing.state}
+              : pairing.state === "awaiting_qr" && !pairing.qr
+                ? "Pairing succeeded; waiting for live capture to become ready."
+                : pairing.state}
           </p>
           {pairing.state === "expired" ? (
             <button type="button" className="button" onClick={() => setPairing(null)}>

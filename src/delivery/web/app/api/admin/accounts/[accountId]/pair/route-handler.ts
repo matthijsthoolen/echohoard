@@ -16,9 +16,9 @@ export interface AdminPairingRouteDependencies {
 export function createAdminPairingRoute({ getRuntime }: AdminPairingRouteDependencies) {
   return async function POST(request: Request, context: Context): Promise<Response> {
     const runtime = getRuntime();
-    if (!runtime?.accountSettings) return unavailable();
-    const principal = await runtime.auth.principalForRequest(request);
+    const principal = await runtime?.auth.principalForRequest(request);
     if (!principal || principal.role !== "admin") return forbidden();
+    if (!runtime.accountSettings) return unavailable();
     const input = await parseInput(request);
     if (!input) return error("Invalid pairing request", 400);
     try {
@@ -36,12 +36,11 @@ export function createAdminPairingRoute({ getRuntime }: AdminPairingRouteDepende
 export function createAdminPairingStatusRoute({ getRuntime }: AdminPairingRouteDependencies) {
   return async function GET(request: Request, context: Context): Promise<Response> {
     const runtime = getRuntime();
-    if (!runtime?.accountSettings) return unavailable();
-    const principal = await runtime.auth.principalForRequest(request);
+    const principal = await runtime?.auth.principalForRequest(request);
     if (!principal || principal.role !== "admin") return forbidden();
+    if (!runtime.accountSettings) return unavailable();
     const sessionId = new URL(request.url).searchParams.get("sessionId");
-    if (!sessionId || sessionId.length > 128)
-      return Response.json({ error: "sessionId is required" }, { status: 400 });
+    if (!sessionId || sessionId.length > 128) return error("sessionId is required", 400);
     const { accountId } = await context.params;
     try {
       const pairing = await runtime.accountSettings.pairingStatus(

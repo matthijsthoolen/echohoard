@@ -84,10 +84,12 @@ describe("owned account pairing and settings", () => {
     expect(started.qrExpiresAt).toBe(
       new Date(now.getTime() + PAIRING_SESSION_TTL_MS).toISOString(),
     );
+    sidecar.connection = "connected";
     now = new Date(now.getTime() + PAIRING_SESSION_TTL_MS + 1);
     const expired = await controller.status("archive-1", "account-1", started.sessionId);
     expect(expired).toMatchObject({ state: "expired" });
     expect(expired).not.toHaveProperty("qr");
+    expect(sidecar.calls).not.toContain("start-follow-sync");
     expect(await controller.status("other-archive", "account-1", started.sessionId)).toBeNull();
   });
 
@@ -107,6 +109,19 @@ describe("owned account pairing and settings", () => {
     const second = await controller.begin("archive-1", "account-1");
     expect(second.sessionId).not.toBe(first.sessionId);
     expect(await controller.status("archive-1", "account-1", first.sessionId)).toBeNull();
+  });
+
+  it("starts follow-sync before reporting a successful pairing", async () => {
+    const sidecar = new FakeSidecar();
+    const controller = new PairingSessionController(new FakeAccounts(), sidecar);
+    const started = await controller.begin("archive-1", "account-1");
+    sidecar.connection = "connected";
+
+    const status = await controller.status("archive-1", "account-1", started.sessionId);
+
+    expect(status).toMatchObject({ state: "connected" });
+    expect(sidecar.calls).toEqual(["health", "pair", "health", "start-follow-sync"]);
+    expect(status).not.toHaveProperty("qr");
   });
 
   it("separates connection, durable receipt, normalization, and backup health", async () => {
@@ -132,6 +147,7 @@ describe("owned account pairing and settings", () => {
 
   it("requires pause confirmation and uses only fixed follow-sync controls", async () => {
     const accounts = new FakeAccounts();
+    accounts.row = account({ pairedAt: new Date("2026-01-01T00:00:00Z") });
     const sidecar = new FakeSidecar();
     const service = new AccountSettingsService(
       accounts,
@@ -171,5 +187,74 @@ describe("owned account pairing and settings", () => {
     });
     expect(pairing.qr).toBe("synthetic-qr");
     expect(await service.pairingStatus("other-archive", "account-1", pairing.sessionId)).toBeNull();
+  });
+
+  it("does not enable capture while waiting for pairing", async () => {
+    const accounts = new FakeAccounts();
+    accounts.row = account({ liveEnabled: false });
+    const sidecar = new FakeSidecar();
+    const service = new AccountSettingsService(
+      accounts,
+      pipeline,
+      sidecar,
+      new PairingSessionController(accounts, sidecar),
+    );
+
+    const pairing = await service.beginPairing("archive-1", "account-1", {
+      confirm: false,
+      rePair: false,
+    });
+    expect(pairing.state).toBe("awaiting_qr");
+    expect(accounts.row.liveEnabled).toBe(false);
+    expect(accounts.updates).toHaveLength(0);
+
+    sidecar.connection = "connected";
+    await service.pairingStatus("archive-1", "account-1", pairing.sessionId);
+    expect(accounts.row.liveEnabled).toBe(true);
+    expect(sidecar.calls).toContain("start-follow-sync");
+  });
+
+  it("keeps capture disabled when follow-sync setup fails and retries safely", async () => {
+    const accounts = new FakeAccounts();
+    accounts.row = account({ liveEnabled: false });
+    const sidecar = new FakeSidecar();
+    vi.spyOn(sidecar, "startFollowSync")
+      .mockRejectedValueOnce(new Error("sidecar is restarting"))
+      .mockResolvedValueOnce();
+    const service = new AccountSettingsService(
+      accounts,
+      pipeline,
+      sidecar,
+      new PairingSessionController(accounts, sidecar),
+    );
+    const pairing = await service.beginPairing("archive-1", "account-1", {
+      confirm: false,
+      rePair: false,
+    });
+    sidecar.connection = "connected";
+
+    const pending = await service.pairingStatus("archive-1", "account-1", pairing.sessionId);
+    expect(pending).toMatchObject({ state: "awaiting_qr", connection: "connected" });
+    expect(pending).not.toHaveProperty("qr");
+    expect(accounts.row.liveEnabled).toBe(false);
+
+    const connected = await service.pairingStatus("archive-1", "account-1", pairing.sessionId);
+    expect(connected).toMatchObject({ state: "connected" });
+    expect(accounts.row.liveEnabled).toBe(true);
+  });
+
+  it("cannot resume an account that has never completed pairing", async () => {
+    const accounts = new FakeAccounts();
+    accounts.row = account({ liveEnabled: false, pairedAt: undefined });
+    const sidecar = new FakeSidecar();
+    const service = new AccountSettingsService(
+      accounts,
+      pipeline,
+      sidecar,
+      new PairingSessionController(accounts, sidecar),
+    );
+
+    await expect(service.resume("archive-1", "account-1")).rejects.toThrow("account is not paired");
+    expect(sidecar.calls).not.toContain("start-follow-sync");
   });
 });

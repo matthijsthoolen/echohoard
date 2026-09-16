@@ -46,15 +46,15 @@ for (const file of await walk(src)) {
   for (const specifier of imports(await readFile(file, "utf8"))) {
     const to = destination(join(file, ".."), specifier);
     // Composition roots are intentional assembly points where a role combines
-    // infrastructure adapters with application services. Runtime modules
-    // remain constrained to the dependency direction above.
+    // infrastructure and source adapters with application services. Runtime
+    // modules remain constrained to the dependency direction above.
     const compositionRoot =
       ["delivery", "worker"].includes(from) && file.endsWith(`${sep}composition.ts`);
     if (
       to &&
       to !== from &&
       !rules[from]?.includes(to) &&
-      !(compositionRoot && ["infrastructure", "config"].includes(to))
+      !(compositionRoot && ["infrastructure", "config", "adapters"].includes(to))
     )
       errors.push(
         `${relative(root, file)} imports ${to}; ${from} may depend only on ${rules[from]?.join(", ") || "nothing"}`,

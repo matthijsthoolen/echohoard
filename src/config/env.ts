@@ -28,6 +28,8 @@ const schema = z.object({
     .min(1_000)
     .max(86_400_000)
     .default(120_000),
+  ECHOHOARD_WACLI_CONTROL_URL: z.string().url().default("http://wacli-control:8080/"),
+  ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS: z.coerce.number().int().min(100).max(60_000).default(10_000),
 });
 
 export type EchohoardEnv = z.infer<typeof schema>;
@@ -64,6 +66,8 @@ export function parseEnv(input: NodeJS.ProcessEnv = process.env): EchohoardEnv {
     ECHOHOARD_WORKER_LEASE_MS: input.ECHOHOARD_WORKER_LEASE_MS,
     ECHOHOARD_WORKER_HEARTBEAT_MS: input.ECHOHOARD_WORKER_HEARTBEAT_MS,
     ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS: input.ECHOHOARD_WORKER_DECRYPT_TIMEOUT_MS,
+    ECHOHOARD_WACLI_CONTROL_URL: input.ECHOHOARD_WACLI_CONTROL_URL,
+    ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS: input.ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS,
   });
 }
 

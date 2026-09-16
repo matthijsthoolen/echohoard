@@ -12,6 +12,8 @@ import { PrismaSnapshotPath } from "../infrastructure/db/worker-snapshot-path.js
 import { LocalJobWork } from "../infrastructure/files/index.js";
 import type { ClockPort } from "../application/echohoard.js";
 import type { JobStorePort } from "../application/intake.js";
+import { parseWacliWebhookEvent, type WacliWebhookEvent } from "../adapters/wacli/contract.js";
+import { normalizeWacliEvent } from "../adapters/wacli/normalize.js";
 
 export interface WorkerErrorSink {
   (message: string): void;
@@ -165,7 +167,11 @@ export function createProductionWorker(
     sleep: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
   };
   const jobs = new PrismaDecryptJobStore(prisma);
-  const liveNormalizer = new PrismaLiveEventNormalizer(prisma);
+  const liveNormalizer = new PrismaLiveEventNormalizer(
+    prisma,
+    (payload, accountKey) => parseWacliWebhookEvent(payload, accountKey),
+    (event) => normalizeWacliEvent(asWacliEvent(event)),
+  );
   const runner = new DecryptJobRunner(
     jobs,
     new PrismaImportJobLeases(prisma),
@@ -208,4 +214,13 @@ export function createProductionWorker(
     liveNormalizer,
     liveQueue,
   };
+}
+
+function asWacliEvent(event: unknown): WacliWebhookEvent {
+  if (!event || typeof event !== "object" || Array.isArray(event))
+    throw new Error("live event adaptation produced an invalid event");
+  const kind = (event as { readonly kind?: unknown }).kind;
+  if (kind !== "message" && kind !== "receipt" && kind !== "chat_presence")
+    throw new Error("live event adaptation produced an unsupported event");
+  return event as WacliWebhookEvent;
 }

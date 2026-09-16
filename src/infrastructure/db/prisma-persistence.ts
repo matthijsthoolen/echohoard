@@ -48,8 +48,6 @@ import {
   type UpdateConversationPrivacyRequest,
 } from "../../application/conversation-privacy";
 import type { LiveEventAccountResolver } from "../../application/live-event-intake";
-import { parseWacliWebhookEvent, type WacliWebhookEvent } from "../../adapters/wacli/contract.js";
-import { normalizeWacliEvent } from "../../adapters/wacli/normalize.js";
 import { PrismaTextSnapshotImporter } from "./text-import";
 import { createHash } from "node:crypto";
 
@@ -212,12 +210,8 @@ export class PrismaLiveEventNormalizer {
 
   public constructor(
     private readonly prisma: PrismaClient,
-    private readonly parseEvent: (payload: Uint8Array, accountKey: string) => unknown = (
-      payload,
-      accountKey,
-    ) => parseWacliWebhookEvent(payload, accountKey),
-    private readonly normalizeEvent: (event: unknown) => readonly ImportRecord[] = (event) =>
-      normalizeWacliEvent(asWacliEvent(event)),
+    private readonly parseEvent: (payload: Uint8Array, accountKey: string) => unknown,
+    private readonly normalizeEvent: (event: unknown) => readonly ImportRecord[],
   ) {
     this.importer = new PrismaTextSnapshotImporter(prisma);
   }
@@ -275,15 +269,6 @@ export class PrismaLiveEventNormalizer {
     });
     return rows;
   }
-}
-
-function asWacliEvent(event: unknown): WacliWebhookEvent {
-  if (!event || typeof event !== "object" || Array.isArray(event))
-    throw new Error("live event adaptation produced an invalid event");
-  const kind = (event as { readonly kind?: unknown }).kind;
-  if (kind !== "message" && kind !== "receipt" && kind !== "chat_presence")
-    throw new Error("live event adaptation produced an unsupported event");
-  return event as WacliWebhookEvent;
 }
 
 function stableUuid(archiveId: string, key: string): string {

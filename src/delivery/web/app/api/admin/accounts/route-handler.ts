@@ -12,9 +12,9 @@ export interface AdminAccountsRouteDependencies {
 export function createAdminAccountsRoute({ getRuntime }: AdminAccountsRouteDependencies) {
   return async function GET(request: Request): Promise<Response> {
     const runtime = getRuntime();
-    if (!runtime?.accountSettings) return unavailable();
-    const principal = await runtime.auth.principalForRequest(request);
+    const principal = await runtime?.auth.principalForRequest(request);
     if (!principal || principal.role !== "admin") return forbidden();
+    if (!runtime.accountSettings) return unavailable();
     try {
       const accounts = await runtime.accountSettings.list(principal.archiveId);
       return Response.json({ accounts }, { headers: { "Cache-Control": "private, no-store" } });

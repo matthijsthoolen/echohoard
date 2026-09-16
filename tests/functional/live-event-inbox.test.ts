@@ -5,13 +5,22 @@ import {
   PrismaLiveEventInboxPersistence,
   PrismaLiveEventNormalizer,
 } from "../../src/infrastructure/db/prisma-persistence.js";
+import {
+  parseWacliWebhookEvent,
+  type WacliWebhookEvent,
+} from "../../src/adapters/wacli/contract.js";
+import { normalizeWacliEvent } from "../../src/adapters/wacli/normalize.js";
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
 
 const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
 const inbox = new PrismaLiveEventInboxPersistence(prisma);
-const normalizer = new PrismaLiveEventNormalizer(prisma);
+const normalizer = new PrismaLiveEventNormalizer(
+  prisma,
+  (payload, accountKey) => parseWacliWebhookEvent(payload, accountKey),
+  (event) => normalizeWacliEvent(asWacliEvent(event)),
+);
 const userId = randomUUID();
 const archiveId = randomUUID();
 const otherArchiveId = randomUUID();
@@ -30,6 +39,15 @@ function input(archive: string, account: string, receiptId: string, maxPending =
     receivedAt: new Date("2026-01-01T00:00:01.000Z"),
     maxPending,
   } as const;
+}
+
+function asWacliEvent(event: unknown): WacliWebhookEvent {
+  if (!event || typeof event !== "object" || Array.isArray(event))
+    throw new Error("live event adaptation produced an invalid event");
+  const kind = (event as { readonly kind?: unknown }).kind;
+  if (kind !== "message" && kind !== "receipt" && kind !== "chat_presence")
+    throw new Error("live event adaptation produced an unsupported event");
+  return event as WacliWebhookEvent;
 }
 
 describe("live event inbox PostgreSQL durability", () => {

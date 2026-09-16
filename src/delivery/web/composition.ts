@@ -25,13 +25,22 @@ import {
 import { createLiteLlmCatalog } from "../../infrastructure/litellm/catalog";
 import { ConversationGroupingService } from "../../application/conversation-grouping";
 import { PrismaConversationGroupingPersistence } from "../../infrastructure/db/conversation-grouping";
+import {
+  AccountSettingsService,
+  PairingSessionController,
+} from "../../application/account-pairing";
+import { PrismaLiveAccountHealthPersistence } from "../../infrastructure/db/prisma-persistence";
+import { HttpFixedSidecarOperations } from "../../infrastructure/wacli/sidecar-operations";
+import type { EchohoardEnv } from "../../config/env";
+import type { AccountSettingsPersistencePort } from "../../application/persistence";
 
 let activeProductionRuntime: WebRuntime | undefined;
 export function productionWebRuntime(): WebRuntime {
   activeProductionRuntime ??= createProductionWebRuntime();
   return activeProductionRuntime;
 }
-function createProductionWebRuntime(): WebRuntime {
+
+export function createProductionWebRuntime(): WebRuntime {
   const settings = parseEnv();
   if (
     !settings.OIDC_ISSUER ||
@@ -53,6 +62,11 @@ function createProductionWebRuntime(): WebRuntime {
     ),
   );
   const reads = new ArchiveReadService(new PrismaReadPersistence(prisma), new CursorCodec(secret));
+  const accountSettings = createProductionAccountSettings(
+    prisma,
+    persistence.ownedAccounts,
+    settings,
+  );
   return {
     auth: new WebAuthBoundary(
       new OidcAuth(
@@ -85,5 +99,28 @@ function createProductionWebRuntime(): WebRuntime {
     media: new PrismaMediaDelivery(prisma, `${process.env.ECHOHOARD_DATA_DIR ?? "/data"}/media`),
     transcription: new OwnerTranscriptionSettings(persistence.transcriptionSettings, catalog),
     grouping: new ConversationGroupingService(new PrismaConversationGroupingPersistence(prisma)),
+    accountSettings,
   };
+}
+
+export function createProductionAccountSettings(
+  prisma: PrismaClient,
+  persistence: AccountSettingsPersistencePort,
+  settings: Pick<
+    EchohoardEnv,
+    "ECHOHOARD_WACLI_CONTROL_URL" | "ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS"
+  >,
+  fetcher: typeof fetch = fetch,
+): AccountSettingsService {
+  const sidecar = new HttpFixedSidecarOperations(
+    settings.ECHOHOARD_WACLI_CONTROL_URL,
+    fetcher,
+    settings.ECHOHOARD_WACLI_CONTROL_TIMEOUT_MS,
+  );
+  return new AccountSettingsService(
+    persistence,
+    new PrismaLiveAccountHealthPersistence(prisma),
+    sidecar,
+    new PairingSessionController(persistence, sidecar),
+  );
 }

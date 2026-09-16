@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import { createAdminAccountsRoute } from "./route-handler.js";
 
 describe("admin account settings route", () => {
+  it("does not enumerate service availability to anonymous callers", async () => {
+    const route = createAdminAccountsRoute({ getRuntime: () => undefined });
+    expect((await route(new Request("http://localhost/api/admin/accounts"))).status).toBe(403);
+  });
+
   it("denies anonymous and non-admin requests", async () => {
     const route = createAdminAccountsRoute({
       getRuntime: () => ({

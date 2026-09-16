@@ -87,5 +87,9 @@ describe("admin pairing routes", () => {
     );
     expect(statusResponse.headers.get("cache-control")).toBe("private, no-store");
     expect((await statusResponse.json()).state).toBe("expired");
+
+    const malformed = await status(new Request("http://localhost"), context);
+    expect(malformed.status).toBe(400);
+    expect(malformed.headers.get("cache-control")).toBe("private, no-store");
   });
 });
