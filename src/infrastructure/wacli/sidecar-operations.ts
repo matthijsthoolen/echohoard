@@ -45,7 +45,8 @@ export class HttpFixedSidecarOperations implements FixedSidecarOperations {
   }
 
   public async cancelPairing(accountKey: string): Promise<void> {
-    await this.request("POST", accountKey, "pair/cancel");
+    const result = await this.request("POST", accountKey, "pair/cancel");
+    if (result.cancelled !== true) throw new Error("wacli pairing cancellation was not confirmed");
   }
 
   public async startFollowSync(accountKey: string): Promise<void> {

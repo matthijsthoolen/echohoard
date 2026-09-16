@@ -43,6 +43,7 @@ class FakeAccounts implements AccountSettingsPersistencePort {
 
 class FakeSidecar implements FixedSidecarOperations {
   public connection: FixedSidecarHealth["connection"] = "disconnected";
+  public cancelError: Error | undefined;
   public readonly calls: string[] = [];
   public async pair(): Promise<{ readonly qr: string }> {
     this.calls.push("pair");
@@ -50,6 +51,7 @@ class FakeSidecar implements FixedSidecarOperations {
   }
   public async cancelPairing(): Promise<void> {
     this.calls.push("cancel-pairing");
+    if (this.cancelError) throw this.cancelError;
   }
   public async startFollowSync(): Promise<void> {
     this.calls.push("start-follow-sync");
@@ -97,6 +99,44 @@ describe("owned account pairing and settings", () => {
     expect(await controller.status("other-archive", "account-1", started.sessionId)).toBeNull();
   });
 
+  it("fails closed when upstream pairing cancellation fails and retries it", async () => {
+    const sidecar = new FakeSidecar();
+    sidecar.cancelError = new Error("sidecar unavailable");
+    let now = new Date("2026-01-01T00:00:00Z");
+    const controller = new PairingSessionController(new FakeAccounts(), sidecar, () => now);
+    const started = await controller.begin("archive-1", "account-1");
+    now = new Date(now.getTime() + PAIRING_SESSION_TTL_MS + 1);
+
+    await expect(controller.status("archive-1", "account-1", started.sessionId)).rejects.toThrow(
+      "sidecar unavailable",
+    );
+    await expect(controller.status("archive-1", "account-1", started.sessionId)).rejects.toThrow(
+      "sidecar unavailable",
+    );
+    expect(sidecar.calls.filter((call) => call === "cancel-pairing")).toHaveLength(2);
+
+    sidecar.cancelError = undefined;
+    const expired = await controller.status("archive-1", "account-1", started.sessionId);
+    expect(expired).toMatchObject({ state: "expired" });
+    expect(expired).not.toHaveProperty("qr");
+    expect(sidecar.calls.filter((call) => call === "cancel-pairing")).toHaveLength(3);
+  });
+
+  it("does not accept a connected stale QR as a successful expiry", async () => {
+    const sidecar = new FakeSidecar();
+    sidecar.cancelError = new Error("upstream invalidation unavailable");
+    let now = new Date("2026-01-01T00:00:00Z");
+    const controller = new PairingSessionController(new FakeAccounts(), sidecar, () => now);
+    const started = await controller.begin("archive-1", "account-1");
+
+    sidecar.connection = "connected";
+    now = new Date("2026-01-01T00:05:00.001Z");
+    await expect(controller.status("archive-1", "account-1", started.sessionId)).rejects.toThrow(
+      "upstream invalidation unavailable",
+    );
+    expect(sidecar.calls).not.toContain("start-follow-sync");
+  });
+
   it("does not expose a QR larger than the controller bound", async () => {
     const sidecar = new FakeSidecar();
     vi.spyOn(sidecar, "pair").mockResolvedValue({ qr: "x".repeat(16 * 1024 + 1) });
@@ -114,6 +154,21 @@ describe("owned account pairing and settings", () => {
     expect(second.sessionId).not.toBe(first.sessionId);
     expect(await controller.status("archive-1", "account-1", first.sessionId)).toBeNull();
     expect(sidecar.calls).toContain("cancel-pairing");
+  });
+
+  it("does not replace an older session when its upstream cancellation fails", async () => {
+    const accounts = new FakeAccounts();
+    const sidecar = new FakeSidecar();
+    const controller = new PairingSessionController(accounts, sidecar);
+    const first = await controller.begin("archive-1", "account-1");
+    sidecar.cancelError = new Error("sidecar unavailable");
+
+    await expect(controller.begin("archive-1", "account-1")).rejects.toThrow("sidecar unavailable");
+    expect(await controller.status("archive-1", "account-1", first.sessionId)).toMatchObject({
+      state: "awaiting_qr",
+      qr: "synthetic-qr",
+    });
+    expect(sidecar.calls.filter((call) => call === "pair")).toHaveLength(1);
   });
 
   it("starts follow-sync before reporting a successful pairing", async () => {

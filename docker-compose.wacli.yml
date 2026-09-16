@@ -1,37 +1,20 @@
 name: echohoard-wacli
 
-# Reference-only sidecar composition. Each account receives a distinct named
-# volume and service; no web, MCP, or public port is connected to these stores.
+# Reference sidecar composition. The bridge owns only the fixed operations and
+# keeps each named account in its own volume; it has no public port.
 services:
-  wacli-pairing:
+  wacli-control:
     image: ${ECHOHOARD_WACLI_IMAGE:-echohoard-wacli:local}
     user: "10001:10001"
-    command: ["pair"]
+    command: ["control"]
     environment:
-      WACLI_ACCOUNT: ${ECHOHOARD_WACLI_ACCOUNT:-account-a}
-    volumes:
-      - wacli-account-a:/var/lib/wacli/account
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=16m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 64
-    mem_limit: 256m
-    cpus: 0.50
-    restart: "no"
-    networks: [wacli-private]
-
-  wacli-follow-sync:
-    image: ${ECHOHOARD_WACLI_IMAGE:-echohoard-wacli:local}
-    user: "10001:10001"
-    command: ["follow-sync"]
-    environment:
-      WACLI_ACCOUNT: ${ECHOHOARD_WACLI_ACCOUNT:-account-a}
-      WACLI_WEBHOOK_ENDPOINT: http://web:3000/api/internal/live-events?account=account-a
+      WACLI_ACCOUNTS: ${ECHOHOARD_WACLI_ACCOUNTS:-account-a,account-b}
+      WACLI_ACCOUNT_ROOT: /var/lib/wacli/accounts
+      WACLI_WEBHOOK_BASE_URL: http://web:3000/api/internal/live-events
       WACLI_WEBHOOK_SECRET_FILE: /run/secrets/wacli_webhook_key
     volumes:
-      - wacli-account-a:/var/lib/wacli/account
+      - wacli-account-a:/var/lib/wacli/accounts/account-a
+      - wacli-account-b:/var/lib/wacli/accounts/account-b
     secrets:
       - wacli_webhook_key
     read_only: true
@@ -39,43 +22,20 @@ services:
       - /tmp:rw,noexec,nosuid,nodev,size=16m
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    pids_limit: 64
-    mem_limit: 512m
-    cpus: 1.00
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.50
     restart: unless-stopped
     stop_grace_period: 30s
+    expose: ["8080"]
     healthcheck:
-      test: ["CMD", "/usr/local/bin/echohoard-wacli", "health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    networks: [wacli-private]
-
-  wacli-follow-sync-b:
-    image: ${ECHOHOARD_WACLI_IMAGE:-echohoard-wacli:local}
-    user: "10001:10001"
-    command: ["follow-sync"]
-    environment:
-      WACLI_ACCOUNT: account-b
-      WACLI_WEBHOOK_ENDPOINT: http://web:3000/api/internal/live-events?account=account-b
-      WACLI_WEBHOOK_SECRET_FILE: /run/secrets/wacli_webhook_key
-    volumes:
-      - wacli-account-b:/var/lib/wacli/account
-    secrets:
-      - wacli_webhook_key
-    read_only: true
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,nodev,size=16m
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    pids_limit: 64
-    mem_limit: 512m
-    cpus: 1.00
-    restart: unless-stopped
-    stop_grace_period: 30s
-    healthcheck:
-      test: ["CMD", "/usr/local/bin/echohoard-wacli", "health"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -14,6 +14,7 @@ describe("fixed sidecar operations", () => {
           checkedAt: "2026-09-16T12:00:00.000Z",
           reconnectCount: 3,
         });
+      if (url.pathname.endsWith("/pair/cancel")) return Response.json({ cancelled: true });
       return new Response(null, { status: 204 });
     };
     const sidecar = new HttpFixedSidecarOperations("http://wacli-control.test/private/", fetcher);
@@ -46,4 +47,12 @@ describe("fixed sidecar operations", () => {
     await expect(sidecar.health("../other-account")).rejects.toThrow("account key is invalid");
     await expect(sidecar.health("account-a")).rejects.toThrow("reconnect count");
   });
+});
+
+it("rejects a cancellation response without an upstream confirmation", async () => {
+  const sidecar = new HttpFixedSidecarOperations("http://wacli-control.test/", async () =>
+    Response.json({}),
+  );
+
+  await expect(sidecar.cancelPairing("account-a")).rejects.toThrow("not confirmed");
 });

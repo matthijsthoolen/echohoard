@@ -189,10 +189,21 @@ export class PairingSessionController {
   }
 
   private async expire(session: PairingSession): Promise<void> {
+    if (session.state === "expired") return;
+    // Do not make the local state authoritative before the sidecar confirms
+    // that the upstream auth process has stopped. A failed cancellation must
+    // remain retryable and must never be rendered as an expired QR.
+    session.cancelPairing ??= this.sidecar.cancelPairing(session.accountKey);
+    try {
+      await session.cancelPairing;
+    } catch (error) {
+      // A transport failure is not proof of upstream invalidation. Forget the
+      // rejected attempt so the next status/replacement request retries it.
+      delete session.cancelPairing;
+      throw error;
+    }
     session.state = "expired";
     delete session.qr;
-    session.cancelPairing ??= this.sidecar.cancelPairing(session.accountKey).catch(() => undefined);
-    await session.cancelPairing;
   }
 
   private readonly accountLocks = new Map<string, Promise<void>>();

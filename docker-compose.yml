@@ -51,6 +51,46 @@ services:
       retries: 6
       start_period: 10s
 
+  wacli-control:
+    image: ${ECHOHOARD_WACLI_IMAGE:-echohoard-wacli:local}
+    user: "10001:10001"
+    command: ["control"]
+    environment:
+      WACLI_ACCOUNTS: ${ECHOHOARD_WACLI_ACCOUNTS:-account-a,account-b}
+      WACLI_ACCOUNT_ROOT: /var/lib/wacli/accounts
+      WACLI_WEBHOOK_BASE_URL: http://web:3000/api/internal/live-events
+      WACLI_WEBHOOK_SECRET_FILE: /run/secrets/wacli_webhook_key
+    volumes:
+      - wacli-account-a:/var/lib/wacli/accounts/account-a
+      - wacli-account-b:/var/lib/wacli/accounts/account-b
+    secrets:
+      - wacli_webhook_key
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.50
+    restart: unless-stopped
+    stop_grace_period: 30s
+    expose:
+      - "8080"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
   worker:
     image: ${ECHOHOARD_IMAGE:-echohoard:local}
     user: "10002:10002"
@@ -82,6 +122,8 @@ services:
 volumes:
   echohoard-data:
   echohoard-work:
+  wacli-account-a:
+  wacli-account-b:
 
 secrets:
   oidc_client_secret:

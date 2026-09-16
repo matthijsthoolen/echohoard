@@ -7,12 +7,19 @@ die() {
 }
 
 [ "$#" -eq 1 ] || die "one fixed wacli operation is required"
+[ "$(id -u)" -ne 0 ] || die "wacli sidecar must not run as root"
+
+case "$1" in
+  control)
+    exec node /usr/local/bin/echohoard-wacli-control.mjs
+    ;;
+esac
+
 [ -n "${WACLI_ACCOUNT:-}" ] || die "WACLI_ACCOUNT is required"
 case "${WACLI_ACCOUNT}" in
   [a-z0-9][a-z0-9-]*) : ;;
   *) die "WACLI_ACCOUNT is not a valid named account" ;;
 esac
-[ "$(id -u)" -ne 0 ] || die "wacli sidecar must not run as root"
 [ "${WACLI_ACCOUNT_STORE:-}" = /var/lib/wacli/account ] || die "account store path is fixed"
 export HOME=/var/lib/wacli/account
 export XDG_CONFIG_HOME=/var/lib/wacli/account/config
@@ -37,6 +44,6 @@ case "$1" in
     exec /usr/local/bin/wacli --account "${WACLI_ACCOUNT}" --read-only --json auth status
     ;;
   *)
-    die "operation is not allowlisted (use pair, follow-sync, or health)"
+    die "operation is not allowlisted (use control, pair, follow-sync, or health)"
     ;;
 esac

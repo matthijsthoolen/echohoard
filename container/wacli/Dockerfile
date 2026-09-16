@@ -17,7 +17,7 @@ RUN apk add --no-cache ca-certificates curl tar \
     && test -f /tmp/wacli/wacli \
     && test -f /tmp/wacli/LICENSE
 
-FROM debian:bookworm-slim
+FROM node:22.14.0-bookworm-slim
 ARG WACLI_VERSION
 ARG SIDECAR_UID=10001
 ARG SIDECAR_GID=10001
@@ -28,14 +28,15 @@ COPY --from=fetch /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certifica
 COPY --from=fetch /tmp/wacli/wacli /usr/local/bin/wacli
 COPY --from=fetch /tmp/wacli/LICENSE /usr/share/licenses/wacli/LICENSE
 COPY container/wacli/entrypoint.sh /usr/local/bin/echohoard-wacli
+COPY container/wacli/control.mjs /usr/local/bin/echohoard-wacli-control.mjs
 RUN groupadd --gid "${SIDECAR_GID}" wacli \
     && useradd --uid "${SIDECAR_UID}" --gid "${SIDECAR_GID}" \
       --home-dir /var/lib/wacli/account --shell /usr/sbin/nologin \
       --no-create-home wacli \
-    && mkdir -p /var/lib/wacli/account /run/secrets \
+    && mkdir -p /var/lib/wacli/account /var/lib/wacli/accounts/account-a /var/lib/wacli/accounts/account-b /run/secrets \
     && chown -R "${SIDECAR_UID}:${SIDECAR_GID}" /var/lib/wacli \
     && chmod 0700 /var/lib/wacli/account /run/secrets \
-    && chmod 0555 /usr/local/bin/wacli /usr/local/bin/echohoard-wacli \
+    && chmod 0555 /usr/local/bin/wacli /usr/local/bin/echohoard-wacli /usr/local/bin/echohoard-wacli-control.mjs \
     && /usr/local/bin/wacli --version
 USER ${SIDECAR_UID}:${SIDECAR_GID}
 WORKDIR /var/lib/wacli/account
