@@ -97,6 +97,18 @@ const main = async () => {
     const anonymousMedia = await fetch(`${baseUrl}/api/media/synthetic-attachment`);
     if (anonymousMedia.status !== 401)
       throw new Error(`anonymous media status was ${anonymousMedia.status}`);
+    const anonymousAccounts = await fetch(`${baseUrl}/api/admin/accounts`);
+    if (![403, 503].includes(anonymousAccounts.status))
+      throw new Error(`anonymous account settings status was ${anonymousAccounts.status}`);
+    if (anonymousAccounts.headers.get("cache-control") !== "private, no-store")
+      throw new Error("anonymous account settings response was cacheable");
+    const anonymousPairing = await fetch(
+      `${baseUrl}/api/admin/accounts/synthetic-account/pair?sessionId=synthetic-session`,
+    );
+    if (![403, 503].includes(anonymousPairing.status))
+      throw new Error(`anonymous pairing status was ${anonymousPairing.status}`);
+    if (anonymousPairing.headers.get("cache-control") !== "private, no-store")
+      throw new Error("anonymous pairing response was cacheable");
     const encodedPathMedia = await fetch(`${baseUrl}/api/media/%2e%2e%2Fetc%2Fpasswd`);
     if (![401, 404].includes(encodedPathMedia.status))
       throw new Error(`encoded media path returned ${encodedPathMedia.status}`);

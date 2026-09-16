@@ -187,6 +187,9 @@ function SettingsPanel({
   readonly onThemeChange: (theme: ThemeMode) => void;
 }) {
   const [catalog, setCatalog] = useState<TranscriptionSettings | "loading" | "error">("loading");
+  const [accounts, setAccounts] = useState<OwnedAccountSettings[] | "loading" | "denied" | "error">(
+    "loading",
+  );
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -196,6 +199,17 @@ function SettingsPanel({
         return (await response.json()) as TranscriptionSettings;
       })
       .then(setCatalog, () => setCatalog("error"));
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/admin/accounts", { credentials: "same-origin" })
+      .then(async (response) => {
+        if (response.status === 403) return "denied" as const;
+        if (!response.ok) throw new Error("accounts unavailable");
+        const body = (await response.json()) as { readonly accounts: OwnedAccountSettings[] };
+        return body.accounts;
+      })
+      .then(setAccounts, () => setAccounts("error"));
   }, []);
 
   const selectModel = async (modelId: string) => {
@@ -276,6 +290,7 @@ function SettingsPanel({
           </>
         ) : null}
       </section>
+      <LiveAccountsSettings accounts={accounts} onAccountsChange={(next) => setAccounts(next)} />
       <section className="settings-card" aria-labelledby="about-heading">
         <h2 id="about-heading">About EchoHoard</h2>
         <p>Private, read-only access to your preserved conversations.</p>
@@ -285,9 +300,186 @@ function SettingsPanel({
   );
 }
 
+function LiveAccountsSettings({
+  accounts,
+  onAccountsChange,
+}: {
+  readonly accounts: OwnedAccountSettings[] | "loading" | "denied" | "error";
+  readonly onAccountsChange: (accounts: OwnedAccountSettings[]) => void;
+}) {
+  const [pairing, setPairing] = useState<PairingSession | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pairing || pairing.state !== "awaiting_qr") return;
+    const timer = window.setInterval(() => {
+      void fetch(
+        `/api/admin/accounts/${encodeURIComponent(pairing.accountId)}/pair?sessionId=${encodeURIComponent(pairing.sessionId)}`,
+        { credentials: "same-origin" },
+      )
+        .then(async (response) => {
+          if (!response.ok) throw new Error("pairing status unavailable");
+          return (await response.json()) as PairingSession;
+        })
+        .then(setPairing, () => undefined);
+    }, 2_000);
+    return () => window.clearInterval(timer);
+  }, [pairing]);
+
+  const reload = async () => {
+    const response = await fetch("/api/admin/accounts", { credentials: "same-origin" });
+    if (!response.ok) throw new Error("account settings unavailable");
+    const body = (await response.json()) as { readonly accounts: OwnedAccountSettings[] };
+    onAccountsChange(body.accounts);
+  };
+
+  const beginPairing = async (account: OwnedAccountSettings) => {
+    const rePair = account.health.connection === "connected";
+    if (
+      rePair &&
+      !window.confirm("Re-pair this account? The current linked session will be replaced.")
+    )
+      return;
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.id)}/pair`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ confirm: rePair, rePair }),
+      });
+      if (!response.ok) throw new Error("pairing unavailable");
+      setPairing((await response.json()) as PairingSession);
+      await reload();
+    } catch {
+      setMessage("Pairing is temporarily unavailable. Try again or inspect account health.");
+    }
+  };
+
+  const changeLiveState = async (account: OwnedAccountSettings, action: "pause" | "resume") => {
+    if (action === "pause" && !window.confirm("Pause live capture for this account?")) return;
+    try {
+      const response = await fetch(`/api/admin/accounts/${encodeURIComponent(account.id)}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ action, confirm: action === "pause" }),
+      });
+      if (!response.ok) throw new Error("state change unavailable");
+      await reload();
+    } catch {
+      setMessage("The live capture state could not be changed.");
+    }
+  };
+
+  return (
+    <section className="settings-card" aria-labelledby="live-accounts-heading">
+      <h2 id="live-accounts-heading">Live accounts</h2>
+      <p>
+        Administrator-only pairing and read-only capture health. QR codes expire after five minutes.
+      </p>
+      {accounts === "loading" ? <p role="status">Loading account health…</p> : null}
+      {accounts === "denied" ? (
+        <p role="status">Administrator access is required for live accounts.</p>
+      ) : null}
+      {accounts === "error" ? <p role="alert">Account health is temporarily unavailable.</p> : null}
+      {Array.isArray(accounts) && accounts.length === 0 ? (
+        <p>No owned live accounts are configured.</p>
+      ) : null}
+      {Array.isArray(accounts) ? (
+        <div className="account-list">
+          {accounts.map((account) => (
+            <article className="account-row" key={account.id}>
+              <div>
+                <h3>{account.label}</h3>
+                <p className="account-state">{account.health.connection}</p>
+              </div>
+              <div className="account-actions">
+                <button type="button" className="button" onClick={() => void beginPairing(account)}>
+                  {account.health.connection === "connected" ? "Re-pair" : "Pair"}
+                </button>
+                {account.liveEnabled ? (
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => void changeLiveState(account, "pause")}
+                  >
+                    Pause
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => void changeLiveState(account, "resume")}
+                  >
+                    Resume
+                  </button>
+                )}
+              </div>
+              <dl className="account-health">
+                <div>
+                  <dt>Receipts</dt>
+                  <dd>
+                    {account.health.receipt.state} · {account.health.receipt.count}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Normalization</dt>
+                  <dd>{account.health.normalization.state}</dd>
+                </div>
+                <div>
+                  <dt>Backup</dt>
+                  <dd>{account.health.backupConfirmation.state}</dd>
+                </div>
+              </dl>
+            </article>
+          ))}
+        </div>
+      ) : null}
+      {pairing ? (
+        <section className="pairing-session" aria-live="polite" aria-labelledby="pairing-heading">
+          <h3 id="pairing-heading">Pairing session</h3>
+          {pairing.state === "awaiting_qr" && pairing.qr ? <pre>{pairing.qr}</pre> : null}
+          <p>
+            {pairing.state === "expired"
+              ? "This QR code expired. Start a new pairing session."
+              : pairing.state}
+          </p>
+          {pairing.state === "expired" ? (
+            <button type="button" className="button" onClick={() => setPairing(null)}>
+              Dismiss
+            </button>
+          ) : null}
+        </section>
+      ) : null}
+      {message ? <p role="alert">{message}</p> : null}
+    </section>
+  );
+}
+
 interface TranscriptionSettings {
   readonly models: readonly { readonly id: string; readonly label: string }[];
   readonly selectedModel: string | null;
   readonly selectedModelState: "selected" | "unset" | "unavailable";
   readonly discovery: "ready" | "error";
+}
+
+interface OwnedAccountSettings {
+  readonly id: string;
+  readonly label: string;
+  readonly accountKey: string;
+  readonly liveEnabled: boolean;
+  readonly health: {
+    readonly connection: string;
+    readonly receipt: { readonly state: string; readonly count: number };
+    readonly normalization: { readonly state: string };
+    readonly backupConfirmation: { readonly state: string };
+  };
+}
+
+interface PairingSession {
+  readonly sessionId: string;
+  readonly accountId: string;
+  readonly state: "awaiting_qr" | "connected" | "expired";
+  readonly qr?: string;
 }

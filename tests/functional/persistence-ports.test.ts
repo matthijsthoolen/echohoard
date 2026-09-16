@@ -51,4 +51,16 @@ describe("archive-scoped persistence ports", () => {
     expect(await ports.ownedAccounts.list(archiveIds[0])).toHaveLength(1);
     expect(await ports.ownedAccounts.list(archiveIds[1])).toHaveLength(0);
   });
+
+  it("updates live settings only inside the owning archive", async () => {
+    const accounts = await ports.ownedAccounts.list(archiveIds[0]);
+    const accountId = String(accounts[0]?.id);
+    const updated = await ports.ownedAccounts.update(archiveIds[0], accountId, {
+      liveEnabled: true,
+      pausedAt: null,
+    });
+    expect(updated).toMatchObject({ liveEnabled: true, pausedAt: null });
+    expect(await ports.ownedAccounts.findById(archiveIds[1], accountId)).toBeNull();
+    await ports.ownedAccounts.update(archiveIds[0], accountId, { liveEnabled: false });
+  });
 });

@@ -153,6 +153,9 @@ model OwnedAccount {
   archiveId                       String                           @db.Uuid
   accountKey                      String
   displayLabel                    String?
+  liveEnabled                     Boolean                          @default(false)
+  pairedAt                        DateTime?
+  pausedAt                        DateTime?
   createdAt                       DateTime                         @default(now())
   updatedAt                       DateTime                         @updatedAt
   archive                         Archive                          @relation(fields: [archiveId], references: [id], onDelete: Cascade)

@@ -258,6 +258,75 @@ button:focus-visible {
 .health-in-progress {
   color: var(--ink-muted);
 }
+
+.account-list {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.account-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem 1rem;
+  padding: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+.account-row h3,
+.pairing-session h3 {
+  margin: 0;
+}
+.account-state {
+  margin: 0.25rem 0 0;
+  color: var(--ink-muted);
+  text-transform: capitalize;
+}
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.account-health {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.8125rem;
+}
+.account-health div {
+  display: flex;
+  gap: 0.3rem;
+}
+.account-health dt {
+  font-weight: 700;
+}
+.account-health dd {
+  margin: 0;
+}
+.pairing-session {
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+}
+.pairing-session pre {
+  max-width: 100%;
+  margin: 0.75rem 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    0.8rem/1.35 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
 .health-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

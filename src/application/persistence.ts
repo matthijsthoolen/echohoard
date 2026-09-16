@@ -18,7 +18,9 @@ export interface ArchiveScopedPort<T extends PersistenceRecord = PersistenceReco
 
 export interface UserPort extends ArchiveScopedPort {}
 export interface ArchivePort extends ArchiveScopedPort {}
-export interface OwnedAccountPort extends ArchiveScopedPort {}
+export interface OwnedAccountPort extends ArchiveScopedPort {
+  update(archiveId: ArchiveId, id: string, input: PersistenceInput): Promise<PersistenceRecord>;
+}
 export interface SourcePort extends ArchiveScopedPort {}
 export interface SnapshotPort extends ArchiveScopedPort {}
 export interface ImportJobPort extends ArchiveScopedPort {}
@@ -76,6 +78,26 @@ export interface LiveEventInboxPort {
   }): Promise<{
     readonly kind: "accepted" | "duplicate" | "backpressure";
     readonly row?: LiveEventInboxRecord;
+  }>;
+}
+
+export interface AccountSettingsPersistencePort {
+  list(archiveId: ArchiveId): Promise<readonly PersistenceRecord[]>;
+  findById(archiveId: ArchiveId, id: string): Promise<PersistenceRecord | null>;
+  update(archiveId: ArchiveId, id: string, input: PersistenceInput): Promise<PersistenceRecord>;
+}
+
+export interface LiveAccountHealthPersistencePort {
+  get(
+    archiveId: ArchiveId,
+    ownedAccountId: string,
+  ): Promise<{
+    readonly lastReceivedAt?: Date;
+    readonly receivedCount: number;
+    readonly pendingCount: number;
+    readonly failedCount: number;
+    readonly lastNormalizedAt?: Date;
+    readonly lastBackupConfirmedAt?: Date;
   }>;
 }
 
