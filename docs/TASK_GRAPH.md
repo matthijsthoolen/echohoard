@@ -3,10 +3,10 @@
 ## Hierarchy and execution rule
 
 - Initiatives: EchoHoard V1 and V2, specified in `docs/FEATURE.md` and `docs/V2_FEATURE.md` and represented by overview items in the existing EchoHoard Plane Module.
-- Features: EH-01 through EH-14 and EHV2-01 through EHV2-07, specified in `docs/tasks/`. They are outcome trackers, not implementation assignments.
+- Features: EH-01 through EH-14 and EHV2-01 through EHV2-10, specified in `docs/tasks/`. They are outcome trackers, not implementation assignments.
 - Executable stories: EH-xx-yy, specified in `docs/stories/`. A worker receives one leaf story plus repository access.
 
-Only executable leaf stories receive a worker model class or may enter Ready. EH-01-01 is the historical V1 entry leaf; EH-13-01 is the new V1.1 entry leaf. Every other unfinished leaf remains Backlog until all `Blocked by` stories are Done. Feature trackers and initiative overviews remain Backlog tracking records.
+Only executable leaf stories receive a worker model class or may enter Ready. EH-01-01 is the historical V1 entry leaf; EH-13-01 is the V1.1 entry leaf. Every unfinished leaf remains Backlog until all `Blocked by` stories are Done. The tables record the state when each graph section was added; Plane is the live execution state. Feature trackers and initiative overviews remain tracking records.
 
 ## Feature map
 
@@ -136,6 +136,9 @@ EH-14 is an independently valuable browser-experience extension. Its reusable br
 | EHV2-05 | Media galleries and recovery | [stories](stories/EHV2-05.md) | 7 | EH-13-08 |
 | EHV2-06 | Voice/video-note transcription | [stories](stories/EHV2-06.md) | 7 | EH-13-08 |
 | EHV2-07 | Integrated V2 acceptance | [stories](stories/EHV2-07.md) | 4 | EHV2-01–06 |
+| EHV2-08 | Production ingestion integrity | [stories](stories/EHV2-08.md) | 6 | EH-13-08, EHV2-01-04 |
+| EHV2-09 | Privacy-safe unified reads | [stories](stories/EHV2-09.md) | 4 | EHV2-02-02, EHV2-03-03 |
+| EHV2-10 | Production transport and release integrity | [stories](stories/EHV2-10.md) | 5 | EH-10-05, EHV2-06-03 |
 
 ## V2 executable graph
 
@@ -182,7 +185,22 @@ EH-14 is an independently valuable browser-experience extension. Its reusable br
 | EHV2-07-01 | Prove live/backup/import convergence | medium | EHV2-01-06, EHV2-02-02, EH-13-08 | Backlog |
 | EHV2-07-02 | Prove privacy/merge/delete matrix | medium | EHV2-02-05, EHV2-03-06, EHV2-04-03, EHV2-05-03 | Backlog |
 | EHV2-07-03 | Prove recovery/transcript authority | medium | EHV2-05-06, EHV2-06-06, EHV2-04-04 | Backlog |
-| EHV2-07-04 | Accept and sign off V2 privately | complex | EHV2-01-08, EHV2-03-06, EHV2-04-05, EHV2-05-07, EHV2-06-07, EHV2-07-01, EHV2-07-02, EHV2-07-03 | Backlog |
+| EHV2-07-04 | Accept and sign off V2 privately | complex | EHV2-01-08, EHV2-03-06, EHV2-04-05, EHV2-05-07, EHV2-06-07, EHV2-07-01, EHV2-07-02, EHV2-07-03, EHV2-08-05, EHV2-08-06, EHV2-09-01, EHV2-10-05 | Backlog |
+| EHV2-08-01 | Complete decrypt-to-import worker pipeline | complex | EH-13-08 | Ready |
+| EHV2-08-02 | Fence import leases through terminal state | complex | EHV2-08-01 | Backlog |
+| EHV2-08-03 | Compose bounded production live intake | medium | EHV2-01-03, EHV2-01-04 | Ready |
+| EHV2-08-04 | Prevent poison live receipts from starvation | medium | EHV2-08-03 | Backlog |
+| EHV2-08-05 | Converge live and backup edit revisions | medium | EHV2-01-04 | Ready |
+| EHV2-08-06 | Invalidate expired sidecar pairing sessions | medium | EHV2-01-07 | Ready |
+| EHV2-09-01 | Authorize grouping reads and commands | medium | EHV2-02-01, EHV2-03-03 | Ready |
+| EHV2-09-02 | List unified conversations once | medium | EHV2-02-02 | Ready |
+| EHV2-09-03 | Scope source-account statistics fully | medium | EHV2-02-04 | Ready |
+| EHV2-09-04 | Bind and stabilize every read cursor | complex | EHV2-09-02, EHV2-09-03 | Backlog |
+| EHV2-10-01 | Pin LiteLLM transport to validated addresses | complex | EHV2-06-03 | Ready |
+| EHV2-10-02 | Expose authenticated production MCP transport | complex | EH-09-05 | Ready |
+| EHV2-10-03 | Make Compose readiness fail closed | medium | EH-10-05 | Ready |
+| EHV2-10-04 | Gate tagged releases on quality evidence | simple | EHV2-10-03 | Backlog |
+| EHV2-10-05 | Require production integration seams in CI | medium | EHV2-08-02, EHV2-08-04, EHV2-09-04, EHV2-10-01, EHV2-10-02, EHV2-10-04 | Backlog |
 
 ## Acceptance-criterion ownership
 
@@ -198,6 +216,11 @@ EH-14 is an independently valuable browser-experience extension. Its reusable br
 | AC-29 | EH-10 and EH-11 |
 | AC-30 | EH-11 and EH-12 |
 | EH14-AC-01–EH14-AC-06 | EH-14 |
+| EHV2-AC-01–EHV2-AC-04 | EHV2-01, EHV2-02, EHV2-07 |
+| EHV2-AC-05–EHV2-AC-06 | EHV2-03, EHV2-04, EHV2-07 |
+| EHV2-AC-07–EHV2-AC-08 | EHV2-05, EHV2-06, EHV2-07 |
+| EHV2-AC-09 | EHV2-07 |
+| EHV2-AC-10 | EHV2-08, EHV2-09, EHV2-10, EHV2-07 |
 
 Each feature contract maps its criteria to concrete leaf acceptance and verification. Final integration stories verify composition without replacing focused leaf proofs.
 
@@ -205,11 +228,11 @@ Each feature contract maps its criteria to concrete leaf acceptance and verifica
 
 | Class | Count | Share |
 |---|---:|---:|
-| simple | 16 | 13.3% |
-| medium | 88 | 73.3% |
-| complex | 13 | 10.8% |
-| reasoning | 3 | 2.5% |
-| total | 120 | 100% |
+| simple | 17 | 12.6% |
+| medium | 97 | 71.9% |
+| complex | 18 | 13.3% |
+| reasoning | 3 | 2.2% |
+| total | 135 | 100% |
 
 The additional non-routine leaves are isolated to load-bearing identity/upstream decisions, authentication, irreversible cleanup, private filesystem/model/provider boundaries, and attended live acceptance. Ordinary schema, application, UI, and verification work remains simple or medium.
 
@@ -221,10 +244,10 @@ The additional non-routine leaves are isolated to load-bearing identity/upstream
 ## Graph validation
 
 - All 30 initiative acceptance criteria and all 6 EH-14 feature criteria have feature ownership, and every feature has observable leaf acceptance plus verification.
-- All 120 leaves declare goal, repository, local constraints, bounded work, acceptance criteria, verification, out of scope, blockers, priority, and model class.
+- All 135 leaves declare goal, repository, local constraints, bounded work, acceptance criteria, verification, out of scope, blockers, priority, and model class.
 - Every leaf targets one repository; private deployment and acceptance leaves explicitly target `unraided-treasures`.
 - The dependency graph is acyclic, every blocker identifies an existing leaf, and cross-feature edges are explicit.
-- For the new graph, EH-13-01 and EH-14-01 are unblocked and Ready because their prerequisites are already complete. EH-14-02 remains Backlog until the canonical Saphira contract exists; V2 leaves remain Backlog until EH-13-08 and their explicit blockers are Done. Feature/initiative trackers have no worker model class.
+- For each graph section, only leaves whose prerequisites were complete at publication are Ready. Feature and initiative trackers have no worker model class; Plane remains authoritative for current execution state.
 - Each leaf fits the one-primary-outcome, one-to-three-deliverable, focused-verification, and at-most-one-difficult-risk-axis guardrails.
 - A fresh worker can begin from its leaf contract and repository instructions without the planning conversation; no assignment uses “as discussed” or another hidden decision.
 - Safe parallelism remains available after shared contracts; repository verification stays distinct from private authenticated/live acceptance.
@@ -254,3 +277,6 @@ The additional non-routine leaves are isolated to load-bearing identity/upstream
 - [EHV2-05](tasks/EHV2-05.md)
 - [EHV2-06](tasks/EHV2-06.md)
 - [EHV2-07](tasks/EHV2-07.md)
+- [EHV2-08](tasks/EHV2-08.md)
+- [EHV2-09](tasks/EHV2-09.md)
+- [EHV2-10](tasks/EHV2-10.md)

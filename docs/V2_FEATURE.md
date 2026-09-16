@@ -36,6 +36,7 @@ As the archive owner, I want one continuously updated EchoHoard experience acros
 7. Galleries distinguish available, missing, unsafe, and recovered media and never auto-link an ambiguous candidate.
 8. Transcripts retain attachment, model, timestamps, source text, edit history, and manual-authority state; automatic runs cannot overwrite a human edit.
 9. Repository, container, private deployment, linked-device, Authentik, LiteLLM, MCP, and negative-boundary evidence are recorded separately.
+10. Production ingestion, privacy-aware reads, private transports, and release publication remain fail-closed under retries, stale workers, hostile requests, DNS changes, and incomplete configuration.
 
 ## Implementation decisions
 
@@ -76,3 +77,9 @@ None. Provider availability, exact upstream version, and schema details are impl
 
 - `/home/matthijs/projects/echohoard` — public contracts, schema, adapters, UI, tests, and image.
 - `/home/matthijs/projects/unraided-treasures` — private sidecar/deployment, Vault, Authentik, LiteLLM, paths, and attended evidence.
+
+## Post-review remediation features
+
+- `EHV2-08` closes production ingestion and worker-durability gaps found during integrated review.
+- `EHV2-09` closes unified-read, privacy authorization, statistics, and cursor correctness gaps.
+- `EHV2-10` closes private transport, runtime readiness, CI, and release-publication gaps.
