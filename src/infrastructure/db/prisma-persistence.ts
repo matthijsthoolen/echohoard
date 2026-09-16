@@ -55,6 +55,7 @@ type Delegate = {
   findUnique(args: never): Promise<unknown>;
   findMany(args: never): Promise<unknown>;
   create(args: never): Promise<unknown>;
+  update(args: never): Promise<unknown>;
 };
 
 const asRecord = (value: unknown): PersistenceRecord => {
@@ -92,6 +93,24 @@ class PrismaArchiveScopedAdapter implements ArchiveScopedPort {
   public async create(archiveId: string, input: PersistenceInput): Promise<PersistenceRecord> {
     const value = await this.delegate.create({
       data: this.createField ? { ...input, [this.createField]: archiveId } : input,
+    } as never);
+    return asRecord(value);
+  }
+}
+
+class PrismaOwnedAccountAdapter extends PrismaArchiveScopedAdapter {
+  public constructor(delegate: Delegate) {
+    super(delegate, "archiveId");
+  }
+
+  public async update(
+    archiveId: string,
+    id: string,
+    input: PersistenceInput,
+  ): Promise<PersistenceRecord> {
+    const value = await this.delegate.update({
+      where: { archiveId_id: { archiveId, id } },
+      data: input,
     } as never);
     return asRecord(value);
   }
@@ -235,6 +254,50 @@ function stableUuid(archiveId: string, key: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((parseInt(hex.slice(16, 18), 16) & 0x3f) | 0x80).toString(16)}${hex.slice(18, 20)}-${hex.slice(20, 32)}`;
 }
 
+export class PrismaLiveAccountHealthPersistence {
+  public constructor(private readonly prisma: PrismaClient) {}
+
+  public async get(archiveId: string, ownedAccountId: string) {
+    const [counts, latest, normalized, confirmed] = await Promise.all([
+      this.prisma.liveEventInbox.groupBy({
+        by: ["status"],
+        where: { archiveId, ownedAccountId },
+        _count: { _all: true },
+      }),
+      this.prisma.liveEventInbox.findFirst({
+        where: { archiveId, ownedAccountId },
+        orderBy: [{ receivedAt: "desc" }, { id: "desc" }],
+        select: { receivedAt: true },
+      }),
+      this.prisma.liveEventInbox.findFirst({
+        where: { archiveId, ownedAccountId, status: { in: ["normalized", "completed"] } },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        select: { updatedAt: true },
+      }),
+      this.prisma.liveEventInbox.findFirst({
+        where: { archiveId, ownedAccountId, status: "backup_confirmed" },
+        orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+        select: { updatedAt: true },
+      }),
+    ]);
+    const receivedCount = counts.reduce((total, row) => total + row._count._all, 0);
+    const pendingCount = counts
+      .filter((row) => row.status === "pending")
+      .reduce((total, row) => total + row._count._all, 0);
+    const failedCount = counts
+      .filter((row) => row.status === "failed")
+      .reduce((total, row) => total + row._count._all, 0);
+    return {
+      receivedCount,
+      pendingCount,
+      failedCount,
+      ...(latest ? { lastReceivedAt: latest.receivedAt } : {}),
+      ...(normalized ? { lastNormalizedAt: normalized.updatedAt } : {}),
+      ...(confirmed ? { lastBackupConfirmedAt: confirmed.updatedAt } : {}),
+    };
+  }
+}
+
 type PrivacyConversationRow = {
   id: string;
   archiveId: string;
@@ -375,7 +438,7 @@ export const createPrismaPersistence = (prisma: PrismaClient): PersistencePorts 
   return {
     users: scoped(prisma.user as unknown as Delegate, "id"),
     archives: scoped(prisma.archive as unknown as Delegate, "id", null),
-    ownedAccounts: scoped(prisma.ownedAccount as unknown as Delegate),
+    ownedAccounts: new PrismaOwnedAccountAdapter(prisma.ownedAccount as unknown as Delegate),
     sources: scoped(prisma.source as unknown as Delegate),
     snapshots: scoped(prisma.snapshot as unknown as Delegate),
     importJobs: scoped(prisma.importJob as unknown as Delegate),

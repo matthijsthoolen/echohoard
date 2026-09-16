@@ -5,6 +5,7 @@ import type { WebAuthBoundary } from "./auth.js";
 import type { MediaDeliveryPort } from "../../application/media-delivery.js";
 import type { LiveEventIntakeService } from "../../application/live-event-intake.js";
 import type { TranscriptionSettingsService } from "../../application/transcription-catalog.js";
+import type { AccountSettingsServicePort } from "../../application/account-pairing.js";
 import { productionWebRuntime } from "./composition";
 
 export type WebReadServices = Pick<
@@ -23,6 +24,7 @@ export interface WebRuntime {
   readonly media?: MediaDeliveryPort;
   readonly liveEventIntake?: LiveEventIntakeService;
   readonly transcription?: TranscriptionSettingsService;
+  readonly accountSettings?: AccountSettingsServicePort;
 }
 
 let activeRuntime: WebRuntime | undefined;
