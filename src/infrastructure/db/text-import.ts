@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { LeaseFenceError } from "../../application/echohoard";
 import { reconcileAttachmentAvailability } from "../../application/text-import";
 import type { ImportEligibility } from "../../application/import-exclusion";
@@ -554,27 +554,34 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
           data: { lifecycle: "completed", completedAt: input.observedAt },
         });
-        if (input.leaseId || input.leaseCheckedAt) {
-          if (!input.leaseId || !input.leaseCheckedAt)
-            throw new LeaseFenceError("import lease context is incomplete");
-          const result = await tx.importJob.updateMany({
-            where: {
-              archiveId: input.archiveId,
-              id: input.importJobId,
-              leaseId: input.leaseId,
-              leaseExpiresAt: { gt: input.leaseCheckedAt },
-              status: "finalizing",
-            },
-            data: { status: "completed", finishedAt: input.observedAt, retryable: false },
-          });
-          if (result.count !== 1) throw new LeaseFenceError("job lease changed during import");
+        if (input.leaseId !== undefined) {
+          const result = await tx.$queryRaw<Array<{ readonly id: string }>>(Prisma.sql`
+            WITH database_clock AS (SELECT clock_timestamp() AS now)
+            UPDATE "ImportJob" AS job
+               SET status = 'completed',
+                   "finishedAt" = ${input.observedAt},
+                   retryable = false,
+                   "leaseId" = NULL,
+                   "leaseOwner" = NULL,
+                   "leaseExpiresAt" = NULL,
+                   "updatedAt" = database_clock.now
+              FROM database_clock
+             WHERE job."archiveId" = CAST(${input.archiveId} AS uuid)
+               AND job.id = CAST(${input.importJobId} AS uuid)
+               AND job."leaseId" = ${input.leaseId}
+               AND job."leaseExpiresAt" > database_clock.now
+               AND job.status = 'finalizing'
+             RETURNING job.id
+          `);
+          if (result.length !== 1) throw new LeaseFenceError("job lease changed during import");
         } else {
           await tx.importJob.update({
             where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
             data: { status: "completed", finishedAt: input.observedAt, retryable: false },
           });
         }
-      } catch {
+      } catch (error) {
+        if (error instanceof LeaseFenceError) throw error;
         throw Object.assign(new Error("snapshot import finalization failed"), {
           kind: "internal",
           phase: "finalization",

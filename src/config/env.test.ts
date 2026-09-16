@@ -61,4 +61,22 @@ describe("environment configuration", () => {
     expect(() => parseEnv({ OIDC_SUBJECT: "" })).toThrow();
     expect(() => parseEnv({ OIDC_CLIENT_SECRET_FILE: "" })).toThrow();
   });
+
+  it("rejects a heartbeat that cannot run before the lease expires", () => {
+    expect(() =>
+      parseEnv({
+        ECHOHOARD_WORKER_LEASE_MS: "1000",
+        ECHOHOARD_WORKER_HEARTBEAT_MS: "1000",
+      }),
+    ).toThrow();
+    expect(
+      parseEnv({
+        ECHOHOARD_WORKER_LEASE_MS: "1000",
+        ECHOHOARD_WORKER_HEARTBEAT_MS: "500",
+      }),
+    ).toMatchObject({
+      ECHOHOARD_WORKER_LEASE_MS: 1000,
+      ECHOHOARD_WORKER_HEARTBEAT_MS: 500,
+    });
+  });
 });

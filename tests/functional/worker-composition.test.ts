@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { mkdtemp, readdir, rm, readFile, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -22,7 +22,7 @@ import { createFixtureOwnedAccount } from "./owned-account-fixture.js";
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error("DATABASE_URL is required for the PostgreSQL functional suite");
 const prisma = new PrismaClient({ datasourceUrl: databaseUrl });
-const now = new Date("2026-01-01T00:00:00.000Z");
+const now = new Date();
 const userId = randomUUID();
 const archiveId = randomUUID();
 const sourceId = randomUUID();
@@ -279,6 +279,122 @@ describe("PostgreSQL worker job composition", () => {
     expect(await readdir(workRoot)).toEqual([]);
   });
 
+  it("rolls back an import when its lease expires while finalization is in flight", async () => {
+    const seeded = await seedPipelineJob("lease-expiry");
+    const leaseId = randomUUID();
+    const observedAt = new Date();
+    const expiresAt = new Date(Date.now() + 250);
+    await prisma.importJob.update({
+      where: { id: seeded.jobId },
+      data: {
+        status: "finalizing",
+        leaseId,
+        leaseOwner: "old-worker",
+        leaseExpiresAt: expiresAt,
+      },
+    });
+    const blocker = await lockSnapshot(seeded.snapshotId);
+    let importing: Promise<unknown> | undefined;
+    try {
+      // Keep the old pre-transaction observation in this fixture deliberately:
+      // finalization must ignore it and ask PostgreSQL for the current time.
+      const importInput = {
+        archiveId,
+        ownedAccountId,
+        snapshotId: seeded.snapshotId,
+        importJobId: seeded.jobId,
+        observedAt,
+        records: leaseRegressionRecords("expiry"),
+        leaseId,
+        leaseCheckedAt: new Date(),
+      };
+      importing = new PrismaTextSnapshotImporter(prisma).import(importInput);
+      await delay(400);
+      blocker.release();
+      await expect(importing).rejects.toBeInstanceOf(LeaseFenceError);
+    } finally {
+      blocker.release();
+      await blocker.done;
+      await importing?.catch(() => undefined);
+    }
+
+    await expect(
+      prisma.snapshot.findUnique({ where: { id: seeded.snapshotId } }),
+    ).resolves.toMatchObject({ lifecycle: "ready", completedAt: null });
+    await expect(
+      prisma.importJob.findUnique({ where: { id: seeded.jobId } }),
+    ).resolves.toMatchObject({ status: "finalizing", leaseId });
+    expect(
+      await prisma.person.count({ where: { archiveId, displayName: "Lease expiry person" } }),
+    ).toBe(0);
+  });
+
+  it("rejects finalization after a replacement runner takes over an in-flight import", async () => {
+    const seeded = await seedPipelineJob("lease-takeover");
+    const oldLease = randomUUID();
+    await prisma.importJob.update({
+      where: { id: seeded.jobId },
+      data: {
+        status: "finalizing",
+        leaseId: oldLease,
+        leaseOwner: "old-worker",
+        leaseExpiresAt: new Date(Date.now() + 10_000),
+      },
+    });
+    const blocker = await lockSnapshot(seeded.snapshotId);
+    let importing: Promise<unknown> | undefined;
+    let replacementLease: string | null = null;
+    try {
+      const importInput = {
+        archiveId,
+        ownedAccountId,
+        snapshotId: seeded.snapshotId,
+        importJobId: seeded.jobId,
+        observedAt: new Date(),
+        records: leaseRegressionRecords("takeover"),
+        leaseId: oldLease,
+        leaseCheckedAt: new Date(),
+      };
+      importing = new PrismaTextSnapshotImporter(prisma).import(importInput);
+      await delay(50);
+      await prisma.importJob.update({
+        where: { id: seeded.jobId },
+        data: { leaseExpiresAt: new Date(Date.now() - 1_000) },
+      });
+      const leases = new PrismaImportJobLeases(prisma);
+      await expect(leases.recoverExpired(new Date())).resolves.toContainEqual({
+        jobId: seeded.jobId,
+        leaseId: oldLease,
+      });
+      replacementLease = await leases.acquire(
+        seeded.jobId,
+        "replacement-worker",
+        new Date(Date.now() + 10_000),
+      );
+      expect(replacementLease).not.toBeNull();
+      await new PrismaDecryptJobStore(prisma).markLeased(
+        seeded.jobId,
+        replacementLease!,
+        new Date(),
+      );
+      blocker.release();
+      await expect(importing).rejects.toBeInstanceOf(LeaseFenceError);
+    } finally {
+      blocker.release();
+      await blocker.done;
+      await importing?.catch(() => undefined);
+      if (replacementLease)
+        await new PrismaImportJobLeases(prisma).release(replacementLease, new Date());
+    }
+
+    await expect(
+      prisma.snapshot.findUnique({ where: { id: seeded.snapshotId } }),
+    ).resolves.toMatchObject({ lifecycle: "ready", completedAt: null });
+    await expect(
+      prisma.importJob.findUnique({ where: { id: seeded.jobId } }),
+    ).resolves.toMatchObject({ status: "leased", leaseId: null });
+  });
+
   it("keeps unsupported adaptation terminal and preserves the source snapshot", async () => {
     const seeded = await seedPipelineJob("adaptation");
     const adapter: SnapshotAdapterPort = {
@@ -483,4 +599,41 @@ function pipelineRecords(snapshotId: string): readonly ImportRecord[] {
       firstSeenSnapshotId: snapshotId,
     },
   ];
+}
+
+function leaseRegressionRecords(label: string): readonly ImportRecord[] {
+  return [
+    {
+      kind: "person",
+      stableKey: `lease-${label}-person`,
+      displayName: `Lease ${label} person`,
+    },
+  ];
+}
+
+async function lockSnapshot(snapshotId: string): Promise<{
+  readonly release: () => void;
+  readonly done: Promise<void>;
+}> {
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let lockedResolve: () => void = () => undefined;
+  const locked = new Promise<void>((resolve) => {
+    lockedResolve = resolve;
+  });
+  const done = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw(
+      Prisma.sql`SELECT id FROM "Snapshot" WHERE id = CAST(${snapshotId} AS uuid) FOR UPDATE`,
+    );
+    lockedResolve();
+    await held;
+  });
+  await locked;
+  return { release, done };
+}
+
+async function delay(milliseconds: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }

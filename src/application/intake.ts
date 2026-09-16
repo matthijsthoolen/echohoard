@@ -88,7 +88,10 @@ export class DecryptJobRunner {
     private readonly options: DecryptJobRunnerOptions,
     private readonly adapter?: SnapshotAdapterPort,
     private readonly importer?: TextSnapshotImporter,
-  ) {}
+  ) {
+    if (options.heartbeatMilliseconds >= options.leaseDurationMilliseconds)
+      throw new Error("worker heartbeat must be shorter than its lease duration");
+  }
 
   /** Atomically requeues expired jobs, then removes only the expired lease's
    * work directory. The database lease operation remains authoritative. */
@@ -157,7 +160,6 @@ export class DecryptJobRunner {
         observedAt: job.observedAt ?? this.clock.now(),
         records: adapted.records,
         leaseId: lease,
-        leaseCheckedAt: this.clock.now(),
       };
       await monitor.run(
         () =>

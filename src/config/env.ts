@@ -37,6 +37,14 @@ const schema = z.object({
   ECHOHOARD_WACLI_WEBHOOK_SECRET_FILE: z.string().min(1).optional(),
 });
 
+const validatedSchema = schema.refine(
+  (values) => values.ECHOHOARD_WORKER_HEARTBEAT_MS < values.ECHOHOARD_WORKER_LEASE_MS,
+  {
+    path: ["ECHOHOARD_WORKER_HEARTBEAT_MS"],
+    message: "must be shorter than ECHOHOARD_WORKER_LEASE_MS",
+  },
+);
+
 export type EchohoardEnv = z.infer<typeof schema>;
 
 /**
@@ -47,7 +55,7 @@ export type EchohoardEnv = z.infer<typeof schema>;
  * Unknown process variables are deliberately not forwarded to the schema.
  */
 export function parseEnv(input: NodeJS.ProcessEnv = process.env): EchohoardEnv {
-  return schema.parse({
+  return validatedSchema.parse({
     NODE_ENV: input.NODE_ENV,
     ECHOHOARD_ROLE: input.ECHOHOARD_ROLE,
     OIDC_ISSUER: input.OIDC_ISSUER ?? input.ECHOHOARD_OIDC_ISSUER,

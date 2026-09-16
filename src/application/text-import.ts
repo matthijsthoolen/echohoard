@@ -115,7 +115,6 @@ export interface TextSnapshotImportInput {
   /** Backup imports must carry the lease that fenced their job transition.
    * Live receipts do not use the backup job lease path. */
   readonly leaseId?: string;
-  readonly leaseCheckedAt?: Date;
   readonly liveReceipt?: {
     readonly receiptId: string;
     readonly claimId: string;
