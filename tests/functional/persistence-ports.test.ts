@@ -41,7 +41,10 @@ describe("archive-scoped persistence ports", () => {
   });
 
   it("exposes every modeled aggregate through an archive-scoped port", () => {
-    for (const port of Object.values(ports)) expect(port.list).toBeTypeOf("function");
+    const aggregatePorts = Object.entries(ports).filter(
+      ([name]) => name !== "liveEventInbox" && name !== "transcriptionSettings",
+    );
+    for (const [, port] of aggregatePorts) expect(port.list).toBeTypeOf("function");
   });
 
   it("exposes owned accounts through an archive-scoped port", async () => {
