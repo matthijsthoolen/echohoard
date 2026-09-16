@@ -437,7 +437,11 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       );
     if (input.fuzzyText) conditions.push(Prisma.sql`message.body % ${input.fuzzyText}`);
     if (input.conversationId)
-      conditions.push(Prisma.sql`message."conversationId" = ${input.conversationId}::uuid`);
+      conditions.push(
+        Prisma.sql`COALESCE(source."unifiedConversationId", message."conversationId") = ${input.conversationId}::uuid`,
+      );
+    if (input.sourceAccountId)
+      conditions.push(Prisma.sql`source."ownedAccountId" = ${input.sourceAccountId}::uuid`);
     if (input.personId) conditions.push(Prisma.sql`message."senderId" = ${input.personId}::uuid`);
     if (input.senderDirection)
       conditions.push(
@@ -451,7 +455,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
     if (input.fuzzyName)
       conditions.push(
         Prisma.sql`(sender."displayName" % ${input.fuzzyName}
-          OR conversation.title % ${input.fuzzyName})`,
+          OR COALESCE(conversation."ownerTitle", conversation.title) % ${input.fuzzyName})`,
       );
     const where = Prisma.join(conditions, " AND ");
     const ordering =
@@ -465,7 +469,7 @@ export class PrismaReadPersistence implements ReadPersistencePort {
       WITH ranked AS (
         SELECT
           message.id,
-          message."conversationId" AS conversation_id,
+          COALESCE(source."unifiedConversationId", message."conversationId") AS conversation_id,
           GREATEST(
             CASE WHEN ${input.query.trim()} <> '' THEN ts_rank_cd(
               message."searchVector",
@@ -473,17 +477,23 @@ export class PrismaReadPersistence implements ReadPersistencePort {
             ) ELSE 0 END,
             COALESCE(similarity(message.body, ${input.fuzzyText ?? ""}), 0),
             COALESCE(similarity(sender."displayName", ${input.fuzzyName ?? ""}), 0),
-            COALESCE(similarity(conversation.title, ${input.fuzzyName ?? ""}), 0)
+            COALESCE(
+              similarity(COALESCE(conversation."ownerTitle", conversation.title), ${input.fuzzyName ?? ""}),
+              0
+            )
           )::double precision AS score,
           COALESCE(
             message."sentAt",
             TIMESTAMP '9999-12-31 23:59:59.999'
           ) AS sort_sent_at
         FROM "Message" AS message
+        LEFT JOIN "SourceConversation" AS source
+          ON source.id = message."sourceConversationId" AND source."archiveId" = message."archiveId"
         LEFT JOIN "Person" AS sender
           ON sender.id = message."senderId" AND sender."archiveId" = message."archiveId"
         JOIN "Conversation" AS conversation
-          ON conversation.id = message."conversationId" AND conversation."archiveId" = message."archiveId"
+          ON conversation.id = COALESCE(source."unifiedConversationId", message."conversationId")
+          AND conversation."archiveId" = message."archiveId"
         WHERE ${where}
       )
       SELECT ranked.id, ranked.score, ranked.sort_sent_at, ranked.conversation_id
@@ -1124,14 +1134,14 @@ export class PrismaStatisticsPersistence implements StatisticsPersistencePort {
           Prisma.sql`
         SELECT
           fm.conversation_id,
-          conversation.title,
+          COALESCE(conversation."ownerTitle", conversation.title) AS title,
           COUNT(*)::bigint AS message_count,
           MAX(fm.sent_at) AS last_message_at
         FROM finalized_messages fm
         JOIN "Conversation" conversation
           ON conversation."archiveId" = fm.archive_id
           AND conversation.id = fm.conversation_id
-        GROUP BY fm.conversation_id, conversation.title
+        GROUP BY fm.conversation_id, conversation."ownerTitle", conversation.title
         ORDER BY message_count DESC, fm.conversation_id ASC
         LIMIT ${input.limit}
       `,
@@ -1184,13 +1194,17 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
       SELECT
         message.id,
         message."archiveId" AS archive_id,
-        message."conversationId" AS conversation_id,
+        COALESCE(source."unifiedConversationId", message."conversationId") AS conversation_id,
+        message."sourceConversationId" AS source_conversation_id,
         message."senderId" AS sender_id,
         message.metadata,
         message."sentAt" AS sent_at
       FROM "Message" message
+      LEFT JOIN "SourceConversation" source
+        ON source.id = message."sourceConversationId" AND source."archiveId" = message."archiveId"
       WHERE message."archiveId" = ${input.archiveId}::uuid
         AND message."materialized" = true
+        ${input.sourceAccountId ? Prisma.sql`AND source."ownedAccountId" = ${input.sourceAccountId}::uuid` : Prisma.empty}
         AND EXISTS (
           SELECT 1
           FROM "Snapshot" snapshot
@@ -1216,7 +1230,8 @@ function finalizedQuery(input: StatisticsPersistenceInput, select: Prisma.Sql): 
       FROM finalized_messages fm
       JOIN "ConversationParticipant" participant
         ON participant."archiveId" = fm.archive_id
-        AND participant."conversationId" = fm.conversation_id
+         AND (participant."conversationId" = fm.conversation_id
+           OR participant."sourceConversationId" = fm.source_conversation_id)
     )
     ${select}
   `;

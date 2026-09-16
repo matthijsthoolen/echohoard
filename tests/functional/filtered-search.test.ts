@@ -163,4 +163,20 @@ describe("PostgreSQL combinatorial filtered search", () => {
       "Person_displayName_trgm_idx",
     );
   });
+
+  it("proves unified source-account filtering has migration-managed indexes", async () => {
+    const plans = await prisma.$transaction(async (transaction) => {
+      await transaction.$executeRaw`SET LOCAL enable_seqscan = off`;
+      const rows = await transaction.$queryRaw<Array<{ "QUERY PLAN": string }>>(Prisma.sql`
+        EXPLAIN (COSTS OFF)
+        SELECT sc.id
+        FROM "SourceConversation" sc
+        WHERE sc."archiveId" = ${archiveOneId}::uuid
+          AND sc."ownedAccountId" = ${randomUUID()}::uuid
+          AND sc."unifiedConversationId" = ${conversationOneId}::uuid
+      `);
+      return rows.map((row) => row["QUERY PLAN"]).join("\n");
+    });
+    expect(plans).toContain("SourceConversation_archiveId_ownedAccountId_unifiedConversation");
+  });
 });

@@ -26,6 +26,8 @@ export interface ArchiveStatisticsQuery {
   readonly to?: string;
   readonly bucket?: StatisticsBucket;
   readonly limit?: number;
+  /** Restricts message-derived statistics to one owned source account. */
+  readonly sourceAccountId?: string;
 }
 
 export interface ArchiveStatisticsRead {
@@ -70,6 +72,7 @@ export interface StatisticsPersistenceInput {
   readonly to?: string;
   readonly bucket: StatisticsBucket;
   readonly limit: number;
+  readonly sourceAccountId?: string;
 }
 
 export interface StatisticsPersistenceResult {
@@ -113,6 +116,8 @@ export class ArchiveStatisticsService {
 
 function validateStatisticsQuery(query: ArchiveStatisticsQuery): StatisticsPersistenceInput {
   if (!query.archiveId.trim()) throw new Error("archiveId is required");
+  if (query.sourceAccountId !== undefined && !query.sourceAccountId.trim())
+    throw new Error("sourceAccountId is invalid");
   const from = normalizeDate(query.from, "from");
   const to = normalizeDate(query.to, "to");
   if (from && to && from >= to) throw new Error("from must be earlier than to");
@@ -128,6 +133,7 @@ function validateStatisticsQuery(query: ArchiveStatisticsQuery): StatisticsPersi
     ...(to ? { to } : {}),
     bucket,
     limit,
+    ...(query.sourceAccountId ? { sourceAccountId: query.sourceAccountId } : {}),
   };
 }
 

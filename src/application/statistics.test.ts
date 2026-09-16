@@ -29,6 +29,7 @@ describe("archive statistics service", () => {
         to: "2026-01-02T00:00:00+02:00",
         bucket: "week",
         limit: 10,
+        sourceAccountId: "account-a",
       }),
     ).resolves.toEqual({
       archiveId: "archive-a",
@@ -45,6 +46,7 @@ describe("archive statistics service", () => {
       to: "2026-01-01T22:00:00.000Z",
       bucket: "week",
       limit: 10,
+      sourceAccountId: "account-a",
     });
   });
 
