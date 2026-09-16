@@ -282,10 +282,11 @@ describe("PostgreSQL worker job composition", () => {
   it("imports replayable normalized batches without collecting the source", async () => {
     const seeded = await seedPipelineJob("stream");
     const records = pipelineRecords(seeded.snapshotId);
+    let sourcePasses = 0;
     const adapter: SnapshotAdapterPort = {
       adapt: async () => ({
         adapterVersion: "synthetic-whatsapp.v1",
-        records: replayableRecordBatches(records),
+        records: replayableRecordBatches(records, () => (sourcePasses += 1)),
       }),
     };
     const runner = createPipelineRunner(
@@ -303,6 +304,7 @@ describe("PostgreSQL worker job composition", () => {
     expect(
       await prisma.message.count({ where: { archiveId, stableKey: "worker-pipeline-message" } }),
     ).toBe(1);
+    expect(sourcePasses).toBe(1);
     expect(await readdir(workRoot)).toEqual([]);
   });
 
@@ -630,9 +632,11 @@ function pipelineRecords(snapshotId: string): readonly ImportRecord[] {
 
 function replayableRecordBatches(
   records: readonly ImportRecord[],
+  onStart: () => void = () => undefined,
 ): AsyncIterable<readonly ImportRecord[]> {
   return {
     [Symbol.asyncIterator]: async function* () {
+      onStart();
       for (let offset = 0; offset < records.length; offset += 2)
         yield records.slice(offset, offset + 2);
     },

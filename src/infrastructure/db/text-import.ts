@@ -15,6 +15,24 @@ type Tx = Prisma.TransactionClient;
 const uuid = () => randomUUID();
 const json = (value: unknown): Prisma.InputJsonValue => value as Prisma.InputJsonValue;
 
+export const DEFAULT_IMPORT_TRANSACTION_TIMEOUT_MS = 6 * 60 * 60 * 1_000;
+const DEFAULT_IMPORT_TRANSACTION_MAX_WAIT_MS = 10_000;
+
+export interface TextSnapshotImporterOptions {
+  readonly transactionTimeoutMilliseconds?: number;
+  readonly transactionMaxWaitMilliseconds?: number;
+}
+
+export function importTransactionOptions(options: TextSnapshotImporterOptions = {}): {
+  readonly maxWait: number;
+  readonly timeout: number;
+} {
+  return {
+    maxWait: options.transactionMaxWaitMilliseconds ?? DEFAULT_IMPORT_TRANSACTION_MAX_WAIT_MS,
+    timeout: options.transactionTimeoutMilliseconds ?? DEFAULT_IMPORT_TRANSACTION_TIMEOUT_MS,
+  };
+}
+
 async function forEachRecord(
   source: TextSnapshotImportInput["records"],
   callback: (record: ImportRecord) => Promise<void>,
@@ -35,6 +53,32 @@ async function forEachRecord(
   return count;
 }
 
+function orderedRecordSource(
+  source: TextSnapshotImportInput["records"],
+): TextSnapshotImportInput["records"] {
+  if (!Array.isArray(source)) return source;
+  return [...source].sort((left, right) => recordOrder(left) - recordOrder(right));
+}
+
+function recordOrder(record: ImportRecord): number {
+  switch (record.kind) {
+    case "person":
+      return 0;
+    case "identity":
+      return 1;
+    case "conversation":
+      return 2;
+    case "participant":
+      return 3;
+    case "message":
+      return 4;
+    case "revision":
+      return 5;
+    case "attachment":
+      return 6;
+  }
+}
+
 function isAsyncRecordSource(
   source: TextSnapshotImportInput["records"],
 ): source is AsyncIterable<readonly ImportRecord[]> {
@@ -45,18 +89,21 @@ function isAsyncRecordSource(
  * rows have succeeded. Existing rows are updated with last-seen provenance;
  * retries therefore converge on the same logical result. */
 export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
-  public constructor(private readonly prisma: PrismaClient) {}
+  public constructor(
+    private readonly prisma: PrismaClient,
+    private readonly options: TextSnapshotImporterOptions = {},
+  ) {}
 
   public async import(input: TextSnapshotImportInput): Promise<{ readonly imported: number }> {
-    const records = input.records;
+    const records = orderedRecordSource(input.records);
     return this.prisma.$transaction(async (tx) => {
       const people = new Map<string, string>();
       const identities = new Map<string, string>();
       const conversations = new Map<string, string>();
       const sourceConversations = new Map<string, string>();
-      const messages = new Map<string, string>();
+      const messages = new Map<string, { readonly id: string; readonly conversationKey: string }>();
       const conversationSources = new Map<string, { namespace: string; key: string }>();
-      const messageConversations = new Map<string, string>();
+      const pendingReplies = new Map<string, string[]>();
       let importedCount = 0;
       const accounts = await tx.ownedAccount.findMany({
         where: { archiveId: input.archiveId },
@@ -141,8 +188,6 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           });
           people.set(record.stableKey, existing.id);
         }
-      });
-      await forEachRecord(records, async (record) => {
         if (record.kind === "identity") {
           const personId = record.personKey ? people.get(record.personKey) : undefined;
           if (!personId) return;
@@ -271,8 +316,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             observedAt: input.observedAt,
           });
         }
-      });
-      await forEachRecord(records, async (record) => {
+
         if (record.kind === "participant") {
           const conversationId = conversations.get(record.conversationKey);
           const sourceConversationId = sourceConversations.get(record.conversationKey);
@@ -301,150 +345,165 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
             update: { role: record.role },
           });
         }
-      });
-      await forEachRecord(records, async (record) => {
-        if (record.kind !== "message") return;
-        const conversationId = conversations.get(record.conversationKey);
-        const sourceConversationId = sourceConversations.get(record.conversationKey);
-        if (!conversationId || !sourceConversationId) return;
-        const senderId = record.senderIdentityKey
-          ? await identityPersonId(input.archiveId, identities.get(record.senderIdentityKey), tx)
-          : null;
-        const sentAt = record.timestamp ? new Date(record.timestamp) : null;
-        const sourceConversation = conversationSources.get(record.conversationKey);
-        if (!sourceConversation) return;
-        const stableKey = await messageStableKey(
-          tx,
-          input.archiveId,
-          ownedAccountId,
-          sourceConversationId,
-          record.stableKey,
-        );
-        const deletion = record.sourceDeletion;
-        const deletionObservedAt = deletion?.observedAt
-          ? new Date(deletion.observedAt)
-          : input.observedAt;
-        const prior = await tx.message.findUnique({
-          where: {
-            archiveId_stableKey: { archiveId: input.archiveId, stableKey },
-          },
-          select: { metadata: true, body: true },
-        });
-        const existing = await tx.message.upsert({
-          where: {
-            archiveId_stableKey: { archiveId: input.archiveId, stableKey },
-          },
-          create: {
-            id: stableUuid(input.archiveId, stableKey),
-            archiveId: input.archiveId,
-            conversationId,
+
+        if (record.kind === "message") {
+          const conversationId = conversations.get(record.conversationKey);
+          const sourceConversationId = sourceConversations.get(record.conversationKey);
+          if (!conversationId || !sourceConversationId) return;
+          const senderId = record.senderIdentityKey
+            ? await identityPersonId(input.archiveId, identities.get(record.senderIdentityKey), tx)
+            : null;
+          const sentAt = record.timestamp ? new Date(record.timestamp) : null;
+          const sourceConversation = conversationSources.get(record.conversationKey);
+          if (!sourceConversation) return;
+          const stableKey = await messageStableKey(
+            tx,
+            input.archiveId,
+            ownedAccountId,
             sourceConversationId,
-            senderId,
-            stableKey,
-            sourceType: record.source.namespace,
-            sourceKey: record.source.value,
-            messageType: record.messageKind,
-            body: record.body,
-            metadata: json({
-              direction: record.direction,
-              bodyState: record.bodyState,
-              ...(record.metadata ?? {}),
-              ...(record.unsupportedTypeCode === undefined
-                ? {}
-                : { unsupportedTypeCode: record.unsupportedTypeCode }),
-              firstSeenSnapshotId: input.snapshotId,
-              lastSeenSnapshotId: input.snapshotId,
-            }),
-            ...(deletion
-              ? {
-                  sourceDeleted: true,
-                  contentUnavailable: record.body === undefined,
-                  sourceDeletedAt: deletionObservedAt,
-                  sourceDeletionObservationKey: deletion.eventKey,
-                  sourceDeletionMetadata: json({
-                    kind: deletion.kind,
-                    eventKey: deletion.eventKey,
-                    observedAt: deletion.observedAt,
-                    ...(deletion.sourceMetadata ?? {}),
-                  }),
-                }
-              : {}),
-            sentAt,
-            firstSeenAt: input.observedAt,
-            lastSeenAt: input.observedAt,
-            materialized: jobEligibility === "eligible",
-          },
-          update:
-            jobEligibility === "eligible"
-              ? {
-                  senderId,
-                  ...(record.body !== undefined ? { body: record.body } : {}),
-                  messageType: record.messageKind,
-                  lastSeenAt: input.observedAt,
-                  materialized: true,
-                  metadata: json({
-                    ...(asObject(prior?.metadata) ?? {}),
-                    direction: record.direction,
-                    bodyState: record.bodyState,
-                    ...(record.metadata ?? {}),
-                    ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
-                  }),
-                  ...(deletion
-                    ? {
-                        sourceDeleted: true,
-                        ...(record.body !== undefined
-                          ? { contentUnavailable: false }
-                          : prior?.body == null
-                            ? { contentUnavailable: true }
-                            : {}),
-                        sourceDeletedAt: deletionObservedAt,
-                        sourceDeletionObservationKey: deletion.eventKey,
-                        sourceDeletionMetadata: json({
-                          kind: deletion.kind,
-                          eventKey: deletion.eventKey,
-                          observedAt: deletion.observedAt,
-                          ...(deletion.sourceMetadata ?? {}),
-                        }),
-                      }
-                    : record.body !== undefined
-                      ? { contentUnavailable: false }
-                      : {}),
-                }
-              : {},
-        });
-        messages.set(record.stableKey, existing.id);
-        messageConversations.set(record.stableKey, record.conversationKey);
-        await upsertObservation(tx.messageObservation, {
-          archiveId: input.archiveId,
-          ownedAccountId,
-          sourceId: job.sourceId,
-          snapshotId: input.snapshotId,
-          importJobId: input.importJobId,
-          sourceConversationId,
-          sourceConversationKey: sourceConversation.key,
-          sourceNamespace: sourceConversation.namespace,
-          sourceEntityKey: record.stableKey,
-          logicalEntityKey: stableKey,
-          observationKey: record.sourceDeletion?.eventKey ?? record.stableKey,
-          messageId: existing.id,
-          value: record,
-          eligibility: jobEligibility,
-          observationKind: record.sourceDeletion ? "source-deletion-tombstone" : "value",
-          observedAt: deletion?.observedAt ? deletionObservedAt : input.observedAt,
-        });
-      });
-      await forEachRecord(records, async (record) => {
-        if (record.kind === "message" && record.replyToKey) {
-          const id = messages.get(record.stableKey),
-            replyToId = messages.get(record.replyToKey);
-          if (id && replyToId)
-            await tx.message.update({
-              where: { archiveId_id: { archiveId: input.archiveId, id } },
-              data: { replyToId },
-            });
+            record.stableKey,
+          );
+          const deletion = record.sourceDeletion;
+          const deletionObservedAt = deletion?.observedAt
+            ? new Date(deletion.observedAt)
+            : input.observedAt;
+          const prior = await tx.message.findUnique({
+            where: {
+              archiveId_stableKey: { archiveId: input.archiveId, stableKey },
+            },
+            select: { metadata: true, body: true },
+          });
+          const existing = await tx.message.upsert({
+            where: {
+              archiveId_stableKey: { archiveId: input.archiveId, stableKey },
+            },
+            create: {
+              id: stableUuid(input.archiveId, stableKey),
+              archiveId: input.archiveId,
+              conversationId,
+              sourceConversationId,
+              senderId,
+              stableKey,
+              sourceType: record.source.namespace,
+              sourceKey: record.source.value,
+              messageType: record.messageKind,
+              body: record.body,
+              metadata: json({
+                direction: record.direction,
+                bodyState: record.bodyState,
+                ...(record.metadata ?? {}),
+                ...(record.unsupportedTypeCode === undefined
+                  ? {}
+                  : { unsupportedTypeCode: record.unsupportedTypeCode }),
+                firstSeenSnapshotId: input.snapshotId,
+                lastSeenSnapshotId: input.snapshotId,
+              }),
+              ...(deletion
+                ? {
+                    sourceDeleted: true,
+                    contentUnavailable: record.body === undefined,
+                    sourceDeletedAt: deletionObservedAt,
+                    sourceDeletionObservationKey: deletion.eventKey,
+                    sourceDeletionMetadata: json({
+                      kind: deletion.kind,
+                      eventKey: deletion.eventKey,
+                      observedAt: deletion.observedAt,
+                      ...(deletion.sourceMetadata ?? {}),
+                    }),
+                  }
+                : {}),
+              sentAt,
+              firstSeenAt: input.observedAt,
+              lastSeenAt: input.observedAt,
+              materialized: jobEligibility === "eligible",
+            },
+            update:
+              jobEligibility === "eligible"
+                ? {
+                    senderId,
+                    ...(record.body !== undefined ? { body: record.body } : {}),
+                    messageType: record.messageKind,
+                    lastSeenAt: input.observedAt,
+                    materialized: true,
+                    metadata: json({
+                      ...(asObject(prior?.metadata) ?? {}),
+                      direction: record.direction,
+                      bodyState: record.bodyState,
+                      ...(record.metadata ?? {}),
+                      ...mergeSnapshotProvenance(prior?.metadata, input.snapshotId),
+                    }),
+                    ...(deletion
+                      ? {
+                          sourceDeleted: true,
+                          ...(record.body !== undefined
+                            ? { contentUnavailable: false }
+                            : prior?.body == null
+                              ? { contentUnavailable: true }
+                              : {}),
+                          sourceDeletedAt: deletionObservedAt,
+                          sourceDeletionObservationKey: deletion.eventKey,
+                          sourceDeletionMetadata: json({
+                            kind: deletion.kind,
+                            eventKey: deletion.eventKey,
+                            observedAt: deletion.observedAt,
+                            ...(deletion.sourceMetadata ?? {}),
+                          }),
+                        }
+                      : record.body !== undefined
+                        ? { contentUnavailable: false }
+                        : {}),
+                  }
+                : {},
+          });
+          messages.set(record.stableKey, {
+            id: existing.id,
+            conversationKey: record.conversationKey,
+          });
+          const waitingReplies = pendingReplies.get(record.stableKey);
+          if (waitingReplies) {
+            for (const waitingReplyId of waitingReplies)
+              await tx.message.update({
+                where: { archiveId_id: { archiveId: input.archiveId, id: waitingReplyId } },
+                data: { replyToId: existing.id },
+              });
+            pendingReplies.delete(record.stableKey);
+          }
+          await upsertObservation(tx.messageObservation, {
+            archiveId: input.archiveId,
+            ownedAccountId,
+            sourceId: job.sourceId,
+            snapshotId: input.snapshotId,
+            importJobId: input.importJobId,
+            sourceConversationId,
+            sourceConversationKey: sourceConversation.key,
+            sourceNamespace: sourceConversation.namespace,
+            sourceEntityKey: record.stableKey,
+            logicalEntityKey: stableKey,
+            observationKey: record.sourceDeletion?.eventKey ?? record.stableKey,
+            messageId: existing.id,
+            value: record,
+            eligibility: jobEligibility,
+            observationKind: record.sourceDeletion ? "source-deletion-tombstone" : "value",
+            observedAt: deletion?.observedAt ? deletionObservedAt : input.observedAt,
+          });
+
+          if (record.replyToKey) {
+            const id = messages.get(record.stableKey)?.id,
+              replyToId = messages.get(record.replyToKey)?.id;
+            if (id && replyToId)
+              await tx.message.update({
+                where: { archiveId_id: { archiveId: input.archiveId, id } },
+                data: { replyToId },
+              });
+            else if (id) {
+              const waiting = pendingReplies.get(record.replyToKey) ?? [];
+              waiting.push(id);
+              pendingReplies.set(record.replyToKey, waiting);
+            }
+          }
         }
         if (record.kind === "revision") {
-          const messageId = messages.get(record.messageKey);
+          const messageId = messages.get(record.messageKey)?.id;
           if (!messageId) return;
           const priorRevision = await tx.messageRevision.findUnique({
             where: {
@@ -487,7 +546,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
                   }
                 : {},
           });
-          const messageConversationKey = messageConversations.get(record.messageKey);
+          const messageConversationKey = messages.get(record.messageKey)?.conversationKey;
           const revisionSourceIdentity = messageConversationKey
             ? conversationSources.get(messageConversationKey)
             : undefined;
@@ -532,12 +591,11 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
               observedAt: input.observedAt,
             });
         }
-      });
-      await forEachRecord(records, async (record) => {
+
         if (record.kind !== "attachment") return;
-        const messageId = messages.get(record.messageKey);
+        const messageId = messages.get(record.messageKey)?.id;
         if (!messageId) return;
-        const messageConversationKey = messageConversations.get(record.messageKey);
+        const messageConversationKey = messages.get(record.messageKey)?.conversationKey;
         const sourceConversationId = messageConversationKey
           ? sourceConversations.get(messageConversationKey)
           : undefined;
@@ -624,7 +682,7 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
         if (result.count !== 1) throw new LeaseFenceError("live event claim changed during import");
       }
       return { imported: importedCount };
-    });
+    }, importTransactionOptions(this.options));
   }
 }
 

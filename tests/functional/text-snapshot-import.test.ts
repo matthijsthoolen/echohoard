@@ -364,4 +364,95 @@ describe("transactional normalized text snapshot import", () => {
     expect(await prisma.person.count({ where: { archiveId: archiveOneId } })).toBe(1);
     expect(await prisma.person.count({ where: { archiveId: archiveTwoId } })).toBe(1);
   });
+
+  it("imports a 5k-message synthetic stream in one bounded transaction", async () => {
+    const account = await prisma.ownedAccount.findFirstOrThrow({
+      where: { archiveId: archiveTwoId },
+    });
+    const sourceId = randomUUID();
+    const snapshotId = randomUUID();
+    const importJobId = randomUUID();
+    await prisma.source.create({
+      data: {
+        id: sourceId,
+        archiveId: archiveTwoId,
+        ownedAccountId: account.id,
+        kind: "whatsapp",
+        stableKey: `scale-${sourceId}`,
+        sha256: "f".repeat(64),
+      },
+    });
+    await prisma.snapshot.create({
+      data: {
+        id: snapshotId,
+        archiveId: archiveTwoId,
+        ownedAccountId: account.id,
+        sourceId,
+        sha256: "0".repeat(64),
+      },
+    });
+    await prisma.importJob.create({
+      data: {
+        id: importJobId,
+        archiveId: archiveTwoId,
+        ownedAccountId: account.id,
+        sourceId,
+        snapshotId,
+        status: "queued",
+      },
+    });
+    let sourcePasses = 0;
+    const started = performance.now();
+    const beforeHeap = process.memoryUsage().heapUsed;
+    const result = await importer.import({
+      archiveId: archiveTwoId,
+      ownedAccountId: account.id,
+      snapshotId,
+      importJobId,
+      observedAt,
+      records: syntheticMessageStream(5_000, () => (sourcePasses += 1)),
+    });
+    const elapsedMilliseconds = performance.now() - started;
+    const heapDelta = process.memoryUsage().heapUsed - beforeHeap;
+    expect(result.imported).toBe(5_001);
+    expect(sourcePasses).toBe(1);
+    expect(elapsedMilliseconds).toBeLessThan(30_000);
+    expect(heapDelta).toBeLessThan(128 * 1024 * 1024);
+    await expect(
+      prisma.importJob.findUnique({ where: { id: importJobId } }),
+    ).resolves.toMatchObject({ status: "completed" });
+    await expect(
+      prisma.message.count({
+        where: { archiveId: archiveTwoId, stableKey: { startsWith: "scale-message-" } },
+      }),
+    ).resolves.toBe(5_000);
+  }, 45_000);
 });
+
+function syntheticMessageStream(
+  count: number,
+  onStart: () => void,
+): AsyncIterable<readonly ImportRecord[]> {
+  return {
+    [Symbol.asyncIterator]: async function* () {
+      onStart();
+      yield [{ kind: "conversation", stableKey: "scale-conversation", conversationKind: "direct" }];
+      for (let offset = 0; offset < count; offset += 250) {
+        const batch: ImportRecord[] = [];
+        for (let n = offset; n < Math.min(offset + 250, count); n++)
+          batch.push({
+            kind: "message",
+            stableKey: `scale-message-${n}`,
+            source: { namespace: "synthetic", value: `scale-source-${n}` },
+            conversationKey: "scale-conversation",
+            timestamp: observedAt.toISOString(),
+            direction: n % 2 === 0 ? "sent" : "received",
+            messageKind: "text",
+            body: `synthetic scale message ${n}`,
+            bodyState: "present",
+          });
+        yield batch;
+      }
+    },
+  };
+}

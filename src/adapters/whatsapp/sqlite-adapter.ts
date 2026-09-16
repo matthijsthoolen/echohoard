@@ -1,5 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import { createReadStream } from "node:fs";
+import { open, rm } from "node:fs/promises";
+import { createInterface } from "node:readline";
+import { join } from "node:path";
 import type { SnapshotAdapterPort } from "../../application/intake.js";
 import type { ImportRecord, ImportRecordSource } from "../../application/text-import.js";
 import {
@@ -10,7 +14,11 @@ import {
   type NormalizedRecord,
 } from "./contract.js";
 import { normalizeWhatsAppIdentitiesAndConversations } from "./normalize.js";
-import { normalizeWhatsAppMessages, streamNormalizedWhatsAppMessages } from "./messages.js";
+import {
+  DEFAULT_MESSAGE_ROW_SPOOL_BYTES,
+  normalizeWhatsAppMessages,
+  streamNormalizedWhatsAppMessages,
+} from "./messages.js";
 
 type SqlValue = boolean | number | string | null;
 type SqlRow = Readonly<Record<string, SqlValue>>;
@@ -62,6 +70,11 @@ export interface SqliteReaderOptions {
   readonly schemaMaxBytes?: number;
   readonly terminationGraceMs?: number;
   readonly chunkSize?: number;
+}
+
+export interface WhatsAppSnapshotAdapterOptions {
+  readonly batchSize?: number;
+  readonly maxSpoolBytes?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 10 * 60_000;
@@ -139,13 +152,24 @@ export class PythonSqliteDatabaseReader implements SqliteDatabaseReader {
 }
 
 export class WhatsAppSnapshotAdapter implements SnapshotAdapterPort {
+  private readonly batchSize: number;
+  private readonly maxSpoolBytes: number;
+
   public constructor(
     private readonly reader: SqliteDatabaseReader = new PythonSqliteDatabaseReader(),
-    private readonly batchSize = DEFAULT_CHUNK_SIZE,
-  ) {}
+    batchSizeOrOptions: number | WhatsAppSnapshotAdapterOptions = DEFAULT_CHUNK_SIZE,
+  ) {
+    const options =
+      typeof batchSizeOrOptions === "number"
+        ? { batchSize: batchSizeOrOptions }
+        : batchSizeOrOptions;
+    this.batchSize = options.batchSize ?? DEFAULT_CHUNK_SIZE;
+    this.maxSpoolBytes = options.maxSpoolBytes ?? DEFAULT_MESSAGE_ROW_SPOOL_BYTES;
+  }
 
   public async adapt(input: {
     readonly decryptedPath: string;
+    readonly workPath?: string;
     readonly snapshotId: string;
     readonly accountScope: string;
   }): Promise<{ readonly adapterVersion: string; readonly records: ImportRecordSource }> {
@@ -163,27 +187,34 @@ export class WhatsAppSnapshotAdapter implements SnapshotAdapterPort {
         { version: selection.fingerprint, rows: metadata },
         { accountScope: input.accountScope },
       );
-      const records: AsyncIterable<readonly ImportRecord[]> = {
-        [Symbol.asyncIterator]: () =>
-          streamRecords(
-            metadataRecords,
-            streamNormalizedWhatsAppMessages(
-              source,
-              selection.fingerprint,
-              { rows: metadata },
-              columns,
-              {
-                snapshotId: input.snapshotId,
-                accountScope: input.accountScope,
-                batchSize: this.batchSize,
-              },
-            ),
-            this.batchSize,
-          ),
-      };
+      const orderedMetadataRecords = [...metadataRecords].sort(
+        (left, right) => importRecordOrder(left) - importRecordOrder(right),
+      );
+      if (!input.workPath)
+        throw new Error("streaming WhatsApp adaptation requires lease-owned work storage");
+      const recordsPath = join(input.workPath, "whatsapp-records.jsonl");
+      const rowSpoolPath = join(input.workPath, "whatsapp-message-rows.jsonl");
+      await materializeRecords(
+        recordsPath,
+        orderedMetadataRecords,
+        streamNormalizedWhatsAppMessages(
+          source,
+          selection.fingerprint,
+          { rows: metadata },
+          columns,
+          {
+            snapshotId: input.snapshotId,
+            accountScope: input.accountScope,
+            batchSize: this.batchSize,
+            rowSpoolPath,
+            maxSpoolBytes: this.maxSpoolBytes,
+          },
+        ),
+        this.maxSpoolBytes,
+      );
       return {
         adapterVersion: `${WHATSAPP_ADAPTER_CONTRACT_VERSION}:${selection.fingerprint}`,
-        records,
+        records: fileRecordSource(recordsPath, this.batchSize),
       };
     }
 
@@ -211,6 +242,107 @@ export class WhatsAppSnapshotAdapter implements SnapshotAdapterPort {
       adapterVersion: `${WHATSAPP_ADAPTER_CONTRACT_VERSION}:${selection.fingerprint}`,
       records: records.map(toImportRecord),
     };
+  }
+}
+
+async function materializeRecords(
+  path: string,
+  metadata: readonly NormalizedRecord[],
+  messages: AsyncIterable<readonly NormalizedRecord[]>,
+  maxBytes: number,
+): Promise<void> {
+  const file = await open(path, "wx");
+  let count = 0;
+  let bytes = 0;
+  let pending = "";
+  const append = async (record: NormalizedRecord): Promise<void> => {
+    const line = `${JSON.stringify(toImportRecord(record))}\n`;
+    const nextBytes = bytes + Buffer.byteLength(line, "utf8");
+    if (nextBytes > maxBytes)
+      throw Object.assign(new Error("normalized WhatsApp record spool exceeded its limit"), {
+        kind: "resource-limit",
+      });
+    bytes = nextBytes;
+    pending += line;
+    if (Buffer.byteLength(pending, "utf8") >= 64 * 1024) {
+      await file.write(Buffer.from(pending, "utf8"));
+      pending = "";
+    }
+  };
+  try {
+    for (const record of metadata) {
+      await append(record);
+      count += 1;
+    }
+    for await (const batch of messages)
+      for (const record of batch) {
+        await append(record);
+        count += 1;
+      }
+    if (pending) await file.write(Buffer.from(pending, "utf8"));
+  } finally {
+    await file.close();
+  }
+  if (count === 0) {
+    await rm(path, { force: true });
+    throw Object.assign(new Error("WhatsApp database contained no supported observations"), {
+      kind: "corrupt-source",
+    });
+  }
+}
+
+function fileRecordSource(path: string, batchSize: number): AsyncIterable<readonly ImportRecord[]> {
+  const size = Math.max(1, Math.min(1_000, Math.trunc(batchSize)));
+  return {
+    [Symbol.asyncIterator]: async function* () {
+      const input = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
+      let batch: ImportRecord[] = [];
+      try {
+        for await (const line of input) {
+          batch.push(parseImportRecord(line));
+          if (batch.length >= size) {
+            yield batch;
+            batch = [];
+          }
+        }
+        if (batch.length > 0) yield batch;
+      } finally {
+        input.close();
+      }
+    },
+  };
+}
+
+function parseImportRecord(line: string): ImportRecord {
+  let value: unknown;
+  try {
+    value = JSON.parse(line);
+  } catch {
+    throw new Error("normalized WhatsApp record spool is corrupt");
+  }
+  if (
+    !isRecord(value) ||
+    typeof value.kind !== "string" ||
+    (value.kind !== "participant" && typeof value.stableKey !== "string")
+  )
+    throw new Error("normalized WhatsApp record spool is corrupt");
+  return value as unknown as ImportRecord;
+}
+
+function importRecordOrder(record: NormalizedRecord): number {
+  switch (record.kind) {
+    case "person":
+      return 0;
+    case "identity":
+      return 1;
+    case "conversation":
+      return 2;
+    case "participant":
+      return 3;
+    case "message":
+      return 4;
+    case "revision":
+      return 5;
   }
 }
 

@@ -1,3 +1,6 @@
+import { createReadStream } from "node:fs";
+import { open, rm } from "node:fs/promises";
+import { createInterface } from "node:readline";
 import type {
   NormalizedDirection,
   NormalizedMessageKind,
@@ -32,6 +35,15 @@ export interface MessageMappingOptions {
   readonly snapshotId?: string;
   readonly accountScope?: string;
 }
+
+export interface StreamingMessageOptions extends MessageMappingOptions {
+  readonly batchSize?: number;
+  /** Lease-owned temporary storage for the source rows needed by references. */
+  readonly rowSpoolPath: string;
+  readonly maxSpoolBytes?: number;
+}
+
+export const DEFAULT_MESSAGE_ROW_SPOOL_BYTES = 16 * 1024 * 1024 * 1024;
 
 const source = (value: string) => ({ namespace: WHATSAPP_SOURCE_NAMESPACE, value });
 const identityKey = whatsappIdentityKey;
@@ -166,17 +178,16 @@ export function normalizeWhatsAppMessages(
 export const normalizeWhatsAppTextHistory = normalizeWhatsAppMessages;
 
 /**
- * Normalize a source through repeatable, bounded passes. The first pass keeps
- * only the small row-reference/identity index needed for replies and
- * reactions; message bodies are emitted from the second pass in batches.
- * SQLite extraction is therefore never represented as one large JS object.
+ * Normalize a source through one bounded extraction pass. The raw message
+ * rows are spooled to lease-owned work storage while a compact reference index
+ * is built; the spool is replayed locally to resolve replies and reactions.
  */
 export async function* streamNormalizedWhatsAppMessages(
   source: WhatsAppMessageRowSource,
   version: WhatsAppAdapterVersion,
   metadataRows: Pick<WhatsAppSqliteFixture, "rows">,
   columns: ReadonlyMap<string, readonly string[]>,
-  options: MessageMappingOptions & { readonly batchSize?: number } = {},
+  options: StreamingMessageOptions,
 ): AsyncGenerator<readonly NormalizedRecord[]> {
   const snapshotId = options.snapshotId ?? "fixture";
   const accountScope = options.accountScope ?? "default";
@@ -187,62 +198,101 @@ export async function* streamNormalizedWhatsAppMessages(
   const jidByRow = new Map<number, string>();
   const chatByRow = new Map<number, string>();
   const batchSize = boundedBatchSize(options.batchSize);
+  const spool = await open(options.rowSpoolPath, "wx");
+  let spoolBytes = 0;
+  let pendingSpool = "";
 
-  if (version === "android-current.v1") {
-    for (const row of rows(metadataRows, "jid")) {
-      const id = number(row._id);
-      const raw = stringValue(row.raw_string);
-      if (id !== undefined && raw) jidByRow.set(id, raw);
-    }
-    for (const row of rows(metadataRows, "chat")) {
-      const id = number(row._id);
-      const jid = jidByRow.get(number(row.jid_row_id) ?? -1);
-      if (id !== undefined && jid) chatByRow.set(id, jid);
-    }
-  }
-
-  for await (const row of source.streamRows(messageTable, columns.get(messageTable) ?? [])) {
-    const prepared = prepareMessage(version, row, chatByRow, jidByRow, accountScope, registry);
-    byRow.set(number(row._id) ?? -1, prepared);
-  }
-
-  let messageBatch: NormalizedRecord[] = [];
-  for await (const row of source.streamRows(messageTable, columns.get(messageTable) ?? [])) {
-    const prepared = byRow.get(number(row._id) ?? -1);
-    if (!prepared) continue;
-    messageBatch.push(
-      messageRecord(row, prepared, byRow, version, chatByRow, jidByRow, accountScope),
-    );
-    if (messageBatch.length >= batchSize) {
-      yield messageBatch;
-      messageBatch = [];
-    }
-  }
-  if (messageBatch.length > 0) yield messageBatch;
-
-  let revisionBatch: NormalizedRecord[] = [];
-  if (columns.has(editTable)) {
-    for await (const row of source.streamRows(editTable, columns.get(editTable)!)) {
-      const message = byRow.get(number(row.message_id) ?? -1);
-      const ordinal = number(row.edit_version);
-      if (!message || ordinal === undefined || ordinal < 1) continue;
-      const body = bodyFor(row.text_data ?? row.data);
-      revisionBatch.push({
-        kind: "revision",
-        stableKey: whatsappRevisionKey(message.stableKey, ordinal),
-        messageKey: message.stableKey,
-        revisionOrdinal: ordinal,
-        ...(body.value !== undefined ? { body: body.value } : {}),
-        bodyState: body.state,
-        firstSeenSnapshotId: snapshotId,
-      });
-      if (revisionBatch.length >= batchSize) {
-        yield revisionBatch;
-        revisionBatch = [];
+  try {
+    if (version === "android-current.v1") {
+      for (const row of rows(metadataRows, "jid")) {
+        const id = number(row._id);
+        const raw = stringValue(row.raw_string);
+        if (id !== undefined && raw) jidByRow.set(id, raw);
+      }
+      for (const row of rows(metadataRows, "chat")) {
+        const id = number(row._id);
+        const jid = jidByRow.get(number(row.jid_row_id) ?? -1);
+        if (id !== undefined && jid) chatByRow.set(id, jid);
       }
     }
+
+    for await (const row of source.streamRows(messageTable, columns.get(messageTable) ?? [])) {
+      const line = `${JSON.stringify(row)}\n`;
+      spoolBytes += Buffer.byteLength(line, "utf8");
+      if (spoolBytes > (options.maxSpoolBytes ?? DEFAULT_MESSAGE_ROW_SPOOL_BYTES))
+        throw Object.assign(new Error("WhatsApp message row spool exceeded its limit"), {
+          kind: "resource-limit",
+        });
+      pendingSpool += line;
+      if (Buffer.byteLength(pendingSpool, "utf8") >= 64 * 1024) {
+        await spool.write(Buffer.from(pendingSpool, "utf8"));
+        pendingSpool = "";
+      }
+      const prepared = prepareMessage(version, row, chatByRow, jidByRow, accountScope, registry);
+      byRow.set(number(row._id) ?? -1, prepared);
+    }
+    if (pendingSpool) await spool.write(Buffer.from(pendingSpool, "utf8"));
+    await spool.close();
+
+    let messageBatch: NormalizedRecord[] = [];
+    for await (const row of readRows(options.rowSpoolPath)) {
+      const prepared = byRow.get(number(row._id) ?? -1);
+      if (!prepared) continue;
+      messageBatch.push(
+        messageRecord(row, prepared, byRow, version, chatByRow, jidByRow, accountScope),
+      );
+      if (messageBatch.length >= batchSize) {
+        yield messageBatch;
+        messageBatch = [];
+      }
+    }
+    if (messageBatch.length > 0) yield messageBatch;
+
+    let revisionBatch: NormalizedRecord[] = [];
+    if (columns.has(editTable)) {
+      for await (const row of source.streamRows(editTable, columns.get(editTable)!)) {
+        const message = byRow.get(number(row.message_id) ?? -1);
+        const ordinal = number(row.edit_version);
+        if (!message || ordinal === undefined || ordinal < 1) continue;
+        const body = bodyFor(row.text_data ?? row.data);
+        revisionBatch.push({
+          kind: "revision",
+          stableKey: whatsappRevisionKey(message.stableKey, ordinal),
+          messageKey: message.stableKey,
+          revisionOrdinal: ordinal,
+          ...(body.value !== undefined ? { body: body.value } : {}),
+          bodyState: body.state,
+          firstSeenSnapshotId: snapshotId,
+        });
+        if (revisionBatch.length >= batchSize) {
+          yield revisionBatch;
+          revisionBatch = [];
+        }
+      }
+    }
+    if (revisionBatch.length > 0) yield revisionBatch;
+  } finally {
+    await spool.close().catch(() => undefined);
+    await rm(options.rowSpoolPath, { force: true }).catch(() => undefined);
   }
-  if (revisionBatch.length > 0) yield revisionBatch;
+}
+
+async function* readRows(path: string): AsyncGenerator<Row> {
+  const input = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
+  try {
+    for await (const line of input) {
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        throw new Error("WhatsApp message row spool is corrupt");
+      }
+      if (!isRecord(value)) throw new Error("WhatsApp message row spool is corrupt");
+      yield value as Row;
+    }
+  } finally {
+    input.close();
+  }
 }
 
 interface PreparedMessage {
@@ -329,6 +379,10 @@ function messageRecord(
 
 function boundedBatchSize(value: number | undefined): number {
   return Math.max(1, Math.min(1_000, Math.trunc(value ?? 500)));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function rows(fixture: Pick<WhatsAppSqliteFixture, "rows">, table: string): readonly Row[] {

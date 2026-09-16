@@ -67,6 +67,8 @@ export interface SnapshotPathPort {
 export interface SnapshotAdapterPort {
   adapt(input: {
     readonly decryptedPath: string;
+    /** Disposable lease-owned storage for bounded adapter spooling. */
+    readonly workPath?: string;
     readonly snapshotId: string;
     readonly accountScope: string;
   }): Promise<{
@@ -144,6 +146,7 @@ export class DecryptJobRunner {
         () =>
           this.adapter?.adapt({
             decryptedPath: decrypted.outputPath,
+            workPath,
             snapshotId: job.snapshotId as string,
             accountScope: job.ownedAccountId as string,
           }) ?? Promise.reject(new Error("worker import pipeline is incomplete")),

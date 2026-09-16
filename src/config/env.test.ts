@@ -79,4 +79,12 @@ describe("environment configuration", () => {
       ECHOHOARD_WORKER_HEARTBEAT_MS: 500,
     });
   });
+
+  it("defaults imports to the six-hour reference-scale transaction budget", () => {
+    expect(env.ECHOHOARD_WORKER_IMPORT_TRANSACTION_TIMEOUT_MS).toBe(21_600_000);
+    expect(env.ECHOHOARD_WORKER_IMPORT_SPOOL_MAX_BYTES).toBe(16 * 1024 * 1024 * 1024);
+    expect(parseEnv({ ECHOHOARD_WORKER_IMPORT_TRANSACTION_TIMEOUT_MS: "900000" })).toMatchObject({
+      ECHOHOARD_WORKER_IMPORT_TRANSACTION_TIMEOUT_MS: 900_000,
+    });
+  });
 });

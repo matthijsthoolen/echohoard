@@ -8,8 +8,8 @@ export type ImportRecord =
   | ImportAttachmentRecord;
 
 /** Records may be supplied in bounded batches so adapters never need to
- * materialize an entire source database before persistence starts. Async
- * sources are replayable: the importer makes ordered relationship passes. */
+ * materialize an entire source database before persistence starts. Streaming
+ * sources are consumed once and must emit relationship prerequisites first. */
 export type ImportRecordSource = readonly ImportRecord[] | AsyncIterable<readonly ImportRecord[]>;
 export interface ImportPersonRecord {
   readonly kind: "person";

@@ -221,8 +221,11 @@ export function createProductionWorker(
         maxRows: settings.ECHOHOARD_WORKER_SQLITE_MAX_ROWS,
         maxOutputBytes: settings.ECHOHOARD_WORKER_SQLITE_MAX_OUTPUT_BYTES,
       }),
+      { maxSpoolBytes: settings.ECHOHOARD_WORKER_IMPORT_SPOOL_MAX_BYTES },
     ),
-    new PrismaTextSnapshotImporter(prisma),
+    new PrismaTextSnapshotImporter(prisma, {
+      transactionTimeoutMilliseconds: settings.ECHOHOARD_WORKER_IMPORT_TRANSACTION_TIMEOUT_MS,
+    }),
   );
   const queue = new DecryptQueueLoop(
     jobs,

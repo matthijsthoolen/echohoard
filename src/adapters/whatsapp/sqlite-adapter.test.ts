@@ -86,14 +86,19 @@ fi
 
   it("emits normalized observations in bounded batches", async () => {
     const fixture = buildWhatsAppSqliteFixture("android-current.v1");
+    const workPath = await mkdtemp(join(tmpdir(), "echohoard-sqlite-work-"));
+    roots.push(workPath);
+    let messageExtractionCount = 0;
     const reader: SqliteDatabaseReader = {
       inspect: async () => fixture.schema,
       streamRows: async function* (_path, table) {
+        if (table === "message") messageExtractionCount += 1;
         for (const row of fixture.rows[table] ?? []) yield row;
       },
     };
     const result = await new WhatsAppSnapshotAdapter(reader, 2).adapt({
       decryptedPath: "/disposable/msgstore.db",
+      workPath,
       snapshotId: "snapshot-1",
       accountScope: "account-1",
     });
@@ -104,6 +109,7 @@ fi
     expect(batches.flat().some((record) => (record as { kind?: string }).kind === "message")).toBe(
       true,
     );
+    expect(messageExtractionCount).toBe(1);
   });
 
   it("terminates an extraction child at its timeout", async () => {
@@ -126,6 +132,8 @@ fi
 
   it("preserves hostile source text as inert normalized data", async () => {
     const fixture = buildWhatsAppSqliteFixture("android-current.v1");
+    const workPath = await mkdtemp(join(tmpdir(), "echohoard-sqlite-work-"));
+    roots.push(workPath);
     const reader: SqliteDatabaseReader = {
       inspect: async () => fixture.schema,
       streamRows: async function* (_path, table) {
@@ -146,6 +154,7 @@ fi
     };
     const result = await new WhatsAppSnapshotAdapter(reader).adapt({
       decryptedPath: "/disposable/msgstore.db",
+      workPath,
       snapshotId: "snapshot-1",
       accountScope: "account-1",
     });
@@ -154,6 +163,50 @@ fi
     expect(message).toMatchObject({ bodyState: "damaged" });
     expect(JSON.stringify(message)).not.toContain("<script>window.pwned=1</script>");
   });
+
+  it("keeps a 100k-message synthetic extraction single-pass and bounded", async () => {
+    const fixture = buildWhatsAppSqliteFixture("android-current.v1");
+    const workPath = await mkdtemp(join(tmpdir(), "echohoard-sqlite-scale-"));
+    roots.push(workPath);
+    const messageCount = 100_000;
+    let messageExtractionCount = 0;
+    const reader: SqliteDatabaseReader = {
+      inspect: async () => fixture.schema,
+      streamRows: async function* (_path, table) {
+        if (table === "jid") yield { _id: 1, raw_string: "scale@example" };
+        if (table === "chat") yield { _id: 1, jid_row_id: 1, is_group: 0 };
+        if (table === "message") {
+          messageExtractionCount += 1;
+          for (let n = 0; n < messageCount; n++)
+            yield {
+              _id: n + 1,
+              chat_row_id: 1,
+              from_me: n % 2,
+              timestamp: 1_700_000_000_000 + n,
+              message_type: 1,
+              key_id: `scale-${n}`,
+            };
+        }
+      },
+    };
+    const started = performance.now();
+    const result = await new WhatsAppSnapshotAdapter(reader, {
+      batchSize: 500,
+      maxSpoolBytes: 512 * 1024 * 1024,
+    }).adapt({
+      decryptedPath: "/disposable/msgstore.db",
+      workPath,
+      snapshotId: "scale-snapshot",
+      accountScope: "scale-account",
+    });
+    let recordCount = 0;
+    for await (const batch of result.records) recordCount += batch.length;
+    const elapsedMilliseconds = performance.now() - started;
+    expect(messageExtractionCount).toBe(1);
+    expect(recordCount).toBe(messageCount + 3);
+    expect(elapsedMilliseconds).toBeLessThan(15_000);
+    expect(process.memoryUsage().heapUsed).toBeLessThan(256 * 1024 * 1024);
+  }, 30_000);
 });
 
 async function collect(
