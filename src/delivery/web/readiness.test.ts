@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getMigrationReadinessFailure,
   hasCompletedMigrations,
   validateReadinessConfiguration,
   type ReadinessConfiguration,
@@ -62,5 +63,55 @@ describe("web readiness configuration", () => {
     expect(
       hasCompletedMigrations({ user_table: true, migrations_table: true, applied_migrations: 3n }),
     ).toBe(true);
+  });
+
+  it.each([
+    [
+      "latest migration is pending",
+      [{ migration_name: "001", finished_at: new Date(), rolled_back_at: null }],
+      ["001", "002"],
+      "migrations-pending",
+    ],
+    [
+      "migration failed",
+      [{ migration_name: "001", finished_at: null, rolled_back_at: null }],
+      ["001"],
+      "migrations-failed",
+    ],
+    [
+      "database has an unknown migration",
+      [
+        { migration_name: "001", finished_at: new Date(), rolled_back_at: null },
+        { migration_name: "foreign", finished_at: new Date(), rolled_back_at: null },
+      ],
+      ["001"],
+      "migrations-unknown",
+    ],
+  ])("rejects %s", (_, migrations, shipped, reason) => {
+    expect(
+      getMigrationReadinessFailure(
+        {
+          user_table: true,
+          migrations_table: true,
+          applied_migrations: migrations.length,
+          migrations,
+        },
+        shipped,
+      ),
+    ).toBe(reason);
+  });
+
+  it("requires every shipped migration, not merely a positive count", () => {
+    expect(
+      hasCompletedMigrations(
+        {
+          user_table: true,
+          migrations_table: true,
+          applied_migrations: 1n,
+          migrations: [{ migration_name: "001", finished_at: new Date(), rolled_back_at: null }],
+        },
+        ["001", "002"],
+      ),
+    ).toBe(false);
   });
 });

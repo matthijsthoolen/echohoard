@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 export interface ReadinessConfiguration {
   readonly [name: string]: string | undefined;
@@ -23,14 +24,59 @@ export interface MigrationReadiness {
   readonly user_table: boolean;
   readonly migrations_table: boolean;
   readonly applied_migrations: number | bigint;
+  readonly migrations?: readonly MigrationRecord[];
 }
 
-export function hasCompletedMigrations(status: MigrationReadiness | undefined): boolean {
-  return (
-    status?.user_table === true &&
-    status.migrations_table === true &&
-    Number(status.applied_migrations) > 0
-  );
+export interface MigrationRecord {
+  readonly migration_name: string;
+  readonly finished_at: Date | null;
+  readonly rolled_back_at: Date | null;
+}
+
+export async function loadShippedMigrationNames(
+  directory = join(process.cwd(), "prisma", "migrations"),
+): Promise<readonly string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const migrations = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  return migrations;
+}
+
+export type MigrationReadinessFailure =
+  | "migrations-pending"
+  | "migrations-failed"
+  | "migrations-unknown";
+
+export function getMigrationReadinessFailure(
+  status: MigrationReadiness | undefined,
+  shippedMigrations: readonly string[],
+): MigrationReadinessFailure | undefined {
+  if (!status?.user_table || !status.migrations_table) return "migrations-pending";
+
+  const rows = status.migrations ?? [];
+  const shipped = new Set(shippedMigrations);
+  if (rows.some((row) => !shipped.has(row.migration_name))) return "migrations-unknown";
+  if (rows.some((row) => row.finished_at === null || row.rolled_back_at !== null))
+    return "migrations-failed";
+  if (shippedMigrations.some((name) => !rows.some((row) => row.migration_name === name)))
+    return "migrations-pending";
+  return undefined;
+}
+
+export function hasCompletedMigrations(
+  status: MigrationReadiness | undefined,
+  shippedMigrations?: readonly string[],
+): boolean {
+  if (shippedMigrations === undefined) {
+    return (
+      status?.user_table === true &&
+      status.migrations_table === true &&
+      Number(status.applied_migrations) > 0
+    );
+  }
+  return getMigrationReadinessFailure(status, shippedMigrations) === undefined;
 }
 
 export async function validateReadinessConfiguration(

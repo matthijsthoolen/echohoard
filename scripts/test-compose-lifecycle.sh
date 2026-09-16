@@ -18,6 +18,8 @@ $compose config >"$rendered_config"
 echo "Compose syntax and placeholder secret mounts passed"
 grep -F 'target: /run/echohoard/secrets/oidc-client-secret' "$rendered_config" >/dev/null
 grep -F 'http://127.0.0.1:3000/ready' "$rendered_config" >/dev/null
+grep -F 'ECHOHOARD_ROLE: web' "$rendered_config" >/dev/null
+grep -F 'ECHOHOARD_ROLE: worker' "$rendered_config" >/dev/null
 grep -F 'read_only: true' "$rendered_config" >/dev/null
 grep -F 'no-new-privileges:true' "$rendered_config" >/dev/null
 if grep -E 'OIDC_CLIENT_SECRET=.*[^$}]|DATABASE_URL=.*password' "$rendered_config" >/dev/null; then
