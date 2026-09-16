@@ -19,6 +19,7 @@ describe("fixed sidecar operations", () => {
     const sidecar = new HttpFixedSidecarOperations("http://wacli-control.test/private/", fetcher);
 
     await expect(sidecar.pair("account-a")).resolves.toEqual({ qr: "synthetic-qr" });
+    await sidecar.cancelPairing("account-a");
     await sidecar.startFollowSync("account-a");
     await sidecar.stopFollowSync("account-a");
     await expect(sidecar.health("account-a")).resolves.toMatchObject({
@@ -27,6 +28,7 @@ describe("fixed sidecar operations", () => {
     });
     expect(requests).toEqual([
       "/private/accounts/account-a/pair",
+      "/private/accounts/account-a/pair/cancel",
       "/private/accounts/account-a/follow-sync/start",
       "/private/accounts/account-a/follow-sync/stop",
       "/private/accounts/account-a/health",

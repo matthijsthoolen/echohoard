@@ -48,6 +48,9 @@ class FakeSidecar implements FixedSidecarOperations {
     this.calls.push("pair");
     return { qr: "synthetic-qr" };
   }
+  public async cancelPairing(): Promise<void> {
+    this.calls.push("cancel-pairing");
+  }
   public async startFollowSync(): Promise<void> {
     this.calls.push("start-follow-sync");
   }
@@ -90,6 +93,7 @@ describe("owned account pairing and settings", () => {
     expect(expired).toMatchObject({ state: "expired" });
     expect(expired).not.toHaveProperty("qr");
     expect(sidecar.calls).not.toContain("start-follow-sync");
+    expect(sidecar.calls).toContain("cancel-pairing");
     expect(await controller.status("other-archive", "account-1", started.sessionId)).toBeNull();
   });
 
@@ -109,6 +113,7 @@ describe("owned account pairing and settings", () => {
     const second = await controller.begin("archive-1", "account-1");
     expect(second.sessionId).not.toBe(first.sessionId);
     expect(await controller.status("archive-1", "account-1", first.sessionId)).toBeNull();
+    expect(sidecar.calls).toContain("cancel-pairing");
   });
 
   it("starts follow-sync before reporting a successful pairing", async () => {
@@ -122,6 +127,39 @@ describe("owned account pairing and settings", () => {
     expect(status).toMatchObject({ state: "connected" });
     expect(sidecar.calls).toEqual(["health", "pair", "health", "start-follow-sync"]);
     expect(status).not.toHaveProperty("qr");
+  });
+
+  it("serializes replacement against a connection status race", async () => {
+    const sidecar = new FakeSidecar();
+    const controller = new PairingSessionController(new FakeAccounts(), sidecar);
+    const first = await controller.begin("archive-1", "account-1");
+    let releaseHealth!: () => void;
+    const healthReleased = new Promise<void>((resolve) => {
+      releaseHealth = resolve;
+    });
+    vi.spyOn(sidecar, "health").mockImplementationOnce(async () => {
+      await healthReleased;
+      return {
+        connection: "connected",
+        checkedAt: new Date("2026-01-01T00:00:00Z"),
+        reconnectCount: 0,
+      };
+    });
+    const staleStatus = controller.status("archive-1", "account-1", first.sessionId);
+    await Promise.resolve();
+    const replacement = controller.begin("archive-1", "account-1", true);
+    releaseHealth();
+    await expect(staleStatus).resolves.toMatchObject({ state: "connected" });
+    await expect(replacement).resolves.toMatchObject({ state: "awaiting_qr" });
+    expect(sidecar.calls).toEqual([
+      "health",
+      "pair",
+      "start-follow-sync",
+      "health",
+      "stop-follow-sync",
+      "cancel-pairing",
+      "pair",
+    ]);
   });
 
   it("separates connection, durable receipt, normalization, and backup health", async () => {

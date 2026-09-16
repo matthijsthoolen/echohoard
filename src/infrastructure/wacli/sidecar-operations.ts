@@ -44,6 +44,10 @@ export class HttpFixedSidecarOperations implements FixedSidecarOperations {
     return { qr };
   }
 
+  public async cancelPairing(accountKey: string): Promise<void> {
+    await this.request("POST", accountKey, "pair/cancel");
+  }
+
   public async startFollowSync(accountKey: string): Promise<void> {
     await this.request("POST", accountKey, "follow-sync/start");
   }
@@ -77,7 +81,7 @@ export class HttpFixedSidecarOperations implements FixedSidecarOperations {
   private async request(
     method: "GET" | "POST",
     accountKey: string,
-    operation: "pair" | "follow-sync/start" | "follow-sync/stop" | "health",
+    operation: "pair" | "pair/cancel" | "follow-sync/start" | "follow-sync/stop" | "health",
   ): Promise<Record<string, unknown>> {
     if (!ACCOUNT_PATH.test(accountKey)) throw new Error("wacli account key is invalid");
     const url = new URL(`accounts/${encodeURIComponent(accountKey)}/${operation}`, this.baseUrl);

@@ -85,7 +85,11 @@ normal user or an HTTP request:
    this bounded remote side effect is explicit and tested by the later sidecar
    story. No media download, refresh, backfill, or delegated command is
    enabled.
-3. **Health:** `wacli --account ACCOUNT --read-only --json auth status`.
+3. **Cancel pairing:** invalidate the current owner-attended pairing attempt
+   through the sidecar's fixed `pair/cancel` operation. The operation is
+   idempotent and accepts no QR, command, path, or other caller-controlled
+   sidecar input.
+4. **Health:** `wacli --account ACCOUNT --read-only --json auth status`.
    The adapter consumes only a boolean authenticated state. The upstream
    linked JID is sensitive and is discarded before application health output.
 
