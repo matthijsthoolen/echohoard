@@ -926,16 +926,20 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
       });
       await flushMessageBatch();
       try {
-        await tx.snapshot.update({
-          where: { archiveId_id: { archiveId: input.archiveId, id: input.snapshotId } },
-          data: { lifecycle: "completed", completedAt: input.observedAt },
-        });
+        const snapshotResult = await tx.$executeRaw(Prisma.sql`
+          UPDATE "Snapshot"
+             SET lifecycle = 'completed',
+                 "completedAt" = clock_timestamp()
+           WHERE "archiveId" = CAST(${input.archiveId} AS uuid)
+             AND id = CAST(${input.snapshotId} AS uuid)
+        `);
+        if (snapshotResult !== 1) throw new Error("snapshot finalization target was not found");
         if (input.leaseId !== undefined) {
           const result = await tx.$queryRaw<Array<{ readonly id: string }>>(Prisma.sql`
             WITH database_clock AS (SELECT clock_timestamp() AS now)
             UPDATE "ImportJob" AS job
                SET status = 'completed',
-                   "finishedAt" = ${input.observedAt},
+                   "finishedAt" = database_clock.now,
                    retryable = false,
                    "leaseId" = NULL,
                    "leaseOwner" = NULL,
@@ -951,10 +955,18 @@ export class PrismaTextSnapshotImporter implements TextSnapshotImporter {
           `);
           if (result.length !== 1) throw new LeaseFenceError("job lease changed during import");
         } else {
-          await tx.importJob.update({
-            where: { archiveId_id: { archiveId: input.archiveId, id: input.importJobId } },
-            data: { status: "completed", finishedAt: input.observedAt, retryable: false },
-          });
+          const result = await tx.$executeRaw(Prisma.sql`
+            WITH database_clock AS (SELECT clock_timestamp() AS now)
+            UPDATE "ImportJob"
+               SET status = 'completed',
+                   "finishedAt" = database_clock.now,
+                   retryable = false,
+                   "updatedAt" = database_clock.now
+              FROM database_clock
+             WHERE "archiveId" = CAST(${input.archiveId} AS uuid)
+               AND id = CAST(${input.importJobId} AS uuid)
+          `);
+          if (result !== 1) throw new Error("job finalization target was not found");
         }
       } catch (error) {
         if (error instanceof LeaseFenceError) throw error;

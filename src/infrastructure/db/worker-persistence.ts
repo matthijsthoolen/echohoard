@@ -46,91 +46,101 @@ export class PrismaDecryptJobStore implements JobStorePort {
   }
 
   public async listEligible(limit: number): Promise<readonly ImportJobId[]> {
-    const availableLease = {
-      OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: new Date() } }],
-    };
-    const rows = await this.prisma.importJob.findMany({
-      where: {
-        OR: [
-          { status: "queued", ...availableLease },
-          { status: "failed", retryable: true, ...availableLease },
-        ],
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      take: Math.max(1, Math.min(100, Math.trunc(limit))),
-      select: { id: true },
-    });
+    const boundedLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+    const rows = await this.prisma.$queryRaw<Array<{ readonly id: string }>>(Prisma.sql`
+      SELECT id
+        FROM "ImportJob"
+       WHERE (
+         status = 'queued'
+         OR (status = 'failed' AND COALESCE(retryable, false) = true)
+       )
+         AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= clock_timestamp())
+       ORDER BY "createdAt" ASC, id ASC
+       LIMIT ${boundedLimit}
+    `);
     return rows.map((row) => row.id);
   }
 
-  public async markLeased(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void> {
-    const result = await this.prisma.importJob.updateMany({
-      where: {
-        id: jobId,
-        leaseId: lease,
-        leaseExpiresAt: { gt: updatedAt },
-        status: { in: ["queued", "failed"] },
-      },
-      data: { status: "leased", startedAt: updatedAt },
-    });
-    if (result.count !== 1) throw new LeaseFenceError("job lease state changed before start");
+  public async markLeased(jobId: ImportJobId, lease: LeaseId): Promise<void> {
+    await this.transition(
+      jobId,
+      lease,
+      ["queued", "failed"],
+      "leased",
+      Prisma.sql`"startedAt" = database_clock.now`,
+      true,
+      "job lease state changed before start",
+    );
   }
 
-  public async markDecrypting(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void> {
-    const result = await this.prisma.importJob.updateMany({
-      where: { id: jobId, leaseId: lease, leaseExpiresAt: { gt: updatedAt }, status: "leased" },
-      data: { status: "decrypting", startedAt: updatedAt },
-    });
-    if (result.count !== 1) throw new LeaseFenceError("job lease state changed during decryption");
+  public async markDecrypting(jobId: ImportJobId, lease: LeaseId): Promise<void> {
+    await this.transition(
+      jobId,
+      lease,
+      ["leased"],
+      "decrypting",
+      Prisma.sql`"startedAt" = database_clock.now`,
+      false,
+      "job lease state changed during decryption",
+    );
   }
 
-  public async markAdapting(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void> {
-    const result = await this.prisma.importJob.updateMany({
-      where: { id: jobId, leaseId: lease, leaseExpiresAt: { gt: updatedAt }, status: "decrypting" },
-      data: { status: "adapting", updatedAt },
-    });
-    if (result.count !== 1) throw new LeaseFenceError("job state changed before adaptation");
+  public async markAdapting(jobId: ImportJobId, lease: LeaseId): Promise<void> {
+    await this.transition(
+      jobId,
+      lease,
+      ["decrypting"],
+      "adapting",
+      Prisma.empty,
+      false,
+      "job state changed before adaptation",
+    );
   }
 
   public async markImporting(
     jobId: ImportJobId,
     lease: LeaseId,
     adapterVersion: string,
-    updatedAt: Date,
   ): Promise<void> {
-    const result = await this.prisma.importJob.updateMany({
-      where: { id: jobId, leaseId: lease, leaseExpiresAt: { gt: updatedAt }, status: "adapting" },
-      data: { status: "importing", adapterVersion, updatedAt },
-    });
-    if (result.count !== 1) throw new LeaseFenceError("job state changed before import");
+    await this.transition(
+      jobId,
+      lease,
+      ["adapting"],
+      "importing",
+      Prisma.sql`"adapterVersion" = ${adapterVersion}`,
+      false,
+      "job state changed before import",
+    );
   }
 
-  public async markFinalizing(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void> {
-    const result = await this.prisma.importJob.updateMany({
-      where: { id: jobId, leaseId: lease, leaseExpiresAt: { gt: updatedAt }, status: "importing" },
-      data: { status: "finalizing", updatedAt },
-    });
-    if (result.count !== 1) throw new LeaseFenceError("job state changed before finalization");
+  public async markFinalizing(jobId: ImportJobId, lease: LeaseId): Promise<void> {
+    await this.transition(
+      jobId,
+      lease,
+      ["importing"],
+      "finalizing",
+      Prisma.empty,
+      false,
+      "job state changed before finalization",
+    );
   }
 
-  public async markCompleted(jobId: ImportJobId, lease: LeaseId, updatedAt: Date): Promise<void> {
-    const result = await this.prisma.importJob.updateMany({
-      where: {
-        id: jobId,
-        leaseId: lease,
-        leaseExpiresAt: { gt: updatedAt },
-        status: { in: ["decrypting", "finalizing"] },
-      },
-      data: {
-        status: "completed",
-        finishedAt: updatedAt,
-        retryable: false,
-        leaseId: null,
-        leaseOwner: null,
-        leaseExpiresAt: null,
-      },
-    });
-    if (result.count !== 1) throw new LeaseFenceError("job completion state changed unexpectedly");
+  public async markCompleted(jobId: ImportJobId, lease: LeaseId): Promise<void> {
+    await this.transition(
+      jobId,
+      lease,
+      ["decrypting", "finalizing"],
+      "completed",
+      Prisma.sql`
+        "finishedAt" = database_clock.now,
+        "retryable" = false,
+        "leaseId" = NULL,
+        "leaseOwner" = NULL,
+        "leaseExpiresAt" = NULL
+      `,
+      false,
+      "job completion state changed unexpectedly",
+    );
   }
 
   public async markFailed(
@@ -141,27 +151,50 @@ export class PrismaDecryptJobStore implements JobStorePort {
       readonly retryable: boolean;
       readonly diagnostic: string;
     },
-    updatedAt: Date,
   ): Promise<void> {
-    const result = await this.prisma.importJob.updateMany({
-      where: {
-        id: jobId,
-        leaseId: lease,
-        leaseExpiresAt: { gt: updatedAt },
-        status: { in: ["leased", "decrypting", "adapting", "importing", "finalizing"] },
-      },
-      data: {
-        status: "failed",
-        errorClass: failure.class,
-        retryable: failure.retryable,
-        outcome: { diagnostic: failure.diagnostic },
-        finishedAt: updatedAt,
-        leaseId: null,
-        leaseOwner: null,
-        leaseExpiresAt: null,
-      },
-    });
-    if (result.count !== 1) throw new LeaseFenceError("job failure state changed unexpectedly");
+    await this.transition(
+      jobId,
+      lease,
+      ["leased", "decrypting", "adapting", "importing", "finalizing"],
+      "failed",
+      Prisma.sql`
+          "errorClass" = ${failure.class},
+          "retryable" = ${failure.retryable},
+          "outcome" = CAST(${JSON.stringify({ diagnostic: failure.diagnostic })} AS jsonb),
+          "finishedAt" = database_clock.now,
+          "leaseId" = NULL,
+          "leaseOwner" = NULL,
+          "leaseExpiresAt" = NULL
+        `,
+      false,
+      "job failure state changed unexpectedly",
+    );
+  }
+
+  private async transition(
+    jobId: ImportJobId,
+    lease: LeaseId,
+    from: readonly PersistedJobStatus[],
+    to: PersistedJobStatus,
+    assignments: Prisma.Sql,
+    allowRetryableFailed: boolean,
+    message: string,
+  ): Promise<void> {
+    const result = await this.prisma.$queryRaw<Array<{ readonly id: string }>>(Prisma.sql`
+      WITH database_clock AS (SELECT clock_timestamp() AS now)
+      UPDATE "ImportJob" AS job
+         SET "status" = ${to},
+             ${assignments}${assignments.sql.length > 0 ? Prisma.sql`,` : Prisma.empty}
+             "updatedAt" = database_clock.now
+        FROM database_clock
+       WHERE job.id = CAST(${jobId} AS uuid)
+         AND job."leaseId" = ${lease}
+         AND job."leaseExpiresAt" > database_clock.now
+         AND job.status IN (${Prisma.join(from.map((status) => Prisma.sql`${status}`))})
+         AND (${allowRetryableFailed ? Prisma.sql`job.status <> 'failed' OR COALESCE(job.retryable, false) = true` : Prisma.sql`true`})
+       RETURNING job.id
+    `);
+    if (result.length !== 1) throw new LeaseFenceError(message);
   }
 }
 
@@ -173,63 +206,83 @@ export class PrismaImportJobLeases implements LeasePort {
   public async acquire(
     jobId: ImportJobId,
     owner: string,
-    expiresAt: Date,
+    durationMilliseconds: number,
   ): Promise<LeaseId | null> {
+    const duration = validDuration(durationMilliseconds);
     const leaseId = randomUUID();
     const rows = await this.prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      UPDATE "ImportJob"
-      SET "leaseId" = ${leaseId}, "leaseOwner" = ${owner}, "leaseExpiresAt" = ${expiresAt}
-      WHERE id = CAST(${jobId} AS uuid)
-        AND (
-          status = 'queued'
-          OR (status = 'failed' AND COALESCE(retryable, false) = true)
-        )
-        AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= CURRENT_TIMESTAMP)
-      RETURNING id
+      WITH database_clock AS (SELECT clock_timestamp() AS now)
+      UPDATE "ImportJob" AS job
+         SET "leaseId" = ${leaseId},
+             "leaseOwner" = ${owner},
+             "leaseExpiresAt" = database_clock.now + (${duration} * INTERVAL '1 millisecond'),
+             "updatedAt" = database_clock.now
+        FROM database_clock
+       WHERE job.id = CAST(${jobId} AS uuid)
+         AND (
+           job.status = 'queued'
+           OR (job.status = 'failed' AND COALESCE(job.retryable, false) = true)
+         )
+         AND (job."leaseExpiresAt" IS NULL OR job."leaseExpiresAt" <= database_clock.now)
+       RETURNING job.id
     `);
     return rows.length === 1 ? leaseId : null;
   }
 
-  public async renew(leaseId: LeaseId, expiresAt: Date, now: Date): Promise<boolean> {
-    const result = await this.prisma.importJob.updateMany({
-      where: {
-        leaseId,
-        status: { in: ["leased", "decrypting", "adapting", "importing", "finalizing"] },
-        leaseExpiresAt: { gt: now },
-      },
-      data: { leaseExpiresAt: expiresAt },
-    });
-    return result.count === 1;
+  public async renew(leaseId: LeaseId, durationMilliseconds: number): Promise<boolean> {
+    const duration = validDuration(durationMilliseconds);
+    const rows = await this.prisma.$queryRaw<Array<{ readonly id: string }>>(Prisma.sql`
+      WITH database_clock AS (SELECT clock_timestamp() AS now)
+      UPDATE "ImportJob" AS job
+         SET "leaseExpiresAt" = database_clock.now + (${duration} * INTERVAL '1 millisecond'),
+             "updatedAt" = database_clock.now
+        FROM database_clock
+       WHERE job."leaseId" = ${leaseId}
+         AND job.status IN ('leased', 'decrypting', 'adapting', 'importing', 'finalizing')
+         AND job."leaseExpiresAt" > database_clock.now
+       RETURNING job.id
+    `);
+    return rows.length === 1;
   }
 
-  public async release(leaseId: LeaseId, now: Date): Promise<void> {
-    await this.prisma.importJob.updateMany({
-      where: { leaseId, leaseExpiresAt: { gt: now } },
-      data: { leaseId: null, leaseOwner: null, leaseExpiresAt: null },
-    });
+  public async release(leaseId: LeaseId): Promise<void> {
+    await this.prisma.$executeRaw(Prisma.sql`
+      WITH database_clock AS (SELECT clock_timestamp() AS now)
+      UPDATE "ImportJob" AS job
+         SET "leaseId" = NULL,
+             "leaseOwner" = NULL,
+             "leaseExpiresAt" = NULL,
+             "updatedAt" = database_clock.now
+        FROM database_clock
+       WHERE job."leaseId" = ${leaseId}
+         AND job."leaseExpiresAt" > database_clock.now
+    `);
   }
 
-  public async recoverExpired(
-    now: Date,
-  ): Promise<readonly { readonly jobId: ImportJobId; readonly leaseId: LeaseId }[]> {
+  public async recoverExpired(): Promise<
+    readonly { readonly jobId: ImportJobId; readonly leaseId: LeaseId }[]
+  > {
     const rows = await this.prisma.$queryRaw<Array<{ id: string; leaseId: string }>>(Prisma.sql`
-      WITH expired AS (
+      WITH database_clock AS (SELECT clock_timestamp() AS now),
+      expired AS (
         SELECT id, "leaseId" AS old_lease_id
           FROM "ImportJob"
+         CROSS JOIN database_clock
          WHERE status IN ('leased', 'decrypting', 'adapting', 'importing', 'finalizing')
            AND "leaseId" IS NOT NULL
            AND "leaseExpiresAt" IS NOT NULL
-           AND "leaseExpiresAt" <= ${now}
-         FOR UPDATE
+           AND "leaseExpiresAt" <= database_clock.now
+          FOR UPDATE
       )
       UPDATE "ImportJob" AS job
          SET status = 'queued',
-             "leaseId" = NULL,
-             "leaseOwner" = NULL,
-             "leaseExpiresAt" = NULL,
-             "updatedAt" = ${now}
-        FROM expired
-       WHERE job.id = expired.id
+              "leaseId" = NULL,
+              "leaseOwner" = NULL,
+              "leaseExpiresAt" = NULL,
+              "updatedAt" = database_clock.now
+         FROM expired
+         CROSS JOIN database_clock
+        WHERE job.id = expired.id
        RETURNING job.id, expired.old_lease_id AS "leaseId"
     `);
     return rows.map((row) => ({ jobId: row.id, leaseId: row.leaseId }));
@@ -262,4 +315,10 @@ function toImportJob(row: {
     ...(row.snapshot ? { observedAt: row.snapshot.capturedAt } : {}),
     updatedAt: row.updatedAt,
   };
+}
+
+function validDuration(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0)
+    throw new Error("lease duration must be a positive safe integer");
+  return value;
 }

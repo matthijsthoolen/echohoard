@@ -289,12 +289,10 @@ export interface HashingPort {
   sha256(path: string): Promise<Sha256>;
 }
 export interface LeasePort {
-  acquire(jobId: ImportJobId, owner: string, expiresAt: Date): Promise<LeaseId | null>;
-  renew(leaseId: LeaseId, expiresAt: Date, now: Date): Promise<boolean>;
-  release(leaseId: LeaseId, now: Date): Promise<void>;
-  recoverExpired(
-    now: Date,
-  ): Promise<readonly { readonly jobId: ImportJobId; readonly leaseId: LeaseId }[]>;
+  acquire(jobId: ImportJobId, owner: string, durationMilliseconds: number): Promise<LeaseId | null>;
+  renew(leaseId: LeaseId, durationMilliseconds: number): Promise<boolean>;
+  release(leaseId: LeaseId): Promise<void>;
+  recoverExpired(): Promise<readonly { readonly jobId: ImportJobId; readonly leaseId: LeaseId }[]>;
 }
 export interface DecryptPort {
   decrypt(

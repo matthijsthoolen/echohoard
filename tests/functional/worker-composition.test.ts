@@ -119,7 +119,7 @@ describe("PostgreSQL worker job composition", () => {
   it("recovers an expired lease before requeueing", async () => {
     const jobs = new PrismaDecryptJobStore(prisma);
     const leases = new PrismaImportJobLeases(prisma);
-    await expect(leases.recoverExpired(now)).resolves.toContainEqual({
+    await expect(leases.recoverExpired()).resolves.toContainEqual({
       jobId: staleJobId,
       leaseId: expect.any(String),
     });
@@ -145,67 +145,57 @@ describe("PostgreSQL worker job composition", () => {
       },
     });
     const oldLeaseStore = new PrismaImportJobLeases(prisma);
-    const oldLease = await oldLeaseStore.acquire(
-      takeoverJobId,
-      "old-worker",
-      new Date(now.getTime() + 1_000),
-    );
+    const oldLease = await oldLeaseStore.acquire(takeoverJobId, "old-worker", 1_000);
     expect(oldLease).not.toBeNull();
     const jobs = new PrismaDecryptJobStore(prisma);
     const work = new LocalJobWork(workRoot);
     const oldWork = await work.prepare(takeoverJobId, oldLease!);
     await writeFile(join(oldWork.path, "stale"), "old");
-    await jobs.markLeased(takeoverJobId, oldLease!, now);
+    await jobs.markLeased(takeoverJobId, oldLease!);
 
-    await prisma.importJob.update({
-      where: { id: takeoverJobId },
-      data: { leaseExpiresAt: new Date(now.getTime() - 1_000) },
-    });
-    const recovered = await oldLeaseStore.recoverExpired(now);
+    await prisma.$executeRaw(
+      Prisma.sql`UPDATE "ImportJob" SET "leaseExpiresAt" = clock_timestamp() - INTERVAL '1 second' WHERE id = CAST(${takeoverJobId} AS uuid)`,
+    );
+    const recovered = await oldLeaseStore.recoverExpired();
     expect(recovered).toEqual([{ jobId: takeoverJobId, leaseId: oldLease }]);
 
     const replacementLeaseStore = new PrismaImportJobLeases(prisma);
     const replacementLease = await replacementLeaseStore.acquire(
       takeoverJobId,
       "new-worker",
-      new Date(now.getTime() + 10_000),
+      10_000,
     );
     expect(replacementLease).not.toBeNull();
     const replacementWork = await work.prepare(takeoverJobId, replacementLease!);
     await writeFile(join(replacementWork.path, "active"), "replacement");
-    await jobs.markLeased(takeoverJobId, replacementLease!, now);
+    await jobs.markLeased(takeoverJobId, replacementLease!);
     await work.cleanup(takeoverJobId, oldLease!, oldWork.path);
     await expect(readFile(join(replacementWork.path, "active"), "utf8")).resolves.toBe(
       "replacement",
     );
 
-    await expect(jobs.markDecrypting(takeoverJobId, oldLease!, now)).rejects.toBeInstanceOf(
+    await expect(jobs.markDecrypting(takeoverJobId, oldLease!)).rejects.toBeInstanceOf(
       LeaseFenceError,
     );
     await expect(
-      jobs.markFailed(
-        takeoverJobId,
-        oldLease!,
-        {
-          class: "internal",
-          retryable: true,
-          diagnostic: "stale runner",
-        },
-        now,
-      ),
+      jobs.markFailed(takeoverJobId, oldLease!, {
+        class: "internal",
+        retryable: true,
+        diagnostic: "stale runner",
+      }),
     ).rejects.toBeInstanceOf(LeaseFenceError);
-    await oldLeaseStore.release(oldLease!, now);
+    await oldLeaseStore.release(oldLease!);
     await expect(
       prisma.importJob.findUnique({ where: { id: takeoverJobId } }),
     ).resolves.toMatchObject({
       status: "leased",
       leaseId: replacementLease,
     });
-    await expect(jobs.markCompleted(takeoverJobId, oldLease!, now)).rejects.toBeInstanceOf(
+    await expect(jobs.markCompleted(takeoverJobId, oldLease!)).rejects.toBeInstanceOf(
       LeaseFenceError,
     );
-    await jobs.markDecrypting(takeoverJobId, replacementLease!, now);
-    await replacementLeaseStore.release(replacementLease!, now);
+    await jobs.markDecrypting(takeoverJobId, replacementLease!);
+    await replacementLeaseStore.release(replacementLease!);
     await work.cleanup(takeoverJobId, replacementLease!, replacementWork.path);
   });
 
@@ -246,6 +236,70 @@ describe("PostgreSQL worker job composition", () => {
       completedAt: null,
     });
     expect(await readdir(workRoot)).toEqual([]);
+  });
+
+  it("rejects renewal from an expired lease using the PostgreSQL clock", async () => {
+    const seeded = await seedPipelineJob("renew-skew");
+    const leases = new PrismaImportJobLeases(prisma);
+    const lease = await leases.acquire(seeded.jobId, "renew-worker", 10_000);
+    expect(lease).not.toBeNull();
+    await prisma.$executeRaw(
+      Prisma.sql`UPDATE "ImportJob" SET "leaseExpiresAt" = clock_timestamp() - INTERVAL '1 second' WHERE id = CAST(${seeded.jobId} AS uuid)`,
+    );
+
+    await expect(leases.renew(lease!, 60_000)).resolves.toBe(false);
+    await leases.release(lease!);
+    await expect(
+      prisma.importJob.findUnique({ where: { id: seeded.jobId } }),
+    ).resolves.toMatchObject({
+      leaseId: lease,
+    });
+  });
+
+  it("rejects a stale transition despite a future application clock", async () => {
+    const seeded = await seedPipelineJob("transition-skew");
+    const leases = new PrismaImportJobLeases(prisma);
+    const lease = await leases.acquire(seeded.jobId, "transition-worker", 10_000);
+    expect(lease).not.toBeNull();
+    const jobs = new PrismaDecryptJobStore(prisma);
+    await jobs.markLeased(seeded.jobId, lease!);
+    await prisma.$executeRaw(
+      Prisma.sql`UPDATE "ImportJob" SET "leaseExpiresAt" = clock_timestamp() - INTERVAL '1 second' WHERE id = CAST(${seeded.jobId} AS uuid)`,
+    );
+
+    await expect(jobs.markDecrypting(seeded.jobId, lease!)).rejects.toBeInstanceOf(LeaseFenceError);
+    await expect(
+      prisma.importJob.findUnique({ where: { id: seeded.jobId } }),
+    ).resolves.toMatchObject({
+      status: "leased",
+      leaseId: lease,
+    });
+  });
+
+  it("rejects stale failure handling despite a future application clock", async () => {
+    const seeded = await seedPipelineJob("fail-skew");
+    const leases = new PrismaImportJobLeases(prisma);
+    const lease = await leases.acquire(seeded.jobId, "fail-worker", 10_000);
+    expect(lease).not.toBeNull();
+    const jobs = new PrismaDecryptJobStore(prisma);
+    await jobs.markLeased(seeded.jobId, lease!);
+    await prisma.$executeRaw(
+      Prisma.sql`UPDATE "ImportJob" SET "leaseExpiresAt" = clock_timestamp() - INTERVAL '1 second' WHERE id = CAST(${seeded.jobId} AS uuid)`,
+    );
+
+    await expect(
+      jobs.markFailed(seeded.jobId, lease!, {
+        class: "internal",
+        retryable: true,
+        diagnostic: "stale worker",
+      }),
+    ).rejects.toBeInstanceOf(LeaseFenceError);
+    await expect(
+      prisma.importJob.findUnique({ where: { id: seeded.jobId } }),
+    ).resolves.toMatchObject({
+      status: "leased",
+      leaseId: lease,
+    });
   });
 
   it("adapts and imports normalized records before finalizing the snapshot", async () => {
@@ -311,17 +365,18 @@ describe("PostgreSQL worker job composition", () => {
   it("rolls back an import when its lease expires while finalization is in flight", async () => {
     const seeded = await seedPipelineJob("lease-expiry");
     const leaseId = randomUUID();
-    const observedAt = new Date();
-    const expiresAt = new Date(Date.now() + 250);
+    const observedAt = new Date("2099-01-01T00:00:00.000Z");
     await prisma.importJob.update({
       where: { id: seeded.jobId },
       data: {
         status: "finalizing",
         leaseId,
         leaseOwner: "old-worker",
-        leaseExpiresAt: expiresAt,
       },
     });
+    await prisma.$executeRaw(
+      Prisma.sql`UPDATE "ImportJob" SET "leaseExpiresAt" = clock_timestamp() + INTERVAL '250 milliseconds' WHERE id = CAST(${seeded.jobId} AS uuid)`,
+    );
     const blocker = await lockSnapshot(seeded.snapshotId);
     let importing: Promise<unknown> | undefined;
     try {
@@ -335,7 +390,6 @@ describe("PostgreSQL worker job composition", () => {
         observedAt,
         records: leaseRegressionRecords("expiry"),
         leaseId,
-        leaseCheckedAt: new Date(),
       };
       importing = new PrismaTextSnapshotImporter(prisma).import(importInput);
       await delay(400);
@@ -382,38 +436,27 @@ describe("PostgreSQL worker job composition", () => {
         observedAt: new Date(),
         records: leaseRegressionRecords("takeover"),
         leaseId: oldLease,
-        leaseCheckedAt: new Date(),
       };
       importing = new PrismaTextSnapshotImporter(prisma).import(importInput);
       await delay(50);
-      await prisma.importJob.update({
-        where: { id: seeded.jobId },
-        data: { leaseExpiresAt: new Date(Date.now() - 1_000) },
-      });
+      await prisma.$executeRaw(
+        Prisma.sql`UPDATE "ImportJob" SET "leaseExpiresAt" = clock_timestamp() - INTERVAL '1 second' WHERE id = CAST(${seeded.jobId} AS uuid)`,
+      );
       const leases = new PrismaImportJobLeases(prisma);
-      await expect(leases.recoverExpired(new Date())).resolves.toContainEqual({
+      await expect(leases.recoverExpired()).resolves.toContainEqual({
         jobId: seeded.jobId,
         leaseId: oldLease,
       });
-      replacementLease = await leases.acquire(
-        seeded.jobId,
-        "replacement-worker",
-        new Date(Date.now() + 10_000),
-      );
+      replacementLease = await leases.acquire(seeded.jobId, "replacement-worker", 10_000);
       expect(replacementLease).not.toBeNull();
-      await new PrismaDecryptJobStore(prisma).markLeased(
-        seeded.jobId,
-        replacementLease!,
-        new Date(),
-      );
+      await new PrismaDecryptJobStore(prisma).markLeased(seeded.jobId, replacementLease!);
       blocker.release();
       await expect(importing).rejects.toBeInstanceOf(LeaseFenceError);
     } finally {
       blocker.release();
       await blocker.done;
       await importing?.catch(() => undefined);
-      if (replacementLease)
-        await new PrismaImportJobLeases(prisma).release(replacementLease, new Date());
+      if (replacementLease) await new PrismaImportJobLeases(prisma).release(replacementLease);
     }
 
     await expect(
