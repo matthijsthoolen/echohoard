@@ -112,6 +112,42 @@ describe("archive read services", () => {
     ).toEqual([]);
   });
 
+  it("returns source deletion state while preserving archive isolation", async () => {
+    const service = new ArchiveReadService(
+      port({
+        messages: [
+          {
+            id: "deleted",
+            archiveId: "archive-a",
+            conversationId: "conversation-a",
+            sentAt: "2026-01-01T00:00:00.000Z",
+            text: "captured content",
+            attachmentCount: 0,
+            sourceDeleted: true,
+            contentUnavailable: false,
+            sourceDeletedAt: "2026-01-02T00:00:00.000Z",
+            sourceDeletionKind: "delete",
+          },
+        ],
+      }),
+      codec,
+    );
+    expect(
+      (await service.listMessages({ archiveId: "archive-a", conversationId: "conversation-a" }))
+        .items[0],
+    ).toMatchObject({
+      text: "captured content",
+      sourceDeleted: true,
+      contentUnavailable: false,
+      sourceDeletedAt: "2026-01-02T00:00:00.000Z",
+      sourceDeletionKind: "delete",
+    });
+    expect(
+      (await service.listMessages({ archiveId: "archive-b", conversationId: "conversation-a" }))
+        .items,
+    ).toEqual([]);
+  });
+
   it("paginates a merged timeline across sources with equal and missing timestamps", async () => {
     const service = new ArchiveReadService(
       port({

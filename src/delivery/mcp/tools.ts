@@ -186,6 +186,10 @@ const messageOutputSchema = z
     attachmentCount: z.number().int().nonnegative(),
     direction: z.enum(["sent", "received", "unknown"]),
     messageType: z.string().max(100),
+    sourceDeleted: z.boolean().optional(),
+    contentUnavailable: z.boolean().optional(),
+    sourceDeletedAt: z.string().max(MCP_MAX_DATE_LENGTH).optional(),
+    sourceDeletionKind: z.enum(["revoke", "delete"]).optional(),
     replyTo: z
       .object({
         id: z.string(),
@@ -674,6 +678,13 @@ function resultForMessages(
       attachmentCount: safeCount(item.attachmentCount),
       direction: item.direction,
       messageType: boundedText(item.messageType, 100),
+      ...(item.sourceDeleted
+        ? { sourceDeleted: true, contentUnavailable: item.contentUnavailable ?? false }
+        : {}),
+      ...(item.sourceDeletedAt
+        ? { sourceDeletedAt: boundedText(item.sourceDeletedAt, MCP_MAX_DATE_LENGTH) }
+        : {}),
+      ...(item.sourceDeletionKind ? { sourceDeletionKind: item.sourceDeletionKind } : {}),
       ...(item.replyTo
         ? {
             replyTo: {

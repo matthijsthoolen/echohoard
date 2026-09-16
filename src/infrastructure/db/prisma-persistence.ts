@@ -24,6 +24,7 @@ import type {
   MediaPersistenceRow,
   TimelinePersistenceRow,
   SearchMediaType,
+  SourceDeletionKind,
 } from "../../application/reads";
 import type {
   HealthJobPersistenceRow,
@@ -1045,6 +1046,10 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         senderId: string | null;
         messageType: string;
         metadata: unknown;
+        sourceDeleted: boolean;
+        contentUnavailable: boolean;
+        sourceDeletedAt: Date | null;
+        sourceDeletionMetadata: unknown;
         sentAt: Date | null;
         body: string | null;
         _count: { attachments: number; messageObservations: number };
@@ -1110,6 +1115,12 @@ export class PrismaReadPersistence implements ReadPersistencePort {
         ...(safeMetadata(row.metadata) ? { metadata: safeMetadata(row.metadata) } : {}),
         direction: messageDirection(row.metadata),
         messageType: row.messageType,
+        ...(row.sourceDeleted ? { sourceDeleted: true } : {}),
+        ...(row.contentUnavailable ? { contentUnavailable: true } : {}),
+        ...(row.sourceDeletedAt ? { sourceDeletedAt: row.sourceDeletedAt.toISOString() } : {}),
+        ...(sourceDeletionKind(row.sourceDeletionMetadata)
+          ? { sourceDeletionKind: sourceDeletionKind(row.sourceDeletionMetadata) }
+          : {}),
         ...(row.replyTo
           ? {
               replyTo: {
@@ -1817,6 +1828,12 @@ function messageDirection(metadata: unknown): "sent" | "received" | "unknown" {
     return "unknown";
   const direction = (metadata as Record<string, unknown>).direction;
   return direction === "sent" || direction === "received" ? direction : "unknown";
+}
+
+function sourceDeletionKind(value: unknown): SourceDeletionKind | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const kind = (value as Record<string, unknown>).kind;
+  return kind === "revoke" || kind === "delete" ? kind : undefined;
 }
 
 function mediaTypePredicate(mediaType: SearchMediaType): Prisma.Sql {

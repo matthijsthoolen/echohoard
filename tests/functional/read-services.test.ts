@@ -15,6 +15,7 @@ const hiddenConversationId = randomUUID();
 const lockedConversationId = randomUUID();
 const hiddenMessageId = randomUUID();
 const lockedMessageId = randomUUID();
+const deletedMessageId = randomUUID();
 
 describe("bounded archive read services", () => {
   const service = new ArchiveReadService(
@@ -43,6 +44,9 @@ describe("bounded archive read services", () => {
     );
     await prisma.$executeRawUnsafe(
       `INSERT INTO "Message" (id,"archiveId","conversationId","stableKey","messageType",body,"sentAt","updatedAt") VALUES ('${hiddenMessageId}','${archiveOneId}','${hiddenConversationId}','hidden-message','text','hidden sentinel','2026-01-03T00:00:00Z',now()),('${lockedMessageId}','${archiveOneId}','${lockedConversationId}','locked-message','text','locked sentinel','2026-01-04T00:00:00Z',now())`,
+    );
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "Message" (id,"archiveId","conversationId","stableKey","messageType",body,"sourceDeleted","contentUnavailable","sourceDeletedAt","sourceDeletionMetadata","sentAt","updatedAt") VALUES ('${deletedMessageId}','${archiveOneId}','${conversationId}','deleted-message','text','captured before revoke',true,false,'2026-01-05T00:00:00Z','{"kind":"revoke","eventKey":"event-1"}','2026-01-05T00:00:00Z',now())`,
     );
   });
   afterAll(async () => {
@@ -74,6 +78,24 @@ describe("bounded archive read services", () => {
     expect((await service.listMessages({ archiveId: archiveTwoId, conversationId })).items).toEqual(
       [],
     );
+  });
+
+  it("returns source deletion state without exposing deletion metadata", async () => {
+    const messages = await service.listMessages({
+      archiveId: archiveOneId,
+      conversationId,
+      limit: 10,
+    });
+    expect(messages.items.find((item) => item.id === deletedMessageId)).toMatchObject({
+      text: "captured before revoke",
+      sourceDeleted: true,
+      contentUnavailable: false,
+      sourceDeletedAt: "2026-01-05T00:00:00.000Z",
+      sourceDeletionKind: "revoke",
+    });
+    expect(
+      (await service.listMessages({ archiveId: archiveTwoId, conversationId, limit: 10 })).items,
+    ).toEqual([]);
   });
 
   it("filters every ordinary and authorized UI mode without enumerating locked ids", async () => {

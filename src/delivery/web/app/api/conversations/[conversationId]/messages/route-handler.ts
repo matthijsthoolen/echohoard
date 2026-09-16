@@ -92,6 +92,11 @@ function toResponse(page: ReadPage<MessageRead>) {
       revisions: message.revisions,
       reactions: message.reactions,
       ...(message.provenance ? { provenance: message.provenance } : {}),
+      ...(message.sourceDeleted
+        ? { sourceDeleted: true, contentUnavailable: message.contentUnavailable ?? false }
+        : {}),
+      ...(message.sourceDeletedAt ? { sourceDeletedAt: message.sourceDeletedAt } : {}),
+      ...(message.sourceDeletionKind ? { sourceDeletionKind: message.sourceDeletionKind } : {}),
     })),
     ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
     hasMore: page.hasMore,

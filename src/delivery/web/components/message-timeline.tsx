@@ -216,6 +216,17 @@ function parseMessage(value: unknown): MessageRead {
   const metadata = message.metadata === undefined ? undefined : parseMetadata(message.metadata);
   const provenance =
     message.provenance === undefined ? undefined : parseProvenance(message.provenance);
+  const sourceDeleted = message.sourceDeleted === true;
+  const contentUnavailable = message.contentUnavailable === true;
+  if (
+    (message.sourceDeleted !== undefined && typeof message.sourceDeleted !== "boolean") ||
+    (message.contentUnavailable !== undefined && typeof message.contentUnavailable !== "boolean") ||
+    (message.sourceDeletedAt !== undefined && typeof message.sourceDeletedAt !== "string") ||
+    (message.sourceDeletionKind !== undefined &&
+      message.sourceDeletionKind !== "revoke" &&
+      message.sourceDeletionKind !== "delete")
+  )
+    throw new Error("invalid message deletion state");
   return {
     id: message.id,
     conversationId: message.conversationId,
@@ -230,6 +241,14 @@ function parseMessage(value: unknown): MessageRead {
     messageType: message.messageType,
     ...(metadata ? { metadata } : {}),
     ...(provenance ? { provenance } : {}),
+    ...(sourceDeleted ? { sourceDeleted: true } : {}),
+    ...(contentUnavailable ? { contentUnavailable: true } : {}),
+    ...(typeof message.sourceDeletedAt === "string"
+      ? { sourceDeletedAt: message.sourceDeletedAt }
+      : {}),
+    ...(message.sourceDeletionKind === "revoke" || message.sourceDeletionKind === "delete"
+      ? { sourceDeletionKind: message.sourceDeletionKind }
+      : {}),
     ...(replyTo ? { replyTo } : {}),
     revisions: message.revisions.map(parseRevision),
     reactions: message.reactions.map(parseReaction),

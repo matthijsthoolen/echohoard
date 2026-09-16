@@ -36,6 +36,14 @@ const richRow: MessageRead = {
   ],
   metadata: { caption: "preserved" },
 };
+const deletedRow: MessageRead = {
+  ...row,
+  id: "message-deleted",
+  sourceDeleted: true,
+  contentUnavailable: false,
+  sourceDeletedAt: "2026-01-05T00:00:00.000Z",
+  sourceDeletionKind: "delete",
+};
 
 describe("message timeline route", () => {
   it("denies anonymous access without revealing the conversation", async () => {
@@ -115,5 +123,14 @@ describe("message timeline route", () => {
       items: [richRow],
       hasMore: false,
     });
+  });
+
+  it("keeps the bounded source deletion marker in the web response", async () => {
+    const listMessages = vi.fn(async () => ({ items: [deletedRow], hasMore: false }));
+    const route = createMessagesRoute({ getRuntime: () => ({ auth, reads: { listMessages } }) });
+    const response = await route(new Request("http://localhost/api/conversations/c1/messages"), {
+      params: { conversationId: "c1" },
+    });
+    expect(await response.json()).toEqual({ items: [deletedRow], hasMore: false });
   });
 });

@@ -12,6 +12,7 @@ export type ReadSort =
   | "occurredAt,kind,id"
   | "searchScore,sentAtNull,sentAt,id";
 export type MessageDirection = "sent" | "received" | "unknown";
+export type SourceDeletionKind = "revoke" | "delete";
 export type SearchMediaType = "image" | "video" | "audio" | "document" | "other";
 export type UiReadMode = "ordinary" | "hidden" | "locked";
 export interface UiReadAccess {
@@ -347,6 +348,11 @@ export interface MessageRead {
   readonly revisions: readonly MessageRevisionRead[];
   readonly reactions: readonly MessageReactionRead[];
   readonly provenance?: MessageProvenanceRead;
+  /** Source deletion is an evidence state, not an owner deletion request. */
+  readonly sourceDeleted?: boolean;
+  readonly contentUnavailable?: boolean;
+  readonly sourceDeletedAt?: string;
+  readonly sourceDeletionKind?: SourceDeletionKind;
 }
 export interface MessageProvenanceRead {
   readonly sourceAccountId: string;
@@ -573,6 +579,10 @@ export interface MessagePersistenceRow {
   readonly revisions?: readonly MessageRevisionRead[];
   readonly reactions?: readonly MessageReactionRead[];
   readonly provenance?: MessageProvenanceRead;
+  readonly sourceDeleted?: boolean;
+  readonly contentUnavailable?: boolean;
+  readonly sourceDeletedAt?: string;
+  readonly sourceDeletionKind?: SourceDeletionKind;
 }
 export interface MediaPersistenceRow {
   readonly id: string;
@@ -721,6 +731,11 @@ export class ArchiveReadService {
       revisions: row.revisions ?? [],
       reactions: row.reactions ?? [],
       ...(row.provenance ? { provenance: row.provenance } : {}),
+      ...(row.sourceDeleted
+        ? { sourceDeleted: true, contentUnavailable: row.contentUnavailable ?? false }
+        : {}),
+      ...(row.sourceDeletedAt ? { sourceDeletedAt: row.sourceDeletedAt } : {}),
+      ...(row.sourceDeletionKind ? { sourceDeletionKind: row.sourceDeletionKind } : {}),
     }));
     return this.page(
       items,

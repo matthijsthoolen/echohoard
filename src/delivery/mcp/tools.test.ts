@@ -184,6 +184,42 @@ describe("bounded private MCP conversation and search tools", () => {
     await app.close();
   });
 
+  it("exposes only bounded source deletion state for an authorized conversation read", async () => {
+    const listMessages = vi.fn(async () => ({
+      items: [
+        {
+          id: "message-deleted",
+          conversationId: "conversation-a",
+          sentAt: "2026-01-05T00:00:00.000Z",
+          text: "captured before deletion",
+          attachmentCount: 0,
+          direction: "received" as const,
+          messageType: "text",
+          sourceDeleted: true,
+          contentUnavailable: false,
+          sourceDeletedAt: "2026-01-05T00:00:00.000Z",
+          sourceDeletionKind: "revoke" as const,
+          revisions: [],
+          reactions: [],
+        },
+      ],
+      hasMore: false,
+    }));
+    const { app, sessionId } = await connectedApp(fakeReads({ listMessages }));
+    const result = await callTool(app, sessionId, "get_conversation", {
+      conversationId: "conversation-a",
+    });
+    expect(result.body.result.structuredContent.items[0]).toMatchObject({
+      id: "message-deleted",
+      sourceDeleted: true,
+      contentUnavailable: false,
+      sourceDeletedAt: "2026-01-05T00:00:00.000Z",
+      sourceDeletionKind: "revoke",
+    });
+    expect(JSON.stringify(result.body)).not.toContain("eventKey");
+    await app.close();
+  });
+
   it("maps all three handlers to archive-scoped application services and marks evidence untrusted", async () => {
     const search = vi.fn(async (query) => ({
       items: [{ id: "message-a", kind: "message" as const, score: 0.8 }],
