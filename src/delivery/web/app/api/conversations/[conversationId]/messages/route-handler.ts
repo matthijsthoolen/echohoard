@@ -43,6 +43,7 @@ export function createMessagesRoute({ getRuntime }: MessageRouteDependencies) {
         parsed.mode === "locked"
           ? await runtime.auth.lockedPrincipal?.(request, principal.archiveId, conversationId)
           : false;
+      if (parsed.mode === "locked" && !unlocked) return conversationUnavailable();
       const page = await runtime.reads.listMessages({
         archiveId: principal.archiveId,
         conversationId,
@@ -130,4 +131,8 @@ function invalid(error: string): Response {
 
 function unauthorized(): Response {
   return Response.json({ error: "Authentication required" }, { status: 401 });
+}
+
+function conversationUnavailable(): Response {
+  return Response.json({ error: "Conversation unavailable" }, { status: 404 });
 }

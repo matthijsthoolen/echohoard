@@ -155,19 +155,25 @@ describe("message timeline route", () => {
     );
   });
 
-  it("drops locked access after relock or grant expiry", async () => {
-    const listMessages = vi.fn(async () => ({ items: [], hasMore: false }));
-    const lockedPrincipal = vi.fn(async () => null);
-    const route = createMessagesRoute({
-      getRuntime: () => ({ auth: { ...auth, lockedPrincipal }, reads: { listMessages } }),
-    });
-    await route(new Request("http://localhost/api/conversations/c1/messages?mode=locked"), {
-      params: { conversationId: "c1" },
-    });
-    expect(listMessages).toHaveBeenCalledWith(
-      expect.not.objectContaining({ uiAccess: expect.anything() }),
-    );
-  });
+  it.each(["missing", "expired", "cross-archive"] as const)(
+    "denies a %s locked grant without querying messages",
+    async () => {
+      const listMessages = vi.fn(async () => ({ items: [], hasMore: false }));
+      const lockedPrincipal = vi.fn(async () => null);
+      const route = createMessagesRoute({
+        getRuntime: () => ({ auth: { ...auth, lockedPrincipal }, reads: { listMessages } }),
+      });
+      const response = await route(
+        new Request("http://localhost/api/conversations/c1/messages?mode=locked"),
+        {
+          params: { conversationId: "c1" },
+        },
+      );
+      expect(response.status).toBe(404);
+      expect(await response.json()).toEqual({ error: "Conversation unavailable" });
+      expect(listMessages).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the bounded source deletion marker in the web response", async () => {
     const listMessages = vi.fn(async () => ({ items: [deletedRow], hasMore: false }));

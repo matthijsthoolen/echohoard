@@ -9,7 +9,7 @@ import { ArchiveOverview } from "../components/archive-overview";
 import { PeopleList } from "../components/people-list";
 import { ECHOHOARD_VERSION } from "../../../application/version";
 import { fetchConversationPage } from "../components/conversation-list";
-import { relockProtectedSession, sendRelockBeacon } from "../components/relock";
+import { isUnlockNavigation, relockProtectedSession, sendRelockBeacon } from "../components/relock";
 
 type ShellView =
   | "overview"
@@ -122,6 +122,12 @@ export default function ArchiveShell() {
     const anchor = (event.target as Element).closest("a");
     if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
     const destination = new URL(anchor.href, window.location.href);
+    if (isUnlockNavigation(destination, window.location.origin)) {
+      event.preventDefault();
+      preserveUnlockForNavigation.current = true;
+      window.location.assign(destination.href);
+      return;
+    }
     if (destination.origin !== window.location.origin || destination.pathname !== "/") return;
     event.preventDefault();
     const nextView = shellView(destination.searchParams.get("view"));

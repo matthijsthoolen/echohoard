@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { createUnlockRelockRoute, createUnlockStartRoute } from "./routes";
+import {
+  createUnlockCallbackRoute,
+  createUnlockRelockRoute,
+  createUnlockStartRoute,
+} from "./routes";
 
 describe("unlock relock route", () => {
   it("revokes the server-side grant and never returns protected data", async () => {
@@ -89,5 +93,26 @@ describe("targeted unlock start route", () => {
     await expect(
       route(new Request("http://localhost/auth/unlock/start?conversationId=locked-chat")),
     ).resolves.toMatchObject({ status: 403 });
+  });
+
+  it("completes the callback after the step-up challenge", async () => {
+    const unlockCallback = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "/?view=locked&conversation=conversation-a" },
+        }),
+    );
+    const route = createUnlockCallbackRoute({ getRuntime: () => ({ auth: { unlockCallback } }) });
+    const response = await route(
+      new Request("http://localhost/auth/unlock/callback?state=step-up-state&code=auth-code", {
+        headers: {
+          cookie:
+            "echohoard_unlock_state=step-up-state; echohoard_unlock_nonce=nonce; echohoard_unlock_verifier=verifier; echohoard_session=session",
+        },
+      }),
+    );
+    expect(response.status).toBe(302);
+    expect(unlockCallback).toHaveBeenCalledWith(expect.any(Request));
   });
 });

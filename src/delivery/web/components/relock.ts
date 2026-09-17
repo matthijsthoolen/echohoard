@@ -8,6 +8,10 @@ export async function relockProtectedSession(fetcher: typeof fetch = fetch): Pro
   if (!response.ok) throw new Error("relock unavailable");
 }
 
+export function isUnlockNavigation(destination: URL, currentOrigin: string): boolean {
+  return destination.origin === currentOrigin && destination.pathname === "/auth/unlock/start";
+}
+
 /** Beacon is a delivery fallback for lifecycle navigation; the server endpoint
  * remains authoritative and every protected read still validates the grant. */
 export function sendRelockBeacon(): void {

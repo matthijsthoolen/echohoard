@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { relockProtectedSession } from "./relock";
+import { isUnlockNavigation, relockProtectedSession } from "./relock";
 
 describe("protected navigation relock protocol", () => {
   it("uses a same-origin keepalive POST rather than relying on unload alone", async () => {
@@ -11,5 +11,20 @@ describe("protected navigation relock protocol", () => {
       keepalive: true,
       headers: { Accept: "application/json" },
     });
+  });
+
+  it("preserves the unlock grant while navigating to the step-up challenge", () => {
+    expect(
+      isUnlockNavigation(
+        new URL("https://archive.test/auth/unlock/start?returnTo=%2F"),
+        "https://archive.test",
+      ),
+    ).toBe(true);
+    expect(isUnlockNavigation(new URL("https://archive.test/"), "https://archive.test")).toBe(
+      false,
+    );
+    expect(
+      isUnlockNavigation(new URL("https://other.test/auth/unlock/start"), "https://archive.test"),
+    ).toBe(false);
   });
 });
