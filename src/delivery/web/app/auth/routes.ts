@@ -72,6 +72,19 @@ export function createUnlockCallbackRoute({ getRuntime }: AuthRouteDependencies)
   };
 }
 
+export function createUnlockRelockRoute({ getRuntime }: AuthRouteDependencies) {
+  return async function POST(request: Request): Promise<Response> {
+    const runtime = getRuntime();
+    if (!runtime) return unavailable();
+    try {
+      await runtime.auth.relock(request);
+      return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+    } catch {
+      return denied();
+    }
+  };
+}
+
 function unavailable(): Response {
   return new Response(renderErrorDocument("service-unavailable"), {
     status: 503,

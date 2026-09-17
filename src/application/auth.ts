@@ -275,6 +275,10 @@ export class OidcAuth {
     return this.unlocks.listGrantedConversationIds({ sessionToken: session, archiveId });
   }
 
+  async relock(session: string | undefined): Promise<void> {
+    if (session && this.unlocks) await this.unlocks.revokeSession(session);
+  }
+
   async validateUnlock(
     session: string | undefined,
     grant: string | undefined,

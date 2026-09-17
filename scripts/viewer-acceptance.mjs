@@ -165,7 +165,7 @@ async function runAuthenticatedWorkflow() {
   const cookie = process.env.ECHOHOARD_VIEWER_SESSION_COOKIE?.trim();
   if (!cookie) {
     console.log(
-      "Authenticated workflow: skipped (no controlled ECHOHOARD_VIEWER_SESSION_COOKIE supplied; anonymous mode only)",
+      "EVIDENCE_SKIPPED authenticated workflow: no controlled ECHOHOARD_VIEWER_SESSION_COOKIE supplied; anonymous mode only",
     );
     return;
   }
@@ -233,16 +233,19 @@ async function runAuthenticatedWorkflow() {
   const search = await fetchPage("/api/search?q=synthetic&limit=50", headers);
   assert(search.response.status === 200, `search workflow returned ${search.response.status}`);
   assert(JSON.parse(search.body).items.length <= 50, "search page exceeded its bound");
-  for (const mode of ["hidden", "locked"]) {
+  for (const mode of ["hidden"]) {
     const folder = await fetchPage(`/api/conversations?mode=${mode}&limit=50`, headers);
-    if (folder.response.status !== 200) continue;
+    assert(folder.response.status === 200, `${mode} folder returned ${folder.response.status}`);
     const conversation = JSON.parse(folder.body).items?.[0];
     if (!conversation?.id) continue;
     const messages = await fetchPage(
       `/api/conversations/${encodeURIComponent(conversation.id)}/messages?mode=${mode}&limit=50&direction=backward`,
       headers,
     );
-    if (messages.response.status !== 200) continue;
+    assert(
+      messages.response.status === 200,
+      `${mode} history returned ${messages.response.status}`,
+    );
     const protectedAttachment = JSON.parse(messages.body)
       .items?.flatMap((item) => item.attachments ?? [])
       .find((attachment) => attachment.availability === "available");
@@ -259,6 +262,63 @@ async function runAuthenticatedWorkflow() {
     assert(
       protectedMedia.response.status === 200,
       `authorized ${mode} media returned ${protectedMedia.response.status}`,
+    );
+  }
+
+  const lockedConversationId = process.env.ECHOHOARD_VIEWER_LOCKED_CONVERSATION_ID?.trim();
+  const lockedAttachmentId = process.env.ECHOHOARD_VIEWER_LOCKED_ATTACHMENT_ID?.trim();
+  const unlockGrantCookie = process.env.ECHOHOARD_VIEWER_UNLOCK_GRANT_COOKIE?.trim();
+  if (!lockedConversationId || !lockedAttachmentId || !unlockGrantCookie) {
+    console.log(
+      "EVIDENCE_SKIPPED locked-folder workflow: provide synthetic locked conversation, attachment, and post-step-up grant cookie; no Authentik step-up was run",
+    );
+  } else {
+    const sessionOnlyHeaders = {
+      ...headers,
+      Cookie: cookie
+        .split(";")
+        .map((part) => part.trim())
+        .filter((part) => !part.startsWith("echohoard_unlock_grant="))
+        .join("; "),
+    };
+    const deniedHistory = await fetchPage(
+      `/api/conversations/${encodeURIComponent(lockedConversationId)}/messages?limit=50&direction=backward`,
+      sessionOnlyHeaders,
+    );
+    assert(deniedHistory.response.status === 404, "locked history was readable before step-up");
+    const deniedMedia = await fetchPage(
+      `/api/media/${encodeURIComponent(lockedAttachmentId)}`,
+      sessionOnlyHeaders,
+    );
+    assert(deniedMedia.response.status === 404, "locked media was readable before step-up");
+
+    const unlockedHeaders = {
+      ...headers,
+      Cookie: `${cookie}; ${unlockGrantCookie}`,
+    };
+    const authorizedHistory = await fetchPage(
+      `/api/conversations/${encodeURIComponent(lockedConversationId)}/messages?mode=locked&limit=50&direction=backward`,
+      unlockedHeaders,
+    );
+    assert(authorizedHistory.response.status === 200, "post-step-up locked history was denied");
+    const authorizedMedia = await fetchPage(
+      `/api/media/${encodeURIComponent(lockedAttachmentId)}?mode=locked`,
+      unlockedHeaders,
+    );
+    assert(authorizedMedia.response.status === 200, "post-step-up locked media was denied");
+
+    const relock = await fetchPage("/auth/unlock/relock", unlockedHeaders, { method: "POST" });
+    assert(relock.response.status === 204, `explicit relock returned ${relock.response.status}`);
+    const afterRelock = await fetchPage(
+      `/api/conversations/${encodeURIComponent(lockedConversationId)}/messages?mode=locked&limit=50&direction=backward`,
+      unlockedHeaders,
+    );
+    assert(
+      afterRelock.response.status === 404,
+      "locked history remained readable after explicit relock",
+    );
+    console.log(
+      "Locked-folder workflow: pre-step-up denial, authorized media, and explicit relock passed",
     );
   }
   console.log("Authenticated workflow: browse, bidirectional history, and search passed");

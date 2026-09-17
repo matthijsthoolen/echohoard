@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type MouseEvent } from "react";
 import Image from "next/image";
 import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
@@ -9,6 +9,7 @@ import { ArchiveOverview } from "../components/archive-overview";
 import { PeopleList } from "../components/people-list";
 import { ECHOHOARD_VERSION } from "../../../application/version";
 import { fetchConversationPage } from "../components/conversation-list";
+import { relockProtectedSession, sendRelockBeacon } from "../components/relock";
 
 type ShellView = "overview" | "chats" | "people" | "search" | "hidden" | "locked" | "settings";
 
@@ -35,9 +36,31 @@ export default function ArchiveShell() {
       setMessageId(params.get("message") || undefined);
     };
     syncLocation();
-    window.addEventListener("popstate", syncLocation);
-    return () => window.removeEventListener("popstate", syncLocation);
-  }, []);
+    const onPopState = () => {
+      if (view === "locked") {
+        void relockProtectedSession();
+        setConversationId(undefined);
+        setMessageId(undefined);
+      }
+      syncLocation();
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted && view === "locked") {
+        void relockProtectedSession().finally(() => window.location.reload());
+      }
+    };
+    const onPageHide = () => {
+      if (view === "locked") sendRelockBeacon();
+    };
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener("pageshow", onPageShow);
+    window.addEventListener("pagehide", onPageHide);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener("pageshow", onPageShow);
+      window.removeEventListener("pagehide", onPageHide);
+    };
+  }, [view]);
 
   useEffect(() => {
     try {
@@ -64,8 +87,19 @@ export default function ArchiveShell() {
     (view === "chats" || view === "search" || view === "hidden" || view === "locked");
   const timelineMode = view === "hidden" || view === "locked" ? view : "ordinary";
 
+  const handleNavigationCapture = (event: MouseEvent<HTMLElement>) => {
+    if (view !== "locked" || event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = (event.target as Element).closest("a");
+    if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
+    const destination = new URL(anchor.href, window.location.href);
+    if (destination.origin !== window.location.origin || destination.pathname !== "/") return;
+    event.preventDefault();
+    void relockProtectedSession().finally(() => window.location.assign(destination.href));
+  };
+
   return (
-    <main className="app-shell">
+    <main className="app-shell" onClickCapture={handleNavigationCapture}>
       <a className="skip-link" href="#main-content">
         Skip to content
       </a>

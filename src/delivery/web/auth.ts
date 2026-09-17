@@ -116,6 +116,10 @@ export class WebAuthBoundary {
     });
   }
 
+  async relock(request: Request): Promise<void> {
+    await this.auth.relock(readCookie(request, SESSION_COOKIE));
+  }
+
   async unlockStart(
     request: Request,
     archiveId: string,
