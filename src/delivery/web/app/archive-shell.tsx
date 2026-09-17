@@ -317,7 +317,6 @@ function SettingsPanel({
 type PrivacyPolicy = {
   readonly archiveId?: string;
   readonly conversationId?: string;
-  readonly unlockHandle?: string;
   readonly uiVisibility: "normal" | "hidden" | "locked";
   readonly mcpAccess: "allowed" | "denied";
 };
@@ -333,12 +332,13 @@ function PrivacySettings() {
       if (!response.ok) throw new Error("privacy unavailable");
       const body = (await response.json()) as { readonly policies: PrivacyPolicy[] };
       setPolicies(body.policies);
-      const [normal, hidden] = await Promise.all([
+      const [normal, hidden, locked] = await Promise.all([
         fetchConversationPage(fetch, undefined, "/api/conversations"),
         fetchConversationPage(fetch, undefined, "/api/conversations?mode=hidden"),
+        fetchConversationPage(fetch, undefined, "/api/conversations?mode=locked"),
       ]);
       const next: Record<string, string> = {};
-      for (const page of [normal, hidden]) {
+      for (const page of [normal, hidden, locked]) {
         if (page === "unauthorized") continue;
         for (const item of page.items) next[item.id] = item.title;
       }
@@ -358,9 +358,7 @@ function PrivacySettings() {
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({
-          ...(policy.unlockHandle
-            ? { unlockHandle: policy.unlockHandle }
-            : { conversationId: policy.conversationId }),
+          conversationId: policy.conversationId,
           ...change,
         }),
       });
@@ -385,14 +383,12 @@ function PrivacySettings() {
           {policies.map((policy) => (
             <article
               className="privacy-row"
-              key={policy.unlockHandle ?? policy.conversationId}
-              aria-labelledby={`privacy-chat-${policy.unlockHandle ?? policy.conversationId}`}
+              key={policy.conversationId}
+              aria-labelledby={`privacy-chat-${policy.conversationId}`}
             >
               <div>
-                <h3 id={`privacy-chat-${policy.unlockHandle ?? policy.conversationId}`}>
-                  {policy.uiVisibility === "locked"
-                    ? "Locked conversation"
-                    : (titles[policy.conversationId ?? ""] ?? "Conversation")}
+                <h3 id={`privacy-chat-${policy.conversationId}`}>
+                  {titles[policy.conversationId ?? ""] ?? "Conversation"}
                 </h3>
                 <p>
                   {policy.uiVisibility === "locked"
@@ -403,10 +399,7 @@ function PrivacySettings() {
               <div className="privacy-actions">
                 <label>
                   <span className="sr-only">
-                    UI visibility for{" "}
-                    {policy.uiVisibility === "locked"
-                      ? "locked conversation"
-                      : (titles[policy.conversationId ?? ""] ?? "conversation")}
+                    UI visibility for {titles[policy.conversationId ?? ""] ?? "conversation"}
                   </span>
                   <select
                     value={policy.uiVisibility}
@@ -424,7 +417,7 @@ function PrivacySettings() {
                 <button
                   className={`button${policy.mcpAccess === "denied" ? " button-primary" : ""}`}
                   type="button"
-                  aria-label={`${policy.mcpAccess === "denied" ? "Allow" : "Deny"} MCP access for ${policy.uiVisibility === "locked" ? "locked conversation" : (titles[policy.conversationId ?? ""] ?? "conversation")}`}
+                  aria-label={`${policy.mcpAccess === "denied" ? "Allow" : "Deny"} MCP access for ${titles[policy.conversationId ?? ""] ?? "conversation"}`}
                   aria-pressed={policy.mcpAccess === "denied"}
                   onClick={() =>
                     void update(policy, {
@@ -434,14 +427,6 @@ function PrivacySettings() {
                 >
                   {policy.mcpAccess === "denied" ? "MCP denied" : "MCP allowed"}
                 </button>
-                {policy.uiVisibility === "locked" ? (
-                  <a
-                    className="button"
-                    href={`/auth/unlock/start?unlockHandle=${encodeURIComponent(policy.unlockHandle ?? "")}&returnTo=${encodeURIComponent("/?view=locked")}`}
-                  >
-                    Unlock
-                  </a>
-                ) : null}
               </div>
             </article>
           ))}
@@ -453,44 +438,24 @@ function PrivacySettings() {
 }
 
 function LockedFolder() {
-  const [policies, setPolicies] = useState<PrivacyPolicy[] | "loading" | "error">("loading");
-  useEffect(() => {
-    void fetch("/api/privacy", { credentials: "same-origin" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("privacy unavailable");
-        return (await response.json()) as { readonly policies: PrivacyPolicy[] };
-      })
-      .then(
-        (body) => setPolicies(body.policies.filter((policy) => policy.uiVisibility === "locked")),
-        () => setPolicies("error"),
-      );
-  }, []);
   return (
     <section className="folder-panel" aria-labelledby="locked-heading">
       <p className="eyebrow">Protected folder</p>
       <h2 id="locked-heading">Locked chats</h2>
       <p>Chat names and content stay concealed until Authentik confirms a recent step-up.</p>
-      {policies === "loading" ? <p role="status">Checking locked chats…</p> : null}
-      {policies === "error" ? <p role="alert">Locked chats are unavailable.</p> : null}
-      {Array.isArray(policies) && policies.length === 0 ? <p>No locked chats.</p> : null}
-      {Array.isArray(policies) ? (
-        <ul className="privacy-folder-list">
-          {policies.map((policy) => (
-            <li key={policy.unlockHandle ?? policy.conversationId}>
-              <span>Locked conversation</span>
-              {policy.unlockHandle ? (
-                <a
-                  className="button"
-                  href={`/auth/unlock/start?unlockHandle=${encodeURIComponent(policy.unlockHandle)}&returnTo=${encodeURIComponent("/?view=locked")}`}
-                  aria-label="Step up to open locked conversation"
-                >
-                  Step up to open
-                </a>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      ) : null}
+      <a
+        className="button"
+        href={`/auth/unlock/start?returnTo=${encodeURIComponent("/?view=locked")}`}
+      >
+        Step up to view locked chats
+      </a>
+      <div className="privacy-folder-list">
+        <ConversationList
+          endpoint="/api/conversations?mode=locked"
+          emptyTitle="Locked chats are unavailable"
+          emptyDetail="Step up with Authentik to view permitted locked chats."
+        />
+      </div>
     </section>
   );
 }

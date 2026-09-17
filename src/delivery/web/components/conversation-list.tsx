@@ -76,7 +76,15 @@ function parseConversation(value: unknown): ConversationRead {
   };
 }
 
-export function ConversationList({ endpoint = "/api/conversations" }: { endpoint?: string }) {
+export function ConversationList({
+  endpoint = "/api/conversations",
+  emptyTitle = "No conversations archived yet",
+  emptyDetail = "Completed imports will appear here.",
+}: {
+  endpoint?: string;
+  emptyTitle?: string;
+  emptyDetail?: string;
+}) {
   const [state, setState] = useState<ConversationListState>({ kind: "loading" });
   const [nextCursor, setNextCursor] = useState<string | undefined>();
   const [loadingMore, setLoadingMore] = useState(false);
@@ -123,13 +131,7 @@ export function ConversationList({ endpoint = "/api/conversations" }: { endpoint
         }}
       />
     );
-  if (state.kind === "empty")
-    return (
-      <ListStatus
-        title="No conversations archived yet"
-        detail="Completed imports will appear here."
-      />
-    );
+  if (state.kind === "empty") return <ListStatus title={emptyTitle} detail={emptyDetail} />;
 
   return (
     <section className="conversation-panel" aria-labelledby="conversation-list-heading">

@@ -16,6 +16,7 @@ export interface ConversationRouteDependencies {
 export interface ConversationRouteRuntime {
   readonly auth: Pick<WebRuntime["auth"], "principalForRequest"> & {
     readonly lockedPrincipal?: WebRuntime["auth"]["lockedPrincipal"];
+    readonly grantedConversationIds?: WebRuntime["auth"]["grantedConversationIds"];
   };
   readonly reads: Pick<WebRuntime["reads"], "listConversations">;
 }
@@ -49,6 +50,11 @@ export function createConversationsRoute({ getRuntime }: ConversationRouteDepend
           ...query,
           uiAccess: { mode: "locked", authorizedConversationIds: [parsed.conversationId] },
         };
+      }
+      if (parsed.mode === "locked" && !parsed.conversationId) {
+        const ids =
+          (await runtime.auth.grantedConversationIds?.(request, principal.archiveId)) ?? [];
+        query = { ...query, uiAccess: { mode: "locked", authorizedConversationIds: ids } };
       }
       const page = await runtime.reads.listConversations(query);
       return Response.json(toResponse(page), {

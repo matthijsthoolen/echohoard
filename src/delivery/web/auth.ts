@@ -17,15 +17,6 @@ const UNLOCK_VERIFIER_COOKIE = "echohoard_unlock_verifier";
 const UNLOCK_GRANT_COOKIE = "echohoard_unlock_grant";
 const UNLOCK_RETURN_COOKIE = "echohoard_unlock_return";
 const cookieOptions = "Path=/; HttpOnly; SameSite=Lax; Secure";
-const UNLOCK_HANDLE_TTL_MS = 5 * 60 * 1000;
-
-type UnlockHandle = {
-  readonly session: string;
-  readonly archiveId: string;
-  readonly conversationId: string;
-  readonly expiresAt: number;
-};
-
 export type AuthResponse = Response;
 
 function randomToken(): string {
@@ -57,8 +48,6 @@ function clearCookie(name: string): string {
 }
 
 export class WebAuthBoundary {
-  private readonly unlockHandles = new Map<string, UnlockHandle>();
-
   constructor(
     private readonly auth: OidcAuth,
     private readonly callbackUrl: string,
@@ -118,9 +107,6 @@ export class WebAuthBoundary {
   async logout(request: Request): Promise<AuthResponse> {
     const session = readCookie(request, SESSION_COOKIE);
     await this.auth.logout(session);
-    for (const [handle, value] of this.unlockHandles) {
-      if (value.session === session) this.unlockHandles.delete(handle);
-    }
     return new Response(null, {
       status: 302,
       headers: {
@@ -158,42 +144,31 @@ export class WebAuthBoundary {
     });
   }
 
-  async createUnlockHandle(
-    request: Request,
-    archiveId: string,
-    conversationId: string,
-  ): Promise<string | null> {
+  async unlockStartFolder(request: Request): Promise<AuthResponse> {
     const session = readCookie(request, SESSION_COOKIE);
-    const principal = await this.auth.validate(session, archiveId);
-    if (!session || !principal || !conversationId) return null;
-    this.cleanupUnlockHandles();
-    const handle = randomToken();
-    this.unlockHandles.set(handle, {
-      session,
-      archiveId: principal.archiveId,
-      conversationId,
-      expiresAt: Date.now() + UNLOCK_HANDLE_TTL_MS,
+    const state = randomToken();
+    const nonce = randomToken();
+    const pkce = pkcePair();
+    const principal = await this.auth.validate(session);
+    const location = principal
+      ? await this.auth.beginFolderUnlock(session, {
+          state,
+          nonce,
+          codeChallenge: pkce.challenge,
+          archiveId: principal.archiveId,
+        })
+      : null;
+    if (!location) return browserError("access-denied", 403);
+    const returnTo = new URL(request.url).searchParams.get("returnTo");
+    const safeReturnTo =
+      returnTo === "/?view=locked" || returnTo === "/" ? returnTo : "/?view=locked";
+    return new Response(null, {
+      status: 302,
+      headers: {
+        Location: location,
+        "Set-Cookie": `${UNLOCK_STATE_COOKIE}=${encodeURIComponent(state)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_NONCE_COOKIE}=${encodeURIComponent(nonce)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_VERIFIER_COOKIE}=${encodeURIComponent(pkce.verifier)}; ${cookieOptions}; Max-Age=300, ${UNLOCK_RETURN_COOKIE}=${encodeURIComponent(safeReturnTo)}; ${cookieOptions}; Max-Age=300`,
+      },
     });
-    return handle;
-  }
-
-  async resolveUnlockHandle(
-    request: Request,
-    handle: string,
-  ): Promise<{ readonly archiveId: string; readonly conversationId: string } | null> {
-    this.cleanupUnlockHandles();
-    const session = readCookie(request, SESSION_COOKIE);
-    const value = this.unlockHandles.get(handle);
-    if (!session || !value || value.session !== session) return null;
-    const principal = await this.auth.validate(session, value.archiveId);
-    if (!principal) return null;
-    return { archiveId: value.archiveId, conversationId: value.conversationId };
-  }
-
-  async unlockStartHandle(request: Request, handle: string): Promise<AuthResponse> {
-    const resolved = await this.resolveUnlockHandle(request, handle);
-    if (!resolved) return browserError("access-denied", 403);
-    return this.unlockStart(request, resolved.archiveId, resolved.conversationId);
   }
 
   async unlockCallback(request: Request): Promise<AuthResponse> {
@@ -248,11 +223,10 @@ export class WebAuthBoundary {
     );
   }
 
-  private cleanupUnlockHandles(): void {
-    const now = Date.now();
-    for (const [handle, value] of this.unlockHandles) {
-      if (value.expiresAt <= now) this.unlockHandles.delete(handle);
-    }
+  async grantedConversationIds(request: Request, archiveId: string): Promise<readonly string[]> {
+    const session = readCookie(request, SESSION_COOKIE);
+    const principal = await this.auth.validate(session, archiveId);
+    return principal ? this.auth.grantedConversationIds(session, archiveId) : [];
   }
 
   async approveIdentity(request: Request, issuer: string, subject: string): Promise<AuthResponse> {

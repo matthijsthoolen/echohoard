@@ -1,0 +1,1 @@
+ALTER TABLE "UnlockGrant" ADD COLUMN "archiveWide" BOOLEAN NOT NULL DEFAULT false;

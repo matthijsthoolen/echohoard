@@ -46,19 +46,14 @@ export function createUnlockStartRoute({ getRuntime }: AuthRouteDependencies) {
     const runtime = getRuntime();
     if (!runtime) return unavailable();
     const url = new URL(request.url);
-    const unlockHandle = url.searchParams.get("unlockHandle");
-    if (unlockHandle) {
-      try {
-        return await runtime.auth.unlockStartHandle(request, unlockHandle);
-      } catch {
-        return denied();
-      }
-    }
-    const archiveId = url.searchParams.get("archiveId");
-    const conversationId = url.searchParams.get("conversationId");
-    if (!archiveId || !conversationId) return denied();
+    if (
+      url.searchParams.has("unlockHandle") ||
+      url.searchParams.has("conversationId") ||
+      url.searchParams.has("archiveId")
+    )
+      return denied();
     try {
-      return await runtime.auth.unlockStart(request, archiveId, conversationId);
+      return await runtime.auth.unlockStartFolder(request);
     } catch {
       return denied();
     }

@@ -41,6 +41,11 @@ export type UnlockChallenge = Readonly<{
 }>;
 
 export interface UnlockStore {
+  createFolderChallenge?(input: {
+    readonly state: string;
+    readonly sessionToken: string;
+    readonly archiveId: string;
+  }): Promise<boolean>;
   createChallenge(input: {
     readonly state: string;
     readonly sessionToken: string;
@@ -60,6 +65,14 @@ export interface UnlockStore {
     readonly archiveId: string;
     readonly conversationId: string;
   }): Promise<string>;
+  createGrantsForArchive?(input: {
+    readonly sessionToken: string;
+    readonly archiveId: string;
+  }): Promise<string>;
+  listGrantedConversationIds?(input: {
+    readonly sessionToken: string;
+    readonly archiveId: string;
+  }): Promise<readonly string[]>;
   validateGrant(input: {
     readonly grantToken: string;
     readonly sessionToken: string;
@@ -174,6 +187,31 @@ export class OidcAuth {
     });
   }
 
+  async beginFolderUnlock(
+    session: string | undefined,
+    input: {
+      readonly state: string;
+      readonly nonce: string;
+      readonly codeChallenge: string;
+      readonly archiveId: string;
+    },
+  ): Promise<string | null> {
+    const principal = await this.validate(session, input.archiveId);
+    if (!principal || !this.unlocks?.createFolderChallenge) return null;
+    if (
+      !(await this.unlocks.createFolderChallenge({
+        state: input.state,
+        sessionToken: session!,
+        archiveId: principal.archiveId,
+      }))
+    )
+      return null;
+    return this.provider.authorizationUrl(input.state, input.nonce, input.codeChallenge, {
+      prompt: "login",
+      maxAge: 0,
+    });
+  }
+
   async completeUnlock(
     session: string | undefined,
     input: {
@@ -215,13 +253,26 @@ export class OidcAuth {
     }
     if (!(await this.unlocks.consumeChallenge({ state: input.state, sessionToken: session })))
       return null;
-    const grant = await this.unlocks.createGrant({
-      sessionToken: session,
-      archiveId: challenge.archiveId,
-      conversationId: challenge.conversationId,
-    });
+    const grant = this.unlocks.createGrantsForArchive
+      ? await this.unlocks.createGrantsForArchive({
+          sessionToken: session,
+          archiveId: challenge.archiveId,
+        })
+      : await this.unlocks.createGrant({
+          sessionToken: session,
+          archiveId: challenge.archiveId,
+          conversationId: challenge.conversationId,
+        });
     this.diagnostic("oidc.unlock.accepted", {});
     return grant;
+  }
+
+  async grantedConversationIds(
+    session: string | undefined,
+    archiveId: string,
+  ): Promise<readonly string[]> {
+    if (!session || !this.unlocks?.listGrantedConversationIds) return [];
+    return this.unlocks.listGrantedConversationIds({ sessionToken: session, archiveId });
   }
 
   async validateUnlock(

@@ -19,6 +19,28 @@ export class PrismaUnlockStore implements UnlockStore {
     private readonly grantTtlSeconds = GRANT_TTL_SECONDS,
   ) {}
 
+  public async createFolderChallenge(
+    input: Parameters<NonNullable<UnlockStore["createFolderChallenge"]>>[0],
+  ): Promise<boolean> {
+    const session = await this.prisma.authSession.findUnique({
+      where: { tokenHash: hashToken(input.sessionToken) },
+      select: { id: true, archiveId: true, expiresAt: true, revokedAt: true },
+    });
+    if (
+      !session ||
+      session.archiveId !== input.archiveId ||
+      session.revokedAt !== null ||
+      session.expiresAt.getTime() <= Date.now()
+    )
+      return false;
+    const firstLocked = await this.prisma.conversation.findFirst({
+      where: { archiveId: input.archiveId, uiVisibility: "locked", materialized: true },
+      orderBy: { id: "asc" },
+      select: { id: true },
+    });
+    return firstLocked ? this.createChallenge({ ...input, conversationId: firstLocked.id }) : false;
+  }
+
   public async createChallenge(
     input: Parameters<UnlockStore["createChallenge"]>[0],
   ): Promise<boolean> {
@@ -125,6 +147,64 @@ export class PrismaUnlockStore implements UnlockStore {
     return token;
   }
 
+  public async createGrantsForArchive(
+    input: Parameters<NonNullable<UnlockStore["createGrantsForArchive"]>>[0],
+  ): Promise<string> {
+    const session = await this.prisma.authSession.findUnique({
+      where: { tokenHash: hashToken(input.sessionToken) },
+      select: { id: true, archiveId: true, expiresAt: true, revokedAt: true },
+    });
+    if (
+      !session ||
+      session.archiveId !== input.archiveId ||
+      session.revokedAt !== null ||
+      session.expiresAt.getTime() <= Date.now()
+    )
+      throw new Error("Cannot grant an inactive session");
+    const token = randomUUID();
+    const row = await this.prisma.conversation.findFirst({
+      where: { archiveId: input.archiveId, uiVisibility: "locked", materialized: true },
+      orderBy: { id: "asc" },
+      select: { id: true },
+    });
+    if (!row) throw new Error("No locked conversations");
+    await this.prisma.unlockGrant.create({
+      data: {
+        tokenHash: hashToken(token),
+        runtimeId: this.runtimeId,
+        sessionHash: hashToken(input.sessionToken),
+        authSessionId: session.id,
+        archiveId: input.archiveId,
+        conversationId: row.id,
+        archiveWide: true,
+        expiresAt: new Date(Date.now() + this.grantTtlSeconds * 1_000),
+      },
+    });
+    return token;
+  }
+
+  public async listGrantedConversationIds(
+    input: Parameters<NonNullable<UnlockStore["listGrantedConversationIds"]>>[0],
+  ): Promise<readonly string[]> {
+    const grant = await this.prisma.unlockGrant.findFirst({
+      where: {
+        sessionHash: hashToken(input.sessionToken),
+        archiveId: input.archiveId,
+        revokedAt: null,
+        expiresAt: { gt: new Date() },
+        authSession: { revokedAt: null, expiresAt: { gt: new Date() } },
+      },
+      select: { conversationId: true, archiveWide: true },
+    });
+    if (!grant) return [];
+    if (!grant.archiveWide) return [grant.conversationId];
+    const rows = await this.prisma.conversation.findMany({
+      where: { archiveId: input.archiveId, uiVisibility: "locked", materialized: true },
+      select: { id: true },
+    });
+    return rows.map((row) => row.id);
+  }
+
   public async validateGrant(input: Parameters<UnlockStore["validateGrant"]>[0]): Promise<boolean> {
     const row = await this.prisma.unlockGrant.findFirst({
       where: {
@@ -132,11 +212,17 @@ export class PrismaUnlockStore implements UnlockStore {
         runtimeId: this.runtimeId,
         sessionHash: hashToken(input.sessionToken),
         archiveId: input.archiveId,
-        conversationId: input.conversationId,
         revokedAt: null,
         expiresAt: { gt: new Date() },
         authSession: { revokedAt: null, expiresAt: { gt: new Date() } },
-        conversation: { uiVisibility: "locked" },
+        OR: [
+          { archiveWide: true },
+          {
+            archiveWide: false,
+            conversationId: input.conversationId,
+            conversation: { uiVisibility: "locked" },
+          },
+        ],
       },
       select: { id: true },
     });

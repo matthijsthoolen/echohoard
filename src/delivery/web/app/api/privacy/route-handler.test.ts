@@ -10,7 +10,7 @@ const principal: ArchivePrincipal = {
 };
 
 describe("privacy route", () => {
-  it("lists archive-scoped policies without exposing source metadata", async () => {
+  it("does not enumerate locked policy details before step-up", async () => {
     const list = vi.fn(async () => [
       {
         archiveId: "archive-1",
@@ -20,10 +20,9 @@ describe("privacy route", () => {
         sourceLockMetadata: { title: "must not cross this boundary" },
       },
     ]);
-    const createUnlockHandle = vi.fn(async () => "opaque-unlock-handle");
     const route = createPrivacyRoute({
       getRuntime: () => ({
-        auth: { principalForRequest: async () => principal, createUnlockHandle },
+        auth: { principalForRequest: async () => principal },
         conversationPrivacy: { list, updatePolicy: vi.fn() },
       }),
     });
@@ -31,12 +30,10 @@ describe("privacy route", () => {
     const response = await route(new Request("http://localhost/api/privacy"));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
-      policies: [
-        { uiVisibility: "locked", mcpAccess: "denied", unlockHandle: "opaque-unlock-handle" },
-      ],
+      policies: [],
+      lockedFolder: { available: true, unlocked: false },
     });
     expect(list).toHaveBeenCalledWith("archive-1");
-    expect(createUnlockHandle).toHaveBeenCalledWith(expect.any(Request), "archive-1", "chat-1");
   });
 
   it("updates only the authenticated archive and actor", async () => {
@@ -52,7 +49,17 @@ describe("privacy route", () => {
     const route = createPrivacyRoute({
       getRuntime: () => ({
         auth: { principalForRequest: async () => principal },
-        conversationPrivacy: { list: vi.fn(), updatePolicy },
+        conversationPrivacy: {
+          list: vi.fn(async () => [
+            {
+              archiveId: "archive-1",
+              conversationId: "chat-1",
+              uiVisibility: "normal",
+              mcpAccess: "allowed",
+            },
+          ]),
+          updatePolicy,
+        },
       }),
     });
 
@@ -74,6 +81,52 @@ describe("privacy route", () => {
       actorId: "owner-1",
       uiVisibility: "hidden",
       mcpAccess: "denied",
+    });
+  });
+
+  it("returns locked policies only after the server-side grant is valid", async () => {
+    const route = createPrivacyRoute({
+      getRuntime: () => ({
+        auth: {
+          principalForRequest: async () => principal,
+          grantedConversationIds: vi.fn(async () => ["chat-1", "chat-2"]),
+        },
+        conversationPrivacy: {
+          list: vi.fn(async () => [
+            {
+              archiveId: "archive-1",
+              conversationId: "chat-1",
+              uiVisibility: "locked",
+              mcpAccess: "denied",
+            },
+            {
+              archiveId: "archive-1",
+              conversationId: "chat-2",
+              uiVisibility: "locked",
+              mcpAccess: "allowed",
+            },
+          ]),
+          updatePolicy: vi.fn(),
+        },
+      }),
+    });
+    const response = await route(new Request("http://localhost/api/privacy"));
+    expect(await response.json()).toEqual({
+      policies: [
+        {
+          archiveId: "archive-1",
+          conversationId: "chat-1",
+          uiVisibility: "locked",
+          mcpAccess: "denied",
+        },
+        {
+          archiveId: "archive-1",
+          conversationId: "chat-2",
+          uiVisibility: "locked",
+          mcpAccess: "allowed",
+        },
+      ],
+      lockedFolder: { available: true, unlocked: true },
     });
   });
 

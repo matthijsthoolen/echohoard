@@ -135,6 +135,7 @@ model UnlockGrant {
   authSessionId  String       @db.Uuid
   archiveId      String       @db.Uuid
   conversationId String       @db.Uuid
+  archiveWide    Boolean      @default(false)
   expiresAt      DateTime
   revokedAt      DateTime?
   createdAt      DateTime     @default(now())
