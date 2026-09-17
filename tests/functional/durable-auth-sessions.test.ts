@@ -202,7 +202,9 @@ describe("PostgreSQL durable auth sessions", () => {
       createConversationsRoute({ getRuntime: () => readRuntime(unlocks) });
 
     const unlockedPrivacy = await (
-      await privacyRoute(unlocks)(new Request("http://localhost/api/privacy"))
+      await privacyRoute(unlocks)(
+        new Request("http://localhost/api/privacy?view=privacy-management"),
+      )
     ).json();
     expect(unlockedPrivacy).toMatchObject({ lockedFolder: { unlocked: true } });
     expect(unlockedPrivacy.policies).toEqual(
@@ -216,7 +218,11 @@ describe("PostgreSQL durable auth sessions", () => {
       ).json(),
     ).resolves.toMatchObject({ items: [expect.objectContaining({ id: lockedConversationId })] });
     await expect(
-      (await privacyRoute(restarted)(new Request("http://localhost/api/privacy"))).json(),
+      (
+        await privacyRoute(restarted)(
+          new Request("http://localhost/api/privacy?view=privacy-management"),
+        )
+      ).json(),
     ).resolves.toEqual({
       policies: [],
       lockedFolder: { available: true, unlocked: false },

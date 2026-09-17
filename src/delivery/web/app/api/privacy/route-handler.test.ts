@@ -10,6 +10,20 @@ const principal: ArchivePrincipal = {
 };
 
 describe("privacy route", () => {
+  it("requires the dedicated privacy-management view", async () => {
+    const list = vi.fn(async () => []);
+    const route = createPrivacyRoute({
+      getRuntime: () => ({
+        auth: { principalForRequest: async () => principal },
+        conversationPrivacy: { list, updatePolicy: vi.fn() },
+      }),
+    });
+
+    const response = await route(new Request("http://localhost/api/privacy"));
+    expect(response.status).toBe(403);
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("does not enumerate locked policy details before step-up", async () => {
     const list = vi.fn(async () => [
       {
@@ -27,7 +41,9 @@ describe("privacy route", () => {
       }),
     });
 
-    const response = await route(new Request("http://localhost/api/privacy"));
+    const response = await route(
+      new Request("http://localhost/api/privacy?view=privacy-management"),
+    );
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({
       policies: [],
@@ -64,7 +80,7 @@ describe("privacy route", () => {
     });
 
     const response = await route(
-      new Request("http://localhost/api/privacy", {
+      new Request("http://localhost/api/privacy?view=privacy-management", {
         method: "PATCH",
         body: JSON.stringify({
           conversationId: "chat-1",
@@ -110,7 +126,9 @@ describe("privacy route", () => {
         },
       }),
     });
-    const response = await route(new Request("http://localhost/api/privacy"));
+    const response = await route(
+      new Request("http://localhost/api/privacy?view=privacy-management"),
+    );
     expect(await response.json()).toEqual({
       policies: [
         {
@@ -142,7 +160,7 @@ describe("privacy route", () => {
       }),
     });
     const response = await route(
-      new Request("http://localhost/api/privacy", {
+      new Request("http://localhost/api/privacy?view=privacy-management", {
         method: "PATCH",
         body: JSON.stringify({ unlockHandle: "not-a-valid-handle", uiVisibility: "normal" }),
       }),
@@ -165,7 +183,10 @@ describe("privacy route", () => {
       }),
     });
     const response = await route(
-      new Request("http://localhost/api/privacy", { method: "PATCH", body: "{}" }),
+      new Request("http://localhost/api/privacy?view=privacy-management", {
+        method: "PATCH",
+        body: "{}",
+      }),
     );
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Privacy settings unavailable" });

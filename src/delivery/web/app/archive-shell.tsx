@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import Image from "next/image";
 import { ConversationList } from "../components/conversation-list";
 import { MessageTimeline } from "../components/message-timeline";
@@ -11,7 +11,15 @@ import { ECHOHOARD_VERSION } from "../../../application/version";
 import { fetchConversationPage } from "../components/conversation-list";
 import { relockProtectedSession, sendRelockBeacon } from "../components/relock";
 
-type ShellView = "overview" | "chats" | "people" | "search" | "hidden" | "locked" | "settings";
+type ShellView =
+  | "overview"
+  | "chats"
+  | "people"
+  | "search"
+  | "hidden"
+  | "locked"
+  | "settings"
+  | "privacy-management";
 
 const navigation = [
   ["overview", "⌂", "Overview"],
@@ -27,6 +35,7 @@ export default function ArchiveShell() {
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [messageId, setMessageId] = useState<string | undefined>();
   const [theme, setTheme] = useState<ThemeMode>("system");
+  const preserveUnlockForNavigation = useRef(false);
 
   useEffect(() => {
     const syncLocation = () => {
@@ -37,7 +46,7 @@ export default function ArchiveShell() {
     };
     syncLocation();
     const onPopState = () => {
-      if (view === "locked") {
+      if (view === "locked" || view === "privacy-management") {
         setView("overview");
         setConversationId(undefined);
         setMessageId(undefined);
@@ -49,7 +58,7 @@ export default function ArchiveShell() {
       syncLocation();
     };
     const onPageShow = (event: PageTransitionEvent) => {
-      if (event.persisted && view === "locked") {
+      if (event.persisted && (view === "locked" || view === "privacy-management")) {
         setView("overview");
         setConversationId(undefined);
         setMessageId(undefined);
@@ -59,7 +68,13 @@ export default function ArchiveShell() {
       }
     };
     const onPageHide = () => {
-      if (view === "locked") sendRelockBeacon();
+      if (
+        (view === "locked" || view === "privacy-management") &&
+        !preserveUnlockForNavigation.current
+      ) {
+        sendRelockBeacon();
+      }
+      preserveUnlockForNavigation.current = false;
     };
     window.addEventListener("popstate", onPopState);
     window.addEventListener("pageshow", onPageShow);
@@ -97,13 +112,24 @@ export default function ArchiveShell() {
   const timelineMode = view === "hidden" || view === "locked" ? view : "ordinary";
 
   const handleNavigationCapture = (event: MouseEvent<HTMLElement>) => {
-    if (view !== "locked" || event.defaultPrevented || event.button !== 0) return;
+    if (
+      (view !== "locked" && view !== "privacy-management") ||
+      event.defaultPrevented ||
+      event.button !== 0
+    )
+      return;
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     const anchor = (event.target as Element).closest("a");
     if (!anchor || anchor.target === "_blank" || anchor.hasAttribute("download")) return;
     const destination = new URL(anchor.href, window.location.href);
     if (destination.origin !== window.location.origin || destination.pathname !== "/") return;
     event.preventDefault();
+    const nextView = shellView(destination.searchParams.get("view"));
+    if (view === "locked" && nextView === "privacy-management") {
+      preserveUnlockForNavigation.current = true;
+      window.location.assign(destination.href);
+      return;
+    }
     setView("overview");
     setConversationId(undefined);
     setMessageId(undefined);
@@ -157,6 +183,8 @@ export default function ArchiveShell() {
         </nav>
         {view === "settings" ? (
           <SettingsPanel theme={theme} onThemeChange={setTheme} />
+        ) : view === "privacy-management" ? (
+          <PrivacyManagementPanel />
         ) : (
           <div className="content-grid" id="main-content">
             <aside className="list-pane" aria-label="Conversation navigation">
@@ -232,7 +260,8 @@ function shellView(value: string | null): ShellView {
     value === "search" ||
     value === "hidden" ||
     value === "locked" ||
-    value === "settings"
+    value === "settings" ||
+    value === "privacy-management"
     ? value
     : "overview";
 }
@@ -361,12 +390,29 @@ function SettingsPanel({
         ) : null}
       </section>
       <LiveAccountsSettings accounts={accounts} onAccountsChange={(next) => setAccounts(next)} />
-      <PrivacySettings />
       <section className="settings-card" aria-labelledby="about-heading">
         <h2 id="about-heading">About EchoHoard</h2>
         <p>Private, read-only access to your preserved conversations.</p>
         <p className="settings-version">Current version · v{ECHOHOARD_VERSION}</p>
       </section>
+    </section>
+  );
+}
+
+function PrivacyManagementPanel() {
+  return (
+    <section
+      className="settings-panel"
+      id="main-content"
+      aria-labelledby="privacy-management-heading"
+    >
+      <p className="eyebrow">Protected settings</p>
+      <h1 id="privacy-management-heading">Privacy settings</h1>
+      <p className="settings-intro">
+        This protected view is available only after Authentik step-up. Leaving it relocks protected
+        chats.
+      </p>
+      <PrivacySettings />
     </section>
   );
 }
@@ -385,7 +431,9 @@ function PrivacySettings() {
 
   const reload = useCallback(async () => {
     try {
-      const response = await fetch("/api/privacy", { credentials: "same-origin" });
+      const response = await fetch("/api/privacy?view=privacy-management", {
+        credentials: "same-origin",
+      });
       if (!response.ok) throw new Error("privacy unavailable");
       const body = (await response.json()) as { readonly policies: PrivacyPolicy[] };
       setPolicies(body.policies);
@@ -410,7 +458,7 @@ function PrivacySettings() {
   const update = async (policy: PrivacyPolicy, change: Partial<PrivacyPolicy>) => {
     setMessage(null);
     try {
-      const response = await fetch("/api/privacy", {
+      const response = await fetch("/api/privacy?view=privacy-management", {
         method: "PATCH",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -505,6 +553,9 @@ function LockedFolder() {
         href={`/auth/unlock/start?returnTo=${encodeURIComponent("/?view=locked")}`}
       >
         Step up to view locked chats
+      </a>
+      <a className="button" href="/?view=privacy-management">
+        Manage privacy settings
       </a>
       <div className="privacy-folder-list">
         <ConversationList

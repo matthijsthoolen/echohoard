@@ -20,6 +20,8 @@ export function createPrivacyRoute({ getRuntime }: PrivacyRouteDependencies) {
     if (!runtime) return jsonError("Service unavailable", 503);
     const principal = await runtime.auth.principalForRequest(request);
     if (!principal) return jsonError("Authentication required", 401);
+    if (new URL(request.url).searchParams.get("view") !== "privacy-management")
+      return jsonError("Privacy settings unavailable", 403);
     const conversationPrivacy = runtime.conversationPrivacy;
     if (!conversationPrivacy) return jsonError("Service unavailable", 503);
     try {
