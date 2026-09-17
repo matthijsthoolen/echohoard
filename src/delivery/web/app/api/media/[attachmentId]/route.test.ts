@@ -32,17 +32,26 @@ function stream(value: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-function routeFor(attachment: MediaDeliveryAttachment | null, archiveId = principal.archiveId) {
-  const find = vi.fn(async (requestedArchive: string) =>
-    requestedArchive === archiveId ? attachment : null,
+function routeFor(
+  attachment: MediaDeliveryAttachment | null,
+  archiveId = principal.archiveId,
+  grantedConversationIds: readonly string[] = [],
+) {
+  const find = vi.fn(
+    async (
+      requestedArchive: string,
+      _requestedAttachmentId: string,
+      _access?: { mode?: string; authorizedConversationIds?: readonly string[] },
+    ) => (requestedArchive === archiveId ? attachment : null),
   );
+  const granted = vi.fn(async () => grantedConversationIds);
   const route = createMediaRoute({
     getRuntime: () => ({
-      auth: { principalForRequest: async () => principal },
+      auth: { principalForRequest: async () => principal, grantedConversationIds: granted },
       media: { find },
     }),
   });
-  return { find, route };
+  return { find, granted, route };
 }
 
 describe("media delivery route", () => {
@@ -142,6 +151,67 @@ describe("media delivery route", () => {
     });
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Media not found" });
-    expect(find).toHaveBeenCalledWith("archive-1", attachmentId);
+    expect(find).toHaveBeenCalledWith("archive-1", attachmentId, {
+      mode: "ordinary",
+      authorizedConversationIds: [],
+    });
+  });
+
+  it.each([
+    ["hidden", "hidden chat denial"],
+    ["locked", "locked chat denial without a grant"],
+  ])("does not expose %s media metadata or bytes for %s", async (mode) => {
+    const { find, route } = routeFor(null);
+    const response = await route(new Request(`http://localhost/api/media/id?mode=${mode}`), {
+      params: { attachmentId },
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Media not found" });
+    expect(find).toHaveBeenCalledWith("archive-1", attachmentId, {
+      mode,
+      authorizedConversationIds: [],
+    });
+  });
+
+  it("delivers locked media only with the server-validated unlock grant", async () => {
+    const { find, granted, route } = routeFor(
+      asset({ state: "available", mimeType: "image/png", originalName: "private.png" }),
+      principal.archiveId,
+      ["conversation-locked"],
+    );
+    const response = await route(new Request("http://localhost/api/media/id?mode=locked"), {
+      params: { attachmentId },
+    });
+    expect(response.status).toBe(200);
+    expect(granted).toHaveBeenCalledWith(expect.any(Request), "archive-1");
+    expect(find).toHaveBeenCalledWith("archive-1", attachmentId, {
+      mode: "locked",
+      authorizedConversationIds: ["conversation-locked"],
+    });
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+  });
+
+  it.each(["expired grant", "restarted process", "logged-out session"])(
+    "denies locked media after %s",
+    async () => {
+      const { route, find } = routeFor(null, principal.archiveId, []);
+      const response = await route(new Request("http://localhost/api/media/id?mode=locked"), {
+        params: { attachmentId },
+      });
+      expect(response.status).toBe(404);
+      expect(find).toHaveBeenCalledWith("archive-1", attachmentId, {
+        mode: "locked",
+        authorizedConversationIds: [],
+      });
+    },
+  );
+
+  it("rejects an invalid requested UI mode before media lookup", async () => {
+    const { route, find } = routeFor(null);
+    const response = await route(new Request("http://localhost/api/media/id?mode=admin"), {
+      params: { attachmentId },
+    });
+    expect(response.status).toBe(400);
+    expect(find).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import type {
   MediaDeliveryAttachment,
   MediaDeliveryPort,
 } from "../../../../../../application/media-delivery";
+import type { UiReadMode } from "../../../../../../application/reads";
 import type { WebRuntime } from "../../../../runtime";
 
 const SAFE_INLINE_MIME = new Set([
@@ -44,7 +45,9 @@ export interface MediaRouteDependencies {
 }
 
 export interface MediaRouteRuntime {
-  readonly auth: Pick<WebRuntime["auth"], "principalForRequest">;
+  readonly auth: Pick<WebRuntime["auth"], "principalForRequest"> & {
+    readonly grantedConversationIds?: WebRuntime["auth"]["grantedConversationIds"];
+  };
   readonly media?: MediaDeliveryPort;
 }
 
@@ -64,7 +67,16 @@ export function createMediaRoute({ getRuntime }: MediaRouteDependencies) {
     const { attachmentId } = await context.params;
     if (!isAttachmentId(attachmentId)) return notFound();
     if (!runtime.media) return unavailable();
-    const attachment = await runtime.media.find(principal.archiveId, attachmentId);
+    const mode = requestedMode(request);
+    if (!mode) return invalidMode();
+    const authorizedConversationIds =
+      mode === "locked"
+        ? ((await runtime.auth.grantedConversationIds?.(request, principal.archiveId)) ?? [])
+        : [];
+    const attachment = await runtime.media.find(principal.archiveId, attachmentId, {
+      mode,
+      authorizedConversationIds,
+    });
     if (!attachment) return notFound();
     if (attachment.state !== "available") return unavailable();
     if (!Number.isSafeInteger(attachment.byteSize) || attachment.byteSize < 0) return unavailable();
@@ -92,6 +104,12 @@ export function createMediaRoute({ getRuntime }: MediaRouteDependencies) {
     }
     return new Response(body, { status: 200, headers });
   };
+}
+
+function requestedMode(request: Request): UiReadMode | null {
+  const mode = new URL(request.url).searchParams.get("mode");
+  if (mode === null || mode === "") return "ordinary";
+  return mode === "ordinary" || mode === "hidden" || mode === "locked" ? mode : null;
 }
 
 function mediaPolicy(attachment: MediaDeliveryAttachment): {
@@ -191,6 +209,10 @@ function notFound(): Response {
 
 function unavailable(): Response {
   return Response.json({ error: "Media unavailable" }, { status: 404 });
+}
+
+function invalidMode(): Response {
+  return Response.json({ error: "Media mode is invalid" }, { status: 400 });
 }
 
 function rangeNotSatisfiable(size: number): Response {
