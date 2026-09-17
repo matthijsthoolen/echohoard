@@ -2,6 +2,8 @@ import { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { OidcAuth, type OidcProvider } from "../../src/application/auth.js";
+import { createConversationsRoute } from "../../src/delivery/web/app/api/conversations/route-handler.js";
+import { createPrivacyRoute } from "../../src/delivery/web/app/api/privacy/route-handler.js";
 import { hashToken, PrismaSessionStore } from "../../src/infrastructure/auth/sessions.js";
 import { PrismaUnlockStore } from "../../src/infrastructure/auth/unlocks.js";
 
@@ -156,6 +158,76 @@ describe("PostgreSQL durable auth sessions", () => {
         conversationId: lockedConversationId,
       }),
     ).resolves.toBe(false);
+
+    const readRuntime = (unlocks: PrismaUnlockStore) => ({
+      auth: {
+        principalForRequest: async () => principal,
+        grantedConversationIds: async () =>
+          unlocks.listGrantedConversationIds({ sessionToken: session, archiveId }),
+      },
+      conversationPrivacy: {
+        list: async () => [
+          {
+            archiveId,
+            conversationId: lockedConversationId,
+            uiVisibility: "locked" as const,
+            mcpAccess: "allowed" as const,
+          },
+        ],
+        updatePolicy: async () => {
+          throw new Error("not used");
+        },
+      },
+      reads: {
+        listConversations: async (input: {
+          uiAccess?: { authorizedConversationIds?: string[] };
+        }) => ({
+          items: input.uiAccess?.authorizedConversationIds?.includes(lockedConversationId)
+            ? [
+                {
+                  id: lockedConversationId,
+                  title: "Locked conversation",
+                  participantCount: 0,
+                  lastMessageAt: null,
+                },
+              ]
+            : [],
+          hasMore: false,
+        }),
+      },
+    });
+    const privacyRoute = (unlocks: PrismaUnlockStore) =>
+      createPrivacyRoute({ getRuntime: () => readRuntime(unlocks) });
+    const conversationsRoute = (unlocks: PrismaUnlockStore) =>
+      createConversationsRoute({ getRuntime: () => readRuntime(unlocks) });
+
+    const unlockedPrivacy = await (
+      await privacyRoute(unlocks)(new Request("http://localhost/api/privacy"))
+    ).json();
+    expect(unlockedPrivacy).toMatchObject({ lockedFolder: { unlocked: true } });
+    expect(unlockedPrivacy.policies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ conversationId: lockedConversationId })]),
+    );
+    await expect(
+      (
+        await conversationsRoute(unlocks)(
+          new Request("http://localhost/api/conversations?mode=locked"),
+        )
+      ).json(),
+    ).resolves.toMatchObject({ items: [expect.objectContaining({ id: lockedConversationId })] });
+    await expect(
+      (await privacyRoute(restarted)(new Request("http://localhost/api/privacy"))).json(),
+    ).resolves.toEqual({
+      policies: [],
+      lockedFolder: { available: true, unlocked: false },
+    });
+    await expect(
+      (
+        await conversationsRoute(restarted)(
+          new Request("http://localhost/api/conversations?mode=locked"),
+        )
+      ).json(),
+    ).resolves.toEqual({ items: [], hasMore: false });
 
     const expired = new PrismaUnlockStore(prisma, 300, -1);
     const expiredGrant = await expired.createGrant({

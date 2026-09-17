@@ -188,6 +188,7 @@ export class PrismaUnlockStore implements UnlockStore {
   ): Promise<readonly string[]> {
     const grant = await this.prisma.unlockGrant.findFirst({
       where: {
+        runtimeId: this.runtimeId,
         sessionHash: hashToken(input.sessionToken),
         archiveId: input.archiveId,
         revokedAt: null,
