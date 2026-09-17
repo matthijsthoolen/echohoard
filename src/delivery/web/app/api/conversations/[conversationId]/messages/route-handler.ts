@@ -39,19 +39,20 @@ export function createMessagesRoute({ getRuntime }: MessageRouteDependencies) {
     if (parsed.ok === false) return invalid(parsed.error);
 
     try {
-      const unlocked = await runtime.auth.lockedPrincipal?.(
-        request,
-        principal.archiveId,
-        conversationId,
-      );
+      const unlocked =
+        parsed.mode === "locked"
+          ? await runtime.auth.lockedPrincipal?.(request, principal.archiveId, conversationId)
+          : false;
       const page = await runtime.reads.listMessages({
         archiveId: principal.archiveId,
         conversationId,
         limit: parsed.limit,
         direction: parsed.direction,
-        ...(unlocked
-          ? { uiAccess: { mode: "locked" as const, authorizedConversationIds: [conversationId] } }
-          : {}),
+        ...(parsed.mode === "hidden"
+          ? { uiAccess: { mode: "hidden" as const } }
+          : unlocked
+            ? { uiAccess: { mode: "locked" as const, authorizedConversationIds: [conversationId] } }
+            : {}),
         ...(parsed.cursor ? { cursor: parsed.cursor } : {}),
       });
       return Response.json(toResponse(page), {
@@ -69,6 +70,7 @@ function parseQuery(params: URLSearchParams):
       readonly ok: true;
       readonly limit: number;
       readonly direction: "forward" | "backward";
+      readonly mode?: "hidden" | "locked";
       readonly cursor?: string;
     }
   | { readonly ok: false; readonly error: string } {
@@ -79,10 +81,19 @@ function parseQuery(params: URLSearchParams):
   const direction = params.get("direction") ?? "backward";
   if (direction !== "forward" && direction !== "backward")
     return { ok: false, error: "direction is invalid" };
+  const mode = params.get("mode");
+  if (mode !== null && mode !== "hidden" && mode !== "locked")
+    return { ok: false, error: "mode is invalid" };
   const cursor = params.get("cursor") ?? undefined;
   if (cursor !== undefined && cursor.length > MAX_CURSOR_LENGTH)
     return { ok: false, error: "cursor is too long" };
-  return { ok: true, limit, direction, ...(cursor ? { cursor } : {}) };
+  return {
+    ok: true,
+    limit,
+    direction,
+    ...(mode === "hidden" || mode === "locked" ? { mode } : {}),
+    ...(cursor ? { cursor } : {}),
+  };
 }
 
 function toResponse(page: ReadPage<MessageRead>) {

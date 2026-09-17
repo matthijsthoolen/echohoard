@@ -1,10 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
-import { fetchConversationPage, parseConversationPage } from "./components/conversation-list";
+import {
+  conversationHref,
+  conversationAriaLabel,
+  fetchConversationPage,
+  parseConversationPage,
+} from "./components/conversation-list";
 
 const page = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 describe("conversation list delivery contract", () => {
+  it.each([
+    ["ordinary", "/?view=chats&conversation=private-chat"],
+    ["hidden", "/?view=hidden&conversation=private-chat"],
+    ["locked", "/?view=locked&conversation=private-chat"],
+  ] as const)("keeps %s folder context when opening a conversation", (mode, expected) => {
+    expect(conversationHref("private-chat", mode)).toBe(expected);
+  });
+
+  it("keeps folder context stable for back and refresh navigation", () => {
+    const first = conversationHref("private-chat", "hidden");
+    const restored = conversationHref("private-chat", "hidden");
+    expect(restored).toBe(first);
+    expect(restored).not.toContain("view=chats");
+  });
+
+  it("uses contextual accessible labels for privacy folder entries", () => {
+    expect(conversationAriaLabel("Quiet chat", "hidden")).toBe("Open Quiet chat in hidden chats");
+    expect(conversationAriaLabel("Secret chat", "locked")).toBe("Open Secret chat in locked chats");
+  });
+
   it("requests a bounded page and handles an authenticated empty archive", async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe("/archive/conversations?limit=50");

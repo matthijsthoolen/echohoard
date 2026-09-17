@@ -60,7 +60,9 @@ export default function ArchiveShell() {
 
   const hrefFor = (nextView: ShellView) => (nextView === "overview" ? "/" : `/?view=${nextView}`);
   const showTimeline =
-    Boolean(conversationId) && (view === "chats" || view === "search" || view === "locked");
+    Boolean(conversationId) &&
+    (view === "chats" || view === "search" || view === "hidden" || view === "locked");
+  const timelineMode = view === "hidden" || view === "locked" ? view : "ordinary";
 
   return (
     <main className="app-shell">
@@ -115,12 +117,19 @@ export default function ArchiveShell() {
               {view === "people" ? <PeopleList /> : null}
               {view === "overview" || view === "chats" ? <ConversationList /> : null}
               {view === "hidden" ? (
-                <ConversationList endpoint="/api/conversations?mode=hidden" />
+                <ConversationList
+                  endpoint="/api/conversations?mode=hidden"
+                  navigationMode="hidden"
+                />
               ) : null}
               {view === "locked" ? <LockedFolder /> : null}
             </aside>
             {showTimeline ? (
-              <MessageTimeline conversationId={conversationId!} messageId={messageId} />
+              <MessageTimeline
+                conversationId={conversationId!}
+                messageId={messageId}
+                mode={timelineMode}
+              />
             ) : view === "overview" ? (
               <ArchiveOverview />
             ) : view === "chats" ? (
@@ -452,6 +461,7 @@ function LockedFolder() {
       <div className="privacy-folder-list">
         <ConversationList
           endpoint="/api/conversations?mode=locked"
+          navigationMode="locked"
           emptyTitle="Locked chats are unavailable"
           emptyDetail="Step up with Authentik to view permitted locked chats."
         />

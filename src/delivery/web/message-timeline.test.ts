@@ -118,6 +118,16 @@ describe("virtual message timeline", () => {
     });
   });
 
+  it("preserves a privacy folder mode while fetching timeline pages", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain("mode=locked");
+      return new Response(JSON.stringify({ items: [], hasMore: false }));
+    });
+    await expect(
+      fetchMessagePage(fetcher, "chat/one", "backward", undefined, undefined, "locked"),
+    ).resolves.toEqual({ items: [], hasMore: false });
+  });
+
   it("keeps exact source IDs separate from unified conversation IDs", () => {
     const state = parseGroupingState({
       targetConversationId: "unified-id",

@@ -162,8 +162,10 @@ export async function fetchMessagePage(
   direction: "forward" | "backward",
   cursor?: string,
   endpoint = `/api/conversations/${encodeURIComponent(conversationId)}/messages`,
+  mode: "ordinary" | "hidden" | "locked" = "ordinary",
 ): Promise<MessagePage | "unauthorized"> {
   const query = new URLSearchParams({ limit: String(TIMELINE_PAGE_LIMIT), direction });
+  if (mode !== "ordinary") query.set("mode", mode);
   if (cursor) query.set("cursor", cursor);
   const response = await fetcher(`${endpoint}?${query.toString()}`, {
     credentials: "same-origin",
@@ -409,10 +411,12 @@ export function MessageTimeline({
   conversationId,
   endpoint,
   messageId,
+  mode = "ordinary",
 }: {
   readonly conversationId: string;
   readonly endpoint?: string;
   readonly messageId?: string;
+  readonly mode?: "ordinary" | "hidden" | "locked";
 }) {
   const [state, setState] = useState<TimelineState>(emptyTimeline);
   const [status, setStatus] = useState<"loading" | "ready" | "unauthorized" | "error">("loading");
@@ -426,7 +430,14 @@ export function MessageTimeline({
     async (direction: "forward" | "backward", cursor?: string) => {
       setLoading(direction === "backward" ? "older" : "newer");
       try {
-        const page = await fetchMessagePage(fetch, conversationId, direction, cursor, endpoint);
+        const page = await fetchMessagePage(
+          fetch,
+          conversationId,
+          direction,
+          cursor,
+          endpoint,
+          mode,
+        );
         if (page === "unauthorized") {
           setStatus("unauthorized");
           return;
@@ -439,7 +450,7 @@ export function MessageTimeline({
         setLoading(undefined);
       }
     },
-    [conversationId, endpoint],
+    [conversationId, endpoint, mode],
   );
 
   useEffect(() => {

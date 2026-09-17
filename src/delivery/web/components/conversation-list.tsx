@@ -18,6 +18,20 @@ export type ConversationListState =
   | { readonly kind: "ready"; readonly page: ConversationPage }
   | { readonly kind: "error" };
 
+export type ConversationNavigationMode = "ordinary" | "hidden" | "locked";
+
+export function conversationHref(id: string, mode: ConversationNavigationMode): string {
+  const params = new URLSearchParams({
+    view: mode === "ordinary" ? "chats" : mode,
+    conversation: id,
+  });
+  return `/?${params.toString()}`;
+}
+
+export function conversationAriaLabel(title: string, mode: ConversationNavigationMode): string {
+  return `Open ${title || "untitled conversation"} in ${mode === "ordinary" ? "chats" : `${mode} chats`}`;
+}
+
 export async function fetchConversationPage(
   fetcher: typeof fetch = fetch,
   cursor?: string,
@@ -80,10 +94,12 @@ export function ConversationList({
   endpoint = "/api/conversations",
   emptyTitle = "No conversations archived yet",
   emptyDetail = "Completed imports will appear here.",
+  navigationMode = "ordinary",
 }: {
   endpoint?: string;
   emptyTitle?: string;
   emptyDetail?: string;
+  navigationMode?: ConversationNavigationMode;
 }) {
   const [state, setState] = useState<ConversationListState>({ kind: "loading" });
   const [nextCursor, setNextCursor] = useState<string | undefined>();
@@ -149,7 +165,8 @@ export function ConversationList({
           <li key={conversation.id}>
             <a
               className="conversation-row"
-              href={`/?view=chats&conversation=${encodeURIComponent(conversation.id)}`}
+              href={conversationHref(conversation.id, navigationMode)}
+              aria-label={conversationAriaLabel(conversation.title, navigationMode)}
             >
               <span className="avatar" aria-hidden="true">
                 {initials(conversation.title)}

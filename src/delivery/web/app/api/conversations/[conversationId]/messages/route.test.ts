@@ -125,6 +125,50 @@ describe("message timeline route", () => {
     });
   });
 
+  it("passes hidden folder context to the shared read service", async () => {
+    const listMessages = vi.fn(async () => ({ items: [row], hasMore: false }));
+    const route = createMessagesRoute({ getRuntime: () => ({ auth, reads: { listMessages } }) });
+    await route(new Request("http://localhost/api/conversations/c1/messages?mode=hidden"), {
+      params: { conversationId: "c1" },
+    });
+    expect(listMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uiAccess: { mode: "hidden" },
+      }),
+    );
+  });
+
+  it("passes a valid locked grant to the shared read service", async () => {
+    const listMessages = vi.fn(async () => ({ items: [row], hasMore: false }));
+    const lockedPrincipal = vi.fn(async () => ({ ...principal, sessionId: "unlock-1" }));
+    const route = createMessagesRoute({
+      getRuntime: () => ({ auth: { ...auth, lockedPrincipal }, reads: { listMessages } }),
+    });
+    await route(new Request("http://localhost/api/conversations/c1/messages?mode=locked"), {
+      params: { conversationId: "c1" },
+    });
+    expect(lockedPrincipal).toHaveBeenCalledWith(expect.any(Request), "archive-1", "c1");
+    expect(listMessages).toHaveBeenCalledWith(
+      expect.objectContaining({
+        uiAccess: { mode: "locked", authorizedConversationIds: ["c1"] },
+      }),
+    );
+  });
+
+  it("drops locked access after relock or grant expiry", async () => {
+    const listMessages = vi.fn(async () => ({ items: [], hasMore: false }));
+    const lockedPrincipal = vi.fn(async () => null);
+    const route = createMessagesRoute({
+      getRuntime: () => ({ auth: { ...auth, lockedPrincipal }, reads: { listMessages } }),
+    });
+    await route(new Request("http://localhost/api/conversations/c1/messages?mode=locked"), {
+      params: { conversationId: "c1" },
+    });
+    expect(listMessages).toHaveBeenCalledWith(
+      expect.not.objectContaining({ uiAccess: expect.anything() }),
+    );
+  });
+
   it("keeps the bounded source deletion marker in the web response", async () => {
     const listMessages = vi.fn(async () => ({ items: [deletedRow], hasMore: false }));
     const route = createMessagesRoute({ getRuntime: () => ({ auth, reads: { listMessages } }) });
