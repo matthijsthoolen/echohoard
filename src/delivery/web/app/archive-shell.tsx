@@ -38,15 +38,24 @@ export default function ArchiveShell() {
     syncLocation();
     const onPopState = () => {
       if (view === "locked") {
-        void relockProtectedSession();
+        setView("overview");
         setConversationId(undefined);
         setMessageId(undefined);
+        void relockProtectedSession()
+          .then(() => syncLocation())
+          .catch(() => window.history.replaceState(null, "", "/"));
+        return;
       }
       syncLocation();
     };
     const onPageShow = (event: PageTransitionEvent) => {
       if (event.persisted && view === "locked") {
-        void relockProtectedSession().finally(() => window.location.reload());
+        setView("overview");
+        setConversationId(undefined);
+        setMessageId(undefined);
+        void relockProtectedSession()
+          .then(() => window.location.reload())
+          .catch(() => window.history.replaceState(null, "", "/"));
       }
     };
     const onPageHide = () => {
@@ -95,7 +104,12 @@ export default function ArchiveShell() {
     const destination = new URL(anchor.href, window.location.href);
     if (destination.origin !== window.location.origin || destination.pathname !== "/") return;
     event.preventDefault();
-    void relockProtectedSession().finally(() => window.location.assign(destination.href));
+    setView("overview");
+    setConversationId(undefined);
+    setMessageId(undefined);
+    void relockProtectedSession()
+      .then(() => window.location.assign(destination.href))
+      .catch(() => undefined);
   };
 
   return (

@@ -110,6 +110,7 @@ model UnlockChallenge {
   authSessionId  String       @db.Uuid
   archiveId      String       @db.Uuid
   conversationId String       @db.Uuid
+  archiveWide    Boolean      @default(false)
   expiresAt      DateTime
   consumedAt     DateTime?
   revokedAt      DateTime?

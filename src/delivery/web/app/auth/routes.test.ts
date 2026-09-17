@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createUnlockRelockRoute } from "./routes";
+import { createUnlockRelockRoute, createUnlockStartRoute } from "./routes";
 
 describe("unlock relock route", () => {
   it("revokes the server-side grant and never returns protected data", async () => {
@@ -29,5 +29,65 @@ describe("unlock relock route", () => {
     expect(
       (await route(new Request("http://localhost/auth/unlock/relock", { method: "POST" }))).status,
     ).toBe(403);
+  });
+});
+
+describe("targeted unlock start route", () => {
+  it("binds the target through the authenticated server-side unlock flow", async () => {
+    const unlockStart = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { Location: "https://issuer.test/authorize?state=opaque" },
+        }),
+    );
+    const route = createUnlockStartRoute({ getRuntime: () => ({ auth: { unlockStart } }) });
+    const response = await route(
+      new Request(
+        "http://localhost/auth/unlock/start?archiveId=archive-a&conversationId=conversation-a&returnTo=/",
+      ),
+    );
+    expect(response.status).toBe(302);
+    expect(unlockStart).toHaveBeenCalledWith(expect.any(Request), "archive-a", "conversation-a");
+    const location = response.headers.get("location");
+    expect(location).not.toContain("archive-a");
+    expect(location).not.toContain("conversation-a");
+  });
+
+  it("fails closed for an archive mismatch or unavailable target", async () => {
+    const unlockStart = vi.fn(async () => new Response(null, { status: 403 }));
+    const route = createUnlockStartRoute({ getRuntime: () => ({ auth: { unlockStart } }) });
+    await expect(
+      route(
+        new Request(
+          "http://localhost/auth/unlock/start?archiveId=other-archive&conversationId=locked-chat",
+        ),
+      ),
+    ).resolves.toMatchObject({ status: 403 });
+    const failingRoute = createUnlockStartRoute({
+      getRuntime: () => ({
+        auth: {
+          unlockStart: vi.fn(async () => {
+            throw new Error("step-up unavailable");
+          }),
+        },
+      }),
+    });
+    await expect(
+      failingRoute(
+        new Request(
+          "http://localhost/auth/unlock/start?archiveId=archive-a&conversationId=locked-chat",
+        ),
+      ),
+    ).resolves.toMatchObject({ status: 403 });
+  });
+
+  it("does not accept a partial target", async () => {
+    const route = createUnlockStartRoute({
+      getRuntime: () => ({ auth: { unlockStartFolder: vi.fn() } }),
+    });
+    await expect(
+      route(new Request("http://localhost/auth/unlock/start?conversationId=locked-chat")),
+    ).resolves.toMatchObject({ status: 403 });
   });
 });

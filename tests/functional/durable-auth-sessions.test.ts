@@ -114,7 +114,7 @@ describe("PostgreSQL durable auth sessions", () => {
     ).resolves.toBe(false);
     await expect(
       unlocks.findChallenge({ state: "synthetic-step-up-state", sessionToken: session }),
-    ).resolves.toEqual({ archiveId, conversationId: lockedConversationId });
+    ).resolves.toEqual({ archiveId, conversationId: lockedConversationId, archiveWide: false });
     await expect(
       unlocks.consumeChallenge({ state: "synthetic-step-up-state", sessionToken: session }),
     ).resolves.toBe(true);

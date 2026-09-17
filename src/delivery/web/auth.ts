@@ -138,7 +138,11 @@ export class WebAuthBoundary {
     });
     if (!location) return browserError("access-denied", 403);
     const returnTo = new URL(request.url).searchParams.get("returnTo");
-    const safeReturnTo = returnTo?.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/";
+    const safeReturnTo = conversationId
+      ? "/?view=locked"
+      : returnTo?.startsWith("/") && !returnTo.startsWith("//")
+        ? returnTo
+        : "/";
     return new Response(null, {
       status: 302,
       headers: {
@@ -184,19 +188,26 @@ export class WebAuthBoundary {
     const verifier = readCookie(request, UNLOCK_VERIFIER_COOKIE);
     if (!state || !expectedState || state !== expectedState || !code || !nonce || !verifier)
       return browserError("bad-request", 400);
-    const grant = await this.auth.completeUnlock(readCookie(request, SESSION_COOKIE), {
-      state,
-      code,
-      nonce,
-      codeVerifier: verifier,
-    });
-    if (!grant) return browserError("access-denied", 403);
-    const returnTo = readCookie(request, UNLOCK_RETURN_COOKIE) ?? "/";
+    const completed = await this.auth.completeUnlockWithTarget(
+      readCookie(request, SESSION_COOKIE),
+      {
+        state,
+        code,
+        nonce,
+        codeVerifier: verifier,
+      },
+    );
+    if (!completed) return browserError("access-denied", 403);
+    const requestedReturnTo = readCookie(request, UNLOCK_RETURN_COOKIE) ?? "/";
+    const returnTo =
+      !completed.archiveWide && requestedReturnTo === "/?view=locked"
+        ? `/?view=locked&conversation=${encodeURIComponent(completed.conversationId)}`
+        : requestedReturnTo;
     return new Response(null, {
       status: 302,
       headers: {
         Location: returnTo,
-        "Set-Cookie": `${UNLOCK_GRANT_COOKIE}=${encodeURIComponent(grant)}; ${cookieOptions}; Max-Age=300, ${clearCookie(UNLOCK_STATE_COOKIE)}, ${clearCookie(UNLOCK_NONCE_COOKIE)}, ${clearCookie(UNLOCK_VERIFIER_COOKIE)}, ${clearCookie(UNLOCK_RETURN_COOKIE)}`,
+        "Set-Cookie": `${UNLOCK_GRANT_COOKIE}=${encodeURIComponent(completed.grant)}; ${cookieOptions}; Max-Age=300, ${clearCookie(UNLOCK_STATE_COOKIE)}, ${clearCookie(UNLOCK_NONCE_COOKIE)}, ${clearCookie(UNLOCK_VERIFIER_COOKIE)}, ${clearCookie(UNLOCK_RETURN_COOKIE)}`,
       },
     });
   }

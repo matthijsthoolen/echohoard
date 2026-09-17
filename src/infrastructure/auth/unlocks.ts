@@ -38,7 +38,9 @@ export class PrismaUnlockStore implements UnlockStore {
       orderBy: { id: "asc" },
       select: { id: true },
     });
-    return firstLocked ? this.createChallenge({ ...input, conversationId: firstLocked.id }) : false;
+    return firstLocked
+      ? this.createChallenge({ ...input, conversationId: firstLocked.id, archiveWide: true })
+      : false;
   }
 
   public async createChallenge(
@@ -71,6 +73,7 @@ export class PrismaUnlockStore implements UnlockStore {
           authSessionId: session.id,
           archiveId: input.archiveId,
           conversationId: input.conversationId,
+          archiveWide: input.archiveWide ?? false,
           expiresAt: new Date(Date.now() + this.challengeTtlSeconds * 1_000),
         },
       });
@@ -92,7 +95,7 @@ export class PrismaUnlockStore implements UnlockStore {
         revokedAt: null,
         expiresAt: { gt: new Date() },
       },
-      select: { archiveId: true, conversationId: true },
+      select: { archiveId: true, conversationId: true, archiveWide: true },
     });
     return row;
   }

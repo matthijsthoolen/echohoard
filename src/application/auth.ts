@@ -38,6 +38,7 @@ export interface OidcProvider {
 export type UnlockChallenge = Readonly<{
   archiveId: string;
   conversationId: string;
+  archiveWide?: boolean;
 }>;
 
 export interface UnlockStore {
@@ -51,6 +52,7 @@ export interface UnlockStore {
     readonly sessionToken: string;
     readonly archiveId: string;
     readonly conversationId: string;
+    readonly archiveWide?: boolean;
   }): Promise<boolean>;
   findChallenge(input: {
     readonly state: string;
@@ -221,6 +223,23 @@ export class OidcAuth {
       readonly codeVerifier: string;
     },
   ): Promise<string | null> {
+    const completed = await this.completeUnlockWithTarget(session, input);
+    return completed?.grant ?? null;
+  }
+
+  async completeUnlockWithTarget(
+    session: string | undefined,
+    input: {
+      readonly state: string;
+      readonly code: string;
+      readonly nonce: string;
+      readonly codeVerifier: string;
+    },
+  ): Promise<{
+    readonly grant: string;
+    readonly conversationId: string;
+    readonly archiveWide: boolean;
+  } | null> {
     if (!session || !this.unlocks) return null;
     const principal = await this.validate(session);
     if (!principal) return null;
@@ -253,18 +272,23 @@ export class OidcAuth {
     }
     if (!(await this.unlocks.consumeChallenge({ state: input.state, sessionToken: session })))
       return null;
-    const grant = this.unlocks.createGrantsForArchive
-      ? await this.unlocks.createGrantsForArchive({
-          sessionToken: session,
-          archiveId: challenge.archiveId,
-        })
-      : await this.unlocks.createGrant({
-          sessionToken: session,
-          archiveId: challenge.archiveId,
-          conversationId: challenge.conversationId,
-        });
+    const grant =
+      challenge.archiveWide && this.unlocks.createGrantsForArchive
+        ? await this.unlocks.createGrantsForArchive({
+            sessionToken: session,
+            archiveId: challenge.archiveId,
+          })
+        : await this.unlocks.createGrant({
+            sessionToken: session,
+            archiveId: challenge.archiveId,
+            conversationId: challenge.conversationId,
+          });
     this.diagnostic("oidc.unlock.accepted", {});
-    return grant;
+    return {
+      grant,
+      conversationId: challenge.conversationId,
+      archiveWide: challenge.archiveWide === true,
+    };
   }
 
   async grantedConversationIds(

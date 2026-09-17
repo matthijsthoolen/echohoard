@@ -1,10 +1,11 @@
 export async function relockProtectedSession(fetcher: typeof fetch = fetch): Promise<void> {
-  await fetcher("/auth/unlock/relock", {
+  const response = await fetcher("/auth/unlock/relock", {
     method: "POST",
     credentials: "same-origin",
     keepalive: true,
     headers: { Accept: "application/json" },
   });
+  if (!response.ok) throw new Error("relock unavailable");
 }
 
 /** Beacon is a delivery fallback for lifecycle navigation; the server endpoint
