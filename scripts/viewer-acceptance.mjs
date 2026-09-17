@@ -233,6 +233,34 @@ async function runAuthenticatedWorkflow() {
   const search = await fetchPage("/api/search?q=synthetic&limit=50", headers);
   assert(search.response.status === 200, `search workflow returned ${search.response.status}`);
   assert(JSON.parse(search.body).items.length <= 50, "search page exceeded its bound");
+  for (const mode of ["hidden", "locked"]) {
+    const folder = await fetchPage(`/api/conversations?mode=${mode}&limit=50`, headers);
+    if (folder.response.status !== 200) continue;
+    const conversation = JSON.parse(folder.body).items?.[0];
+    if (!conversation?.id) continue;
+    const messages = await fetchPage(
+      `/api/conversations/${encodeURIComponent(conversation.id)}/messages?mode=${mode}&limit=50&direction=backward`,
+      headers,
+    );
+    if (messages.response.status !== 200) continue;
+    const protectedAttachment = JSON.parse(messages.body)
+      .items?.flatMap((item) => item.attachments ?? [])
+      .find((attachment) => attachment.availability === "available");
+    if (!protectedAttachment?.id) continue;
+    const ordinary = await fetchPage(
+      `/api/media/${encodeURIComponent(protectedAttachment.id)}`,
+      headers,
+    );
+    assert(ordinary.response.status === 404, `${mode} media was available through ordinary mode`);
+    const protectedMedia = await fetchPage(
+      `/api/media/${encodeURIComponent(protectedAttachment.id)}?mode=${mode}`,
+      headers,
+    );
+    assert(
+      protectedMedia.response.status === 200,
+      `authorized ${mode} media returned ${protectedMedia.response.status}`,
+    );
+  }
   console.log("Authenticated workflow: browse, bidirectional history, and search passed");
 }
 

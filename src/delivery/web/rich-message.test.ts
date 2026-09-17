@@ -89,6 +89,29 @@ describe("rich message presentation", () => {
     expect(video.find((node) => node.type === "video")?.props.controls).toBe(true);
   });
 
+  it("passes protected timeline modes to every media URL", () => {
+    expect(mediaUrl("protected-id", "hidden")).toBe("/api/media/protected-id?mode=hidden");
+    expect(mediaUrl("protected-id", "locked")).toBe("/api/media/protected-id?mode=locked");
+    const cases: Array<[string, Record<string, unknown>, string]> = [
+      ["image", { mimeType: "image/png", originalName: "photo.png" }, "img"],
+      ["audio", { mimeType: "audio/mpeg", originalName: "voice.mp3" }, "source"],
+      ["video", { mimeType: "video/mp4", originalName: "clip.mp4" }, "source"],
+      ["document", { mimeType: "application/pdf", originalName: "notes.pdf" }, "a"],
+    ];
+    for (const [type, overrides, elementType] of cases) {
+      const tree = elements(
+        RichMessage({
+          message: message(type, { attachments: [attachment({ id: `${type}-id`, ...overrides })] }),
+          privacyMode: "locked",
+        }),
+      );
+      expect(
+        tree.find((node) => node.type === elementType)?.props.src ??
+          tree.find((node) => node.type === elementType)?.props.href,
+      ).toBe(`/api/media/${type}-id?mode=locked`);
+    }
+  });
+
   it("forces document downloads and makes missing/unsafe media explicit", () => {
     const documentTree = elements(
       renderRichMessage(

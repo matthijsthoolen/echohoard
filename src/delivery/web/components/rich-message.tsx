@@ -1,10 +1,11 @@
 import React, { type ReactNode } from "react";
-import type { MessageAttachmentRead, MessageRead } from "../../../application/reads";
+import type { MessageAttachmentRead, MessageRead, UiReadMode } from "../../../application/reads";
 
 /** The media endpoint accepts only this opaque handle; source paths and URLs
  * from imported metadata are intentionally not part of the component API. */
-export function mediaUrl(attachmentId: string): string {
-  return `/api/media/${encodeURIComponent(attachmentId)}`;
+export function mediaUrl(attachmentId: string, privacyMode: UiReadMode = "ordinary"): string {
+  const path = `/api/media/${encodeURIComponent(attachmentId)}`;
+  return privacyMode === "ordinary" ? path : `${path}?mode=${privacyMode}`;
 }
 
 const INLINE_MIME = new Set([
@@ -44,7 +45,13 @@ const ACTIVE_EXTENSIONS = new Set([
 
 type RichMetadata = Readonly<Record<string, unknown>>;
 
-export function RichMessage({ message }: { readonly message: MessageRead }): ReactNode {
+export function RichMessage({
+  message,
+  privacyMode = "ordinary",
+}: {
+  readonly message: MessageRead;
+  readonly privacyMode?: UiReadMode;
+}): ReactNode {
   const deletionLabel = message.contentUnavailable
     ? "Source deleted; content unavailable"
     : "Source deleted";
@@ -60,30 +67,33 @@ export function RichMessage({ message }: { readonly message: MessageRead }): Rea
           </span>
         </div>
       ) : null}
-      {renderRichMessage(message)}
+      {renderRichMessage(message, privacyMode)}
     </div>
   );
 }
 
 /** Render source-neutral rich types with React text nodes only. React escapes
  * hostile text; no source HTML, SVG, data URLs, or metadata paths are parsed. */
-export function renderRichMessage(message: MessageRead): ReactNode {
+export function renderRichMessage(
+  message: MessageRead,
+  privacyMode: UiReadMode = "ordinary",
+): ReactNode {
   const metadata = message.metadata;
   const attachments = message.attachments ?? [];
   switch (message.messageType.toLowerCase()) {
     case "text":
       return <p className="message-body">{message.text ?? "Message content unavailable"}</p>;
     case "image":
-      return MediaAttachments({ attachments, kind: "image" });
+      return MediaAttachments({ attachments, kind: "image", privacyMode });
     case "sticker":
-      return MediaAttachments({ attachments, kind: "sticker" });
+      return MediaAttachments({ attachments, kind: "sticker", privacyMode });
     case "audio":
     case "voice":
-      return MediaAttachments({ attachments, kind: "audio" });
+      return MediaAttachments({ attachments, kind: "audio", privacyMode });
     case "video":
-      return MediaAttachments({ attachments, kind: "video" });
+      return MediaAttachments({ attachments, kind: "video", privacyMode });
     case "document":
-      return MediaAttachments({ attachments, kind: "document" });
+      return MediaAttachments({ attachments, kind: "document", privacyMode });
     case "location":
       return LocationMessage({ metadata });
     case "contact":
@@ -100,16 +110,20 @@ export function renderRichMessage(message: MessageRead): ReactNode {
 function MediaAttachments({
   attachments,
   kind,
+  privacyMode,
 }: {
   readonly attachments: readonly MessageAttachmentRead[];
   readonly kind: "image" | "sticker" | "audio" | "video" | "document";
+  readonly privacyMode: UiReadMode;
 }) {
   if (attachments.length === 0)
     return MediaState({ state: "missing", detail: "Attachment reference is missing." });
   return (
     <div className="rich-media-list" aria-label={`${kind} attachments`}>
       {attachments.map((attachment) => (
-        <React.Fragment key={attachment.id}>{MediaAttachment({ attachment, kind })}</React.Fragment>
+        <React.Fragment key={attachment.id}>
+          {MediaAttachment({ attachment, kind, privacyMode })}
+        </React.Fragment>
       ))}
     </div>
   );
@@ -118,20 +132,22 @@ function MediaAttachments({
 function MediaAttachment({
   attachment,
   kind,
+  privacyMode,
 }: {
   readonly attachment: MessageAttachmentRead;
   readonly kind: "image" | "sticker" | "audio" | "video" | "document";
+  readonly privacyMode: UiReadMode;
 }) {
   if (attachment.availability !== "available")
     return MediaState({ state: attachment.availability });
-  if (kind === "document") return DocumentAttachment({ attachment });
+  if (kind === "document") return DocumentAttachment({ attachment, privacyMode });
   if (!safePreview(attachment, kind))
     return MediaState({
       state: "unsafe",
       detail: "Preview blocked because this content is not safe to play inline.",
     });
 
-  const url = mediaUrl(attachment.id);
+  const url = mediaUrl(attachment.id, privacyMode);
   if (kind === "image" || kind === "sticker") {
     return (
       <figure className="rich-image">
@@ -169,12 +185,18 @@ function MediaAttachment({
   );
 }
 
-function DocumentAttachment({ attachment }: { readonly attachment: MessageAttachmentRead }) {
+function DocumentAttachment({
+  attachment,
+  privacyMode,
+}: {
+  readonly attachment: MessageAttachmentRead;
+  readonly privacyMode: UiReadMode;
+}) {
   return (
     <div className="rich-document">
       <span aria-hidden="true">▱</span>
       <a
-        href={mediaUrl(attachment.id)}
+        href={mediaUrl(attachment.id, privacyMode)}
         download
         className="button"
         aria-label={`Download ${attachment.originalName || "document"}`}

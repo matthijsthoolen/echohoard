@@ -557,7 +557,7 @@ export function MessageTimeline({
       >
         <div style={{ height: range.start * TIMELINE_ROW_HEIGHT }} aria-hidden="true" />
         {visible.map((message) => (
-          <MessageRow key={`${groupingVersion}-${message.id}`} message={message} />
+          <MessageRow key={`${groupingVersion}-${message.id}`} message={message} mode={mode} />
         ))}
         <div
           style={{ height: Math.max(0, (state.messages.length - range.end) * TIMELINE_ROW_HEIGHT) }}
@@ -568,7 +568,13 @@ export function MessageTimeline({
   );
 }
 
-function MessageRow({ message }: { readonly message: MessageRead }) {
+function MessageRow({
+  message,
+  mode,
+}: {
+  readonly message: MessageRead;
+  readonly mode: "ordinary" | "hidden" | "locked";
+}) {
   return (
     <article
       id={`message-${message.id}`}
@@ -588,7 +594,7 @@ function MessageRow({ message }: { readonly message: MessageRead }) {
       {message.replyTo ? (
         <div className="message-reply">Reply to {message.replyTo.text || "preserved message"}</div>
       ) : null}
-      <RichMessage message={message} />
+      <RichMessage message={message} privacyMode={mode} />
       {message.provenance ? (
         <details className="message-provenance">
           <summary>Show source provenance</summary>
